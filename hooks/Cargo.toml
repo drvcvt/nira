@@ -1,0 +1,22 @@
+[package]
+name = "hooks"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+dioxus = { workspace = true }
+player = { workspace = true }
+config = { workspace = true }
+provider-api = { workspace = true }
+provider-soundcloud = { workspace = true }
+provider-spotify = { workspace = true }
+enrichment = { workspace = true }
+discovery = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+rand = { workspace = true }
+chrono = { workspace = true }

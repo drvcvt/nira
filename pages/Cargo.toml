@@ -1,0 +1,11 @@
+[package]
+name = "pages"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+dioxus = { workspace = true }
+hooks = { workspace = true }
+components = { workspace = true }
+chrono = { workspace = true }

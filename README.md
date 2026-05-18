@@ -1,0 +1,219 @@
+# nira
+
+A desktop music player written in Rust, built around the lesson that a
+single global state object is the easiest way to ruin a reactive UI.
+
+**Status:** usable. Plays from SoundCloud and Spotify, cross-platform
+discovery works, library/likes/scrobbling are wired. Local file
+playback and Jellyfin are the next big gaps.
+
+---
+
+## What nira is
+
+A native, local-first music player for Linux/macOS/Windows that
+prioritises a snappy UI even with tens of thousands of tracks indexed.
+The streaming providers (SoundCloud, Spotify, later Jellyfin) live in
+isolated provider crates behind a common trait, so the UI doesn't grow
+per-provider branches and a provider going down doesn't take the app
+with it.
+
+The headline feature: **cross-platform discovery**. Seed a track on
+Spotify, get SoundCloud-playable recommendations (and vice versa), with
+the rationale exposed in the UI so it's obvious *why* a track was
+picked.
+
+**Non-goals (for now):**
+
+- Web/mobile target. The crate layout doesn't preclude it, but every
+  decision optimises for desktop ergonomics first.
+- A skinning system or theme editor. One good default theme, period.
+
+---
+
+## What works today
+
+| Area              | State |
+|-------------------|-------|
+| Audio engine      | rodio for SC progressive streams + librespot 0.8 for Spotify. One canonical volume curve (60 dB log) so backend switches don't jolt the levels. |
+| SoundCloud        | Public `client_id` auto-detected from the web player. Search, track resolve, related-tracks feed. No login. |
+| Spotify           | OAuth PKCE (user brings their own Developer Client ID). Search, liked songs, artist/album detail. Playback via librespot — **requires Spotify Premium**. |
+| Discovery         | Cross-provider candidate merge from SoundCloud's `/related` and ListenBrainz's similarity graph, optional Last.fm third source. Dedup by (artist, title), provider badges per row. |
+| Queue             | Auto-advance watcher (polls `has_source` falling-edge). Manual next/prev/stop. |
+| Pages             | Home (activity feed), Discover, Search, Library, Settings, Album detail, Artist detail with tabs. |
+| Likes             | Local cross-provider liked-tracks store, persisted as JSON. Anything `Heart`-able lands here regardless of source. |
+| Scrobbling        | ListenBrainz outbound, background watcher. No-op until a token + username are set. |
+| MPRIS (Linux)     | Play/pause/next/prev/seek + now-playing exposed to the desktop environment. Media keys work. |
+| Persistence       | XDG dirs via `directories`. Atomic JSON writes so a kill can't corrupt state. |
+
+---
+
+## What's still missing
+
+- **Local file playback.** `AppConfig::library_root` is plumbed through
+  but nothing walks it yet. No tag reader, no on-disk index, no
+  filesystem watcher. The Library page currently shows Spotify-Liked
+  only.
+- **Jellyfin provider.** Crate-shaped slot exists in the workspace
+  layout; no implementation.
+- **Polish.** Themes, density modes, mini-player, system media keys
+  beyond MPRIS, Discord rich presence.
+
+---
+
+## Why the workspace looks like this
+
+The predecessor project emitted a single `catalog-updated` event
+carrying a 10k-track `BootstrapState`. Every page subscribed to that
+signal and re-rendered when *any* domain changed. The main thread
+froze long enough during boot that click events visibly dropped —
+buttons rendered, but `onclick` never fired.
+
+nira makes that bug structurally impossible:
+
+- **Crates split by domain, not by layer.** `player/` owns audio.
+  `discovery/` owns recommendation. `config/` owns persistence.
+  `hooks/` owns reactivity primitives. `components/` owns shared
+  widgets. `pages/` owns views. `nira/` is the thin shell that wires
+  them.
+- **No global state.** Each `hooks::use_*` returns a focused signal
+  set scoped to one domain. A mutation in `player` doesn't force
+  `library` to diff, and vice versa.
+- **Audio engine isolated from UI.** `player/` is a normal Rust crate
+  that knows nothing about Dioxus. The UI talks to it through
+  commands and reads snapshots — never reaches into its internals.
+
+```
+nira/
+├── nira/                 shell (window, root component, section dispatch, MPRIS bridge)
+│   └── assets/           main.css + future themes (Dioxus requires assets in the binary crate)
+├── components/           sidebar, bottombar, global context menu
+├── pages/                home, discover, search, library, settings, album, artist
+├── hooks/                per-domain reactivity (use_player, use_library, use_discovery, …)
+├── player/               rodio + librespot, history log, transport bus
+├── config/               AppConfig load/save under XDG dirs
+├── provider-api/         common Provider trait + DTOs
+├── provider-spotify/     OAuth PKCE + Web API + librespot wiring
+├── provider-soundcloud/  client_id scrape + search + streams
+├── discovery/            cross-platform candidate merge
+└── enrichment/           MusicBrainz / ListenBrainz / Last.fm clients + TTL cache
+```
+
+---
+
+## Tech stack
+
+| Layer        | Choice                | Why                                                       |
+|--------------|-----------------------|-----------------------------------------------------------|
+| UI           | Dioxus 0.7 (desktop)  | Rust-native, fine-grained signals, Wry/Tao window         |
+| Audio out    | rodio + cpal          | Cross-platform, low-level enough to control buffering     |
+| Spotify      | librespot 0.8         | Spotify Connect-style playback against the OAuth session  |
+| Decode       | symphonia (via rodio) | Pure Rust, MP3/FLAC/AAC/OGG/MP4 out of the box            |
+| Persistence  | serde_json + XDG dirs | Plain files, no migration story until we need one         |
+| HTTP         | reqwest (rustls)      | No system OpenSSL dependency                              |
+| Discovery    | MusicBrainz + ListenBrainz + Last.fm | Three open similarity sources, merged           |
+| MPRIS        | mpris-server          | Cleanest async D-Bus client for the spec                  |
+| Logging      | tracing               | Standard, layered, env-filter friendly                    |
+
+---
+
+## Running it
+
+> **⚠ Do NOT build nira through anvil.** The local zsh `cargo` wrapper
+> mangles `--manifest-path` and breaks the Dioxus `asset!` macro. Use
+> `command cargo …` (or `dx` directly) so the real cargo binary
+> handles the workspace.
+
+### Hot-reload dev loop
+
+```sh
+cargo install dioxus-cli   # one-time, gives you the `dx` command
+cd ~/projects/nira
+dx serve --platform desktop
+```
+
+### Release build
+
+```sh
+cd ~/projects/nira
+dx build --release --platform desktop --package nira
+```
+
+Output lands under `target/dx/nira/release/linux/app/` (macOS/Windows
+get their own platform dirs) — a self-contained folder with the `nira`
+binary and its `assets/` tree. Run the binary from inside that folder
+so the asset path resolves.
+
+### Plain cargo (no dev tooling, no asset bundling)
+
+```sh
+command cargo run -p nira --release
+```
+
+`command cargo check --workspace` is the fastest "did I break
+anything" feedback loop — runs in <1s incremental.
+
+---
+
+## First-run setup
+
+nira works on launch — Home/Discover/Search all use SoundCloud
+without any login. To unlock the rest, open **Settings**:
+
+- **Spotify** — register a Developer app at
+  [developer.spotify.com](https://developer.spotify.com), set the
+  redirect URI to `http://127.0.0.1:7777/callback`, paste the Client
+  ID, click *Connect*. A browser tab opens for consent; nira spins up
+  a one-shot listener on port 7777 to catch the redirect. Tokens
+  persist in `~/.config/nira/spotify-tokens.json` and auto-refresh.
+  Premium is required for librespot streaming; metadata and likes work
+  on free accounts.
+- **ListenBrainz** — paste a token from
+  [listenbrainz.org/profile](https://listenbrainz.org/profile) plus
+  your LB username. Enables outbound scrobbling and the "Listened
+  lately" row on Home.
+- **Last.fm** — optional API key for a third discovery signal. Either
+  paste it in Settings or set `NIRA_LASTFM_API_KEY` in the environment
+  at launch.
+
+All state lives under XDG dirs:
+
+- `~/.config/nira/` — config, OAuth tokens, hand-curated likes.
+- `~/.cache/nira/` — discovery cache, scraped SC client_id, play
+  history (safe to nuke).
+
+---
+
+## Design ground rules
+
+These keep the codebase from drifting back into the original
+mega-state failure mode:
+
+- **Domain crates don't import other domain crates.** `provider-spotify`
+  doesn't import `discovery`. They communicate through `hooks::*` or
+  message channels.
+- **Pages own no state.** They mount `use_*` hooks and pass typed
+  props to components. State lives in hooks, not page-locals.
+- **No `Rc<RefCell<MegaState>>`.** If a struct contains "almost
+  everything," it's wrong. Split it.
+- **One stylesheet for the shell.** Pages contribute their own
+  classes but don't ship their own CSS bundles.
+
+---
+
+## Roadmap (what's next)
+
+1. **Local library** — walk `library_root`, read tags via `lofty` or
+   symphonia metadata, persist an index. Background re-scan on focus +
+   on-disk watcher (`notify`). Lift the Library page to a real
+   tracks/albums/artists view, virtual-scrolled.
+2. **Jellyfin provider** — read-only first, same `Provider` trait as
+   SC/SP so the UI doesn't need new branches.
+3. **Polish** — themes (token-based CSS), density modes, mini-player,
+   Discord rich presence, global hotkeys beyond MPRIS.
+
+---
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

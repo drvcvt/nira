@@ -1,0 +1,15 @@
+[package]
+name = "discovery"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+provider-api = { workspace = true }
+provider-soundcloud = { workspace = true }
+enrichment = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+futures = "0.3"

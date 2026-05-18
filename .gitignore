@@ -1,0 +1,12 @@
+/target
+/dist
+/.anvil
+/.agents
+/.claude
+/.codex
+/.omx
+.DS_Store
+.idea/
+.vscode/
+*.log
+.superpowers/

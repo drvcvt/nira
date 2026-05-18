@@ -1,0 +1,69 @@
+[workspace]
+resolver = "3"
+members = [
+    "nira",
+    "components",
+    "pages",
+    "hooks",
+    "player",
+    "config",
+    "provider-api",
+    "provider-soundcloud",
+    "provider-spotify",
+    "enrichment",
+    "discovery",
+]
+
+# Domain-split workspace. Each crate owns its own reactivity surface so a
+# mutation in `player` doesn't force a re-render in `components` and vice
+# versa — the failure mode that drove this project away from a monolithic
+# `BootstrapState` event bus.
+[workspace.dependencies]
+dioxus = { version = "0.7", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+directories = "6"
+rodio = { version = "0.22", default-features = false, features = ["playback", "mp3", "mp4", "flac", "vorbis", "wav", "symphonia-aac"] }
+anyhow = "1"
+thiserror = "2"
+async-trait = "0.1"
+url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.9"
+webbrowser = "1"
+mpris-server = "0.9"
+librespot = { version = "0.8", default-features = false, features = ["rodio-backend", "rustls-tls-webpki-roots"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+
+# Local crate dependencies — keep these in sync with workspace members.
+components = { path = "./components" }
+pages = { path = "./pages" }
+hooks = { path = "./hooks" }
+player = { path = "./player" }
+config = { path = "./config" }
+provider-api = { path = "./provider-api" }
+provider-soundcloud = { path = "./provider-soundcloud" }
+provider-spotify = { path = "./provider-spotify" }
+enrichment = { path = "./enrichment" }
+discovery = { path = "./discovery" }
+
+[profile.release]
+strip = "symbols"
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+# librespot 0.8.0 + vergen-gitcl 1.0.8 has a build-time trait coherence bug
+# (vergen-lib 0.1.6 vs 9.1.0 both in scope). Pin to a known-good vergen-gitcl.
+[patch.crates-io]
+vergen-gitcl = { git = "https://github.com/rustyhorde/vergen", tag = "vergen_gitcl_1.0.3" }
+
+# Optimize transitive deps in dev — Dioxus + cpal feel sluggish without this.
+[profile.dev.package."*"]
+opt-level = 3

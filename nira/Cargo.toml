@@ -1,0 +1,22 @@
+[package]
+name = "nira"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+dioxus = { workspace = true, features = ["desktop"] }
+components = { workspace = true }
+pages = { workspace = true }
+hooks = { workspace = true }
+player = { workspace = true }
+config = { workspace = true }
+provider-soundcloud = { workspace = true }
+provider-spotify = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+directories = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+mpris-server = { workspace = true }
+tokio = { workspace = true }

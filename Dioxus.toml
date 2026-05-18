@@ -1,0 +1,13 @@
+[application]
+name = "nira"
+default_platform = "desktop"
+
+[application.assets]
+base_path = "nira/assets"
+
+[bundle]
+identifier = "dev.nira.player"
+category = "public.app-category.music"
+
+[web.app]
+title = "nira"
