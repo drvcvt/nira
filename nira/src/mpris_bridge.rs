@@ -17,6 +17,8 @@
 
 #![cfg(target_os = "linux")]
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -76,6 +78,7 @@ async fn run(player: Player) -> Result<(), Box<dyn std::error::Error>> {
         };
         let metadata = build_metadata(&snap);
         let volume: Volume = snap.volume as f64;
+        let can_seek = snap.has_source;
 
         {
             let mut s = state.lock().unwrap();
@@ -90,6 +93,10 @@ async fn run(player: Player) -> Result<(), Box<dyn std::error::Error>> {
             if s.volume != Some(volume) {
                 s.volume = Some(volume);
                 changes.push(Property::Volume(volume));
+            }
+            if s.can_seek != Some(can_seek) {
+                s.can_seek = Some(can_seek);
+                changes.push(Property::CanSeek(can_seek));
             }
         }
 
@@ -110,7 +117,7 @@ async fn run(player: Player) -> Result<(), Box<dyn std::error::Error>> {
 
 fn build_metadata(snap: &hooks::PlayerSnapshot) -> Metadata {
     let mut m = Metadata::new();
-    m.set_trackid(Some(TrackId::try_from("/dev/nira/track/current").unwrap()));
+    m.set_trackid(Some(track_id_for(snap)));
     if let Some(np) = snap.now_playing.as_ref() {
         m.set_title(Some(np.title.clone()));
         if !np.artist.is_empty() {
@@ -126,11 +133,40 @@ fn build_metadata(snap: &hooks::PlayerSnapshot) -> Metadata {
     m
 }
 
+fn track_id_for(snap: &hooks::PlayerSnapshot) -> TrackId {
+    let Some(np) = snap.now_playing.as_ref() else {
+        return TrackId::NO_TRACK;
+    };
+    let mut hasher = DefaultHasher::new();
+    np.provider.hash(&mut hasher);
+    np.source_label.hash(&mut hasher);
+    np.artist.hash(&mut hasher);
+    np.title.hash(&mut hasher);
+    let path = format!("/dev/nira/track/{:016x}", hasher.finish());
+    TrackId::try_from(path).unwrap_or(TrackId::NO_TRACK)
+}
+
+fn duration_micros(duration: Duration) -> i128 {
+    duration.as_micros().min(i128::MAX as u128) as i128
+}
+
+fn clamp_seek_micros(target: i128, duration: Option<Duration>) -> u64 {
+    let upper = duration.map(duration_micros);
+    let clamped = target.max(0);
+    let clamped = upper.map(|u| clamped.min(u)).unwrap_or(clamped);
+    clamped.min(u64::MAX as i128) as u64
+}
+
+fn seek_to_micros(player: &Player, micros: u64) {
+    player.seek(Duration::from_micros(micros));
+}
+
 #[derive(Default)]
 struct MprisState {
     playback_status: Option<PlaybackStatus>,
     metadata: Option<Metadata>,
     volume: Option<Volume>,
+    can_seek: Option<bool>,
 }
 
 struct NiraMprisImpl {
@@ -212,10 +248,34 @@ impl PlayerInterface for NiraMprisImpl {
         self.player.resume();
         Ok(())
     }
-    async fn seek(&self, _: Time) -> fdo::Result<()> {
+    async fn seek(&self, offset: Time) -> fdo::Result<()> {
+        let snap = self.player.snapshot();
+        if !snap.has_source {
+            return Ok(());
+        }
+        let current = snap.position.as_micros().min(i128::MAX as u128) as i128;
+        let target = current.saturating_add(offset.as_micros() as i128);
+        if let Some(duration) = snap.duration
+            && target > duration_micros(duration)
+        {
+            self.player.request_next();
+            return Ok(());
+        }
+        seek_to_micros(&self.player, clamp_seek_micros(target, snap.duration));
         Ok(())
     }
-    async fn set_position(&self, _: TrackId, _: Time) -> fdo::Result<()> {
+    async fn set_position(&self, track_id: TrackId, position: Time) -> fdo::Result<()> {
+        let snap = self.player.snapshot();
+        if !snap.has_source || track_id != track_id_for(&snap) {
+            return Ok(());
+        }
+        let target = position.as_micros() as i128;
+        if let Some(duration) = snap.duration
+            && target > duration_micros(duration)
+        {
+            return Ok(());
+        }
+        seek_to_micros(&self.player, clamp_seek_micros(target, snap.duration));
         Ok(())
     }
     async fn open_uri(&self, _: String) -> fdo::Result<()> {
@@ -288,7 +348,7 @@ impl PlayerInterface for NiraMprisImpl {
         Ok(true)
     }
     async fn can_seek(&self) -> fdo::Result<bool> {
-        Ok(false)
+        Ok(self.player.snapshot().has_source)
     }
     async fn can_control(&self) -> fdo::Result<bool> {
         Ok(true)

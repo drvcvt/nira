@@ -19,7 +19,7 @@
 //!   expiry. We rotate the refresh_token if Spotify returns a new one.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -58,7 +58,7 @@ const SCOPES: &[&str] = &[
 
 pub struct SpotifyProvider {
     http: Client,
-    client_id: String,
+    client_id: Arc<StdRwLock<String>>,
     tokens_path: Option<PathBuf>,
     token: Arc<RwLock<Option<TokenSet>>>,
 }
@@ -93,14 +93,40 @@ impl SpotifyProvider {
             .and_then(|s| serde_json::from_str::<TokenSet>(&s).ok());
         Ok(Self {
             http,
-            client_id,
+            client_id: Arc::new(StdRwLock::new(client_id)),
             tokens_path,
             token: Arc::new(RwLock::new(token)),
         })
     }
 
-    pub fn client_id(&self) -> &str {
-        &self.client_id
+    pub fn client_id(&self) -> String {
+        self.client_id
+            .read()
+            .map(|id| id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Update the active Spotify Developer Client ID without restarting.
+    /// If it changes, existing OAuth tokens are cleared because Spotify
+    /// refresh tokens are bound to the app/client they were issued for.
+    pub async fn set_client_id(&self, client_id: String) -> ProviderResult<bool> {
+        let next = client_id.trim().to_string();
+        let changed = {
+            let mut guard = self
+                .client_id
+                .write()
+                .map_err(|_| ProviderError::Other("Spotify client_id lock poisoned".into()))?;
+            if *guard == next {
+                false
+            } else {
+                *guard = next;
+                true
+            }
+        };
+        if changed {
+            self.disconnect().await?;
+        }
+        Ok(changed)
     }
 
     /// Has a token in memory (regardless of expiry — refresh handles that).
@@ -120,7 +146,8 @@ impl SpotifyProvider {
     /// Run the OAuth PKCE handshake. Blocks until the user completes the
     /// browser flow (or the listener times out / fails).
     pub async fn connect(&self) -> ProviderResult<()> {
-        if self.client_id.trim().is_empty() {
+        let client_id = self.client_id();
+        if client_id.trim().is_empty() {
             return Err(ProviderError::Other(
                 "Spotify client_id is not set — paste one in Settings first.".into(),
             ));
@@ -133,7 +160,7 @@ impl SpotifyProvider {
         // Build the auth URL. Standard Spotify Authorization Code w/ PKCE.
         let mut auth_url = format!(
             "{SP_AUTH}?response_type=code&client_id={cid}&redirect_uri={redir}&code_challenge_method=S256&code_challenge={ch}&state={state}",
-            cid = urlencoded(&self.client_id),
+            cid = urlencoded(&client_id),
             redir = urlencoded(&redirect_uri),
             ch = urlencoded(&challenge),
             state = urlencoded(&csrf_state),
@@ -171,7 +198,7 @@ impl SpotifyProvider {
                 ("grant_type", "authorization_code"),
                 ("code", &code),
                 ("redirect_uri", &redirect_uri),
-                ("client_id", &self.client_id),
+                ("client_id", &client_id),
                 ("code_verifier", &verifier),
             ])
             .send()
@@ -188,6 +215,12 @@ impl SpotifyProvider {
             .json()
             .await
             .map_err(|e| ProviderError::Malformed(e.to_string()))?;
+
+        if self.client_id() != client_id {
+            return Err(ProviderError::Other(
+                "Spotify Client ID changed while OAuth was in progress — connect again.".into(),
+            ));
+        }
 
         let token = TokenSet {
             access_token: tr.access_token,
@@ -242,13 +275,14 @@ impl SpotifyProvider {
             .refresh_token
             .clone()
             .ok_or(ProviderError::AuthRequired)?;
+        let client_id = self.client_id();
         let resp = self
             .http
             .post(SP_TOKEN)
             .form(&[
                 ("grant_type", "refresh_token"),
                 ("refresh_token", &refresh),
-                ("client_id", &self.client_id),
+                ("client_id", &client_id),
             ])
             .send()
             .await

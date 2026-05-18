@@ -355,7 +355,7 @@ impl DiscoveryEngine {
         }
         let similar = match self
             .enrichment
-            .lastfm_similar_tracks(key, &seed.artist, &seed.title, 30)
+            .lastfm_similar_tracks(key.as_deref(), &seed.artist, &seed.title, 30)
             .await
         {
             Ok(v) => v,

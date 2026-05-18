@@ -136,6 +136,10 @@ pub fn use_spotify() -> Arc<SpotifyProvider> {
     use_context::<Arc<SpotifyProvider>>()
 }
 
+pub fn use_enrichment() -> Arc<EnrichmentClient> {
+    use_context::<Arc<EnrichmentClient>>()
+}
+
 pub fn use_config() -> Signal<AppConfig> {
     use_context::<Signal<AppConfig>>()
 }

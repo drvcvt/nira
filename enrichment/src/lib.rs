@@ -25,7 +25,7 @@ pub mod musicbrainz;
 pub use lastfm::LastFmSimilar;
 pub use listenbrainz::Listen;
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use reqwest::Client;
 
@@ -45,12 +45,20 @@ pub enum EnrichmentError {
 
 pub type EnrichmentResult<T> = Result<T, EnrichmentError>;
 
+fn normalise_lastfm_key(key: Option<String>) -> Option<String> {
+    key.map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+        .or_else(|| std::env::var("NIRA_LASTFM_API_KEY").ok())
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+}
+
 /// One client per nira instance — holds the shared HTTP pool and cache.
 #[derive(Clone)]
 pub struct EnrichmentClient {
     http: Client,
     cache: Arc<TtlCache>,
-    lastfm_key: Option<String>,
+    lastfm_key: Arc<RwLock<Option<String>>>,
 }
 
 impl EnrichmentClient {
@@ -70,19 +78,28 @@ impl EnrichmentClient {
             )
             .build()
             .map_err(|e| EnrichmentError::Network(e.to_string()))?;
-        let lastfm_key = key
-            .filter(|k| !k.trim().is_empty())
-            .or_else(|| std::env::var("NIRA_LASTFM_API_KEY").ok())
-            .filter(|k| !k.trim().is_empty());
+        let lastfm_key = normalise_lastfm_key(key);
         Ok(Self {
             http,
             cache: Arc::new(TtlCache::new()),
-            lastfm_key,
+            lastfm_key: Arc::new(RwLock::new(lastfm_key)),
         })
     }
 
-    pub fn lastfm_key(&self) -> Option<&str> {
-        self.lastfm_key.as_deref()
+    pub fn lastfm_key(&self) -> Option<String> {
+        self.lastfm_key
+            .read()
+            .map(|k| k.clone())
+            .unwrap_or_default()
+    }
+
+    /// Update the Last.fm key used by discovery without restarting nira.
+    /// Empty input falls back to `NIRA_LASTFM_API_KEY`, matching startup.
+    pub fn set_lastfm_key(&self, key: Option<String>) {
+        let next = normalise_lastfm_key(key);
+        if let Ok(mut guard) = self.lastfm_key.write() {
+            *guard = next;
+        }
     }
 
     pub(crate) fn http(&self) -> &Client {
