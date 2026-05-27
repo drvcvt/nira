@@ -395,7 +395,7 @@ fn ForYouSpotlightBody(tracks: Vec<Track>) -> Element {
                 }
             }
             div { class: "for-you-spotlight-side",
-                for (idx, track) in tracks.iter().enumerate().skip(1).take(6) {
+                for (idx, track) in tracks.iter().enumerate().skip(1).take(4) {
                     TrackCard {
                         key: "{track.uri.0}",
                         track: track.clone(),
@@ -415,15 +415,15 @@ fn SpotlightSkeleton() -> Element {
             div { class: "for-you-spotlight-main",
                 div { class: "cover-card for-you-skeleton-card",
                     div { class: "cover-card-art" }
-                    div { class: "featured-skeleton-line wide" }
-                    div { class: "featured-skeleton-line" }
+                    div { class: "for-you-skeleton-line wide" }
+                    div { class: "for-you-skeleton-line" }
                 }
             }
             div { class: "for-you-spotlight-side",
                 for idx in 0..4 {
                     div { key: "{idx}", class: "cover-card for-you-skeleton-card",
                         div { class: "cover-card-art" }
-                        div { class: "featured-skeleton-line wide" }
+                        div { class: "for-you-skeleton-line wide" }
                     }
                 }
             }
