@@ -610,6 +610,16 @@ fn build_shelf_plans(
     let recent_seeds = history_seeds(history);
 
     if !all_seeds.is_empty() {
+        // Cap two seeds per artist so a heavy-rotation artist can't monopolise
+        // the row; we still rotate the full pool first so reroll cycles
+        // through the long tail.
+        let made_for_you_seeds = diverse_seeds(
+            rotate_seeds(&all_seeds, offset_for(offsets, SHELF_MADE_FOR_YOU)),
+            2,
+        )
+        .into_iter()
+        .take(MADE_FOR_YOU_SEEDS)
+        .collect();
         out.push(ShelfPlan {
             id: SHELF_MADE_FOR_YOU.to_string(),
             eyebrow: "Personal".into(),
@@ -619,10 +629,7 @@ fn build_shelf_plans(
             seed_label: "recent plays + likes".into(),
             rerollable: true,
             kind: ShelfKind::RelatedAggregate {
-                seeds: rotate_seeds(&all_seeds, offset_for(offsets, SHELF_MADE_FOR_YOU))
-                    .into_iter()
-                    .take(MADE_FOR_YOU_SEEDS)
-                    .collect(),
+                seeds: made_for_you_seeds,
                 exclude_keys: liked_keys.clone(),
             },
         });
@@ -807,8 +814,9 @@ fn combined_likes(local: &[LikedTrack], spotify: &[Track]) -> Vec<Track> {
 }
 
 fn seed_pool(history: &[HistoryEntry], liked: &[Track]) -> Vec<RecommendationSeed> {
-    let mut seeds = liked_seeds(liked);
-    seeds.extend(history_seeds(history));
+    // History first so recent plays survive dedupe; likes fill the tail.
+    let mut seeds = history_seeds(history);
+    seeds.extend(liked_seeds(liked));
     dedupe_seeds(seeds)
 }
 
@@ -826,22 +834,64 @@ fn liked_seeds(tracks: &[Track]) -> Vec<RecommendationSeed> {
 fn cluster_seeds(history: &[HistoryEntry], liked: &[Track]) -> Vec<RecommendationSeed> {
     let mut clusters: HashMap<String, (usize, RecommendationSeed)> = HashMap::new();
 
-    for seed in liked_seeds(liked).into_iter().chain(history_seeds(history)) {
+    // History first so the cluster's seed identity is the most recent play
+    // for that artist, not a like saved months ago. Recent positions get a
+    // larger weight bump so a play from this morning outranks an old like.
+    let history_iter = history_seeds(history)
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| (s, recency_bonus(i)));
+    let liked_iter = liked_seeds(liked).into_iter().map(|s| (s, 0));
+
+    for (seed, recency) in history_iter.chain(liked_iter) {
         let key = normalise_key(&seed.artist);
         if key.is_empty() {
             continue;
         }
         let entry = clusters.entry(key).or_insert((0, seed.clone()));
-        entry.0 += if seed.track_uri.as_ref().is_some_and(is_soundcloud_track) {
+        let sc_bonus = if seed.track_uri.as_ref().is_some_and(is_soundcloud_track) {
             3
         } else {
             1
         };
+        entry.0 += sc_bonus + recency;
     }
 
     let mut ranked: Vec<(usize, RecommendationSeed)> = clusters.into_values().collect();
     ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.artist.cmp(&b.1.artist)));
     ranked.into_iter().map(|(_, seed)| seed).collect()
+}
+
+/// Newer history entries are more representative of current taste. The
+/// step function is intentionally coarse — a smooth decay would over-fit
+/// the noise in a small log.
+fn recency_bonus(idx: usize) -> usize {
+    match idx {
+        0..=9 => 5,
+        10..=29 => 2,
+        _ => 0,
+    }
+}
+
+/// Cap the number of seeds drawn from any single artist while preserving
+/// the input order. Used to keep "Made for you" from looking like a
+/// single-artist radio when the seed pool is skewed.
+fn diverse_seeds(seeds: Vec<RecommendationSeed>, max_per_artist: usize) -> Vec<RecommendationSeed> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut out = Vec::with_capacity(seeds.len());
+    for seed in seeds {
+        let key = normalise_key(&seed.artist);
+        if key.is_empty() {
+            out.push(seed);
+            continue;
+        }
+        let count = counts.entry(key).or_insert(0);
+        if *count < max_per_artist {
+            *count += 1;
+            out.push(seed);
+        }
+    }
+    out
 }
 
 fn seed_from_track(track: &Track) -> Option<RecommendationSeed> {
@@ -1051,5 +1101,105 @@ mod tests {
         assert!(plans.iter().any(|p| p.id == SHELF_MADE_FOR_YOU));
         assert!(plans.iter().any(|p| p.id == SHELF_TRENDING));
         assert!(plans.iter().any(|p| p.id == "genre-electronic"));
+    }
+
+    fn history(artist: &str, title: &str, uri: Option<&str>) -> HistoryEntry {
+        HistoryEntry {
+            title: title.into(),
+            artist: artist.into(),
+            provider: match uri {
+                Some(u) if u.starts_with("soundcloud:") => "SoundCloud".into(),
+                _ => "Spotify".into(),
+            },
+            track_uri: uri.map(str::to_string),
+            cover_url: None,
+            played_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn diverse_seeds_caps_per_artist_preserving_order() {
+        let seeds = vec![
+            seed_from_parts("A", "1", None).unwrap(),
+            seed_from_parts("A", "2", None).unwrap(),
+            seed_from_parts("B", "1", None).unwrap(),
+            seed_from_parts("A", "3", None).unwrap(),
+            seed_from_parts("C", "1", None).unwrap(),
+            seed_from_parts("B", "2", None).unwrap(),
+        ];
+        let out = diverse_seeds(seeds, 1);
+        let titles: Vec<_> = out
+            .iter()
+            .map(|s| (s.artist.as_str(), s.title.as_str()))
+            .collect();
+        assert_eq!(titles, vec![("A", "1"), ("B", "1"), ("C", "1")]);
+    }
+
+    #[test]
+    fn diverse_seeds_allows_two_per_artist() {
+        let seeds = vec![
+            seed_from_parts("A", "1", None).unwrap(),
+            seed_from_parts("A", "2", None).unwrap(),
+            seed_from_parts("A", "3", None).unwrap(),
+            seed_from_parts("B", "1", None).unwrap(),
+        ];
+        let out = diverse_seeds(seeds, 2);
+        let a_count = out.iter().filter(|s| s.artist == "A").count();
+        assert_eq!(a_count, 2);
+        assert!(out.iter().any(|s| s.artist == "B"));
+    }
+
+    #[test]
+    fn seed_pool_puts_history_before_likes() {
+        // Same artist+title in both pools — recency-priority means the
+        // history entry's URI should win the dedupe.
+        let liked = vec![track("spotify:track:old", "Artist", "Track")];
+        let history_log = vec![history("Artist", "Track", Some("soundcloud:track:new"))];
+        let pool = seed_pool(&history_log, &liked);
+        assert_eq!(pool.len(), 1);
+        assert_eq!(
+            pool[0].track_uri.as_ref().map(|u| u.0.as_str()),
+            Some("soundcloud:track:new")
+        );
+    }
+
+    #[test]
+    fn cluster_seeds_recent_history_beats_old_like() {
+        // A non-SC like vs a non-SC recent play. With recency_bonus the
+        // recent history artist should sort first.
+        let liked = vec![track("spotify:track:l", "Old Artist", "Liked")];
+        let history_log = vec![history("Recent Artist", "Played", None)];
+        let seeds = cluster_seeds(&history_log, &liked);
+        assert_eq!(
+            seeds.first().map(|s| s.artist.as_str()),
+            Some("Recent Artist")
+        );
+    }
+
+    #[test]
+    fn made_for_you_caps_same_artist_seeds() {
+        // 12 likes from the same artist; without diversity the shelf seed
+        // list would be all "Hot Artist". Cap is 2.
+        let liked: Vec<Track> = (0..12)
+            .map(|i| {
+                track(
+                    &format!("soundcloud:track:{i}"),
+                    "Hot Artist",
+                    &format!("Song {i}"),
+                )
+            })
+            .collect();
+        let plans = build_shelf_plans(&[], &liked, &HashMap::new());
+        let made = plans.iter().find(|p| p.id == SHELF_MADE_FOR_YOU).unwrap();
+        match &made.kind {
+            ShelfKind::RelatedAggregate { seeds, .. } => {
+                assert!(
+                    seeds.len() <= 2,
+                    "expected ≤2 same-artist seeds, got {}",
+                    seeds.len()
+                );
+            }
+            _ => panic!("expected RelatedAggregate"),
+        }
     }
 }

@@ -14,37 +14,54 @@ use player::{HistoryEntry, Player};
 /// How many rows the Home "Recently played" section shows.
 const RECENTLY_PLAYED_ROW: usize = 8;
 
+/// How many rows the recommendation engine pulls. Big enough that seed
+/// selection can weight by recency and diversify by artist without being
+/// stuck with the 8 entries the Recently-played strip displays.
+const RECOMMENDATION_DEPTH: usize = 100;
+
 /// Refresh cadence. Lower than the player snapshot poll (100 ms) because the
 /// log only grows on track-start, which is a human-scale event.
 const REFRESH_EVERY: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct UseHistory {
+    /// 8 newest rows, sized for the Home "Recently played" strip.
     pub entries: Signal<Vec<HistoryEntry>>,
+    /// Up to 100 newest rows for the recommendation engine. Kept as a
+    /// separate signal so consumers can't accidentally render 100 cover
+    /// cards by reusing `entries`.
+    pub deep_entries: Signal<Vec<HistoryEntry>>,
 }
 
 pub fn use_history() -> UseHistory {
     let player = use_context::<Player>();
     let entries = use_signal(Vec::<HistoryEntry>::new);
+    let deep_entries = use_signal(Vec::<HistoryEntry>::new);
 
     use_hook({
         let player = player.clone();
         move || {
             let mut entries_sig = entries;
+            let mut deep_sig = deep_entries;
             // Seed once on mount so the first frame has the persisted log.
-            entries_sig.set(player.history().recent(RECENTLY_PLAYED_ROW));
+            let deep = player.history().recent(RECOMMENDATION_DEPTH);
+            entries_sig.set(deep.iter().take(RECENTLY_PLAYED_ROW).cloned().collect());
+            deep_sig.set(deep);
             let player = player.clone();
             spawn(async move {
                 loop {
                     tokio::time::sleep(REFRESH_EVERY).await;
-                    let fresh = player.history().recent(RECENTLY_PLAYED_ROW);
-                    // Set unconditionally — Signal equality is cheap and
-                    // Vec equality dedup is built-in.
-                    entries_sig.set(fresh);
+                    let deep = player.history().recent(RECOMMENDATION_DEPTH);
+                    let shallow: Vec<_> = deep.iter().take(RECENTLY_PLAYED_ROW).cloned().collect();
+                    entries_sig.set(shallow);
+                    deep_sig.set(deep);
                 }
             });
         }
     });
 
-    UseHistory { entries }
+    UseHistory {
+        entries,
+        deep_entries,
+    }
 }

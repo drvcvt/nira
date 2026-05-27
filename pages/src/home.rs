@@ -27,7 +27,7 @@ pub fn Home() -> Element {
     let library = use_library();
     let feed = use_listenbrainz_feed();
     let featured = use_featured(library.clone());
-    let recommendations = use_recommendations(library.clone(), history.entries);
+    let recommendations = use_recommendations(library.clone(), history.deep_entries);
 
     rsx! {
         section { class: "page home-page",
