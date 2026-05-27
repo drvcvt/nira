@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+use config::AppConfig;
 use dioxus::prelude::*;
 use player::{Player, PlayerSnapshot};
 
@@ -71,6 +72,7 @@ impl PlayerContext {
 pub struct UsePlayer {
     player: Player,
     snapshot: Signal<PlayerSnapshot>,
+    config: Signal<AppConfig>,
 }
 
 impl UsePlayer {
@@ -103,7 +105,30 @@ impl UsePlayer {
     }
 
     pub fn set_volume(&self, v: f32) {
+        let v = v.clamp(0.0, 1.0);
         self.player.set_volume(v);
+
+        let mut config = self.config;
+        let to_save = {
+            let mut cfg = config.write();
+            if (cfg.volume - v).abs() < 0.005 {
+                None
+            } else {
+                cfg.volume = v;
+                Some(cfg.clone())
+            }
+        };
+        if let Some(cfg) = to_save {
+            std::thread::spawn(move || {
+                if let Err(e) = cfg.save() {
+                    tracing::warn!(error = %e, "volume persist failed");
+                }
+            });
+        }
+    }
+
+    pub fn clear_history(&self) -> std::io::Result<()> {
+        self.player.clear_history()
     }
 
     /// Convenience for the transport-bar play button. Test-tone when nothing
@@ -123,5 +148,10 @@ impl UsePlayer {
 pub fn use_player() -> UsePlayer {
     let player = use_context::<Player>();
     let snapshot = use_context::<Signal<PlayerSnapshot>>();
-    UsePlayer { player, snapshot }
+    let config = use_context::<Signal<AppConfig>>();
+    UsePlayer {
+        player,
+        snapshot,
+        config,
+    }
 }

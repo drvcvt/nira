@@ -17,11 +17,7 @@ use player::Player;
 
 /// Install the scrobble watcher into the current Dioxus scope. Called once
 /// from `AppContext::install`.
-pub fn install(
-    player: Player,
-    enrichment: Arc<EnrichmentClient>,
-    config: Signal<AppConfig>,
-) {
+pub fn install(player: Player, enrichment: Arc<EnrichmentClient>, config: Signal<AppConfig>) {
     use_hook(move || {
         let player = player.clone();
         let enrichment = enrichment.clone();
@@ -54,10 +50,7 @@ pub fn install(
                     let title = np.title.clone();
                     let artist = np.artist.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = enrichment
-                            .lb_playing_now(&token, &title, &artist)
-                            .await
-                        {
+                        if let Err(e) = enrichment.lb_playing_now(&token, &title, &artist).await {
                             tracing::warn!(error = %e, "playing_now failed");
                         }
                     });

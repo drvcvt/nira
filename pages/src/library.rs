@@ -5,10 +5,46 @@
 //! - **Spotify Liked** — the Spotify-server-side liked songs list, pulled
 //!   live via the API. Read-only mirror.
 
-use dioxus::prelude::*;
-use hooks::{LikedTrack, ProviderId, Track, use_ctx_menu, use_library, use_likes, use_queue};
+use std::sync::Arc;
 
-use crate::parts::ArtistLinks;
+use dioxus::prelude::*;
+use hooks::{LikedTrack, Track, use_ctx_menu, use_library, use_likes, use_queue};
+
+use crate::parts::{ArtistLinks, format_duration, open_track_context, provider_badge_class};
+
+const LIKED_PAGE_SIZE: usize = 150;
+
+/// Shared playback context for a list — the click handler on every row
+/// needs the full track vector so the queue gets the surrounding tracks
+/// as upcoming items. Wrapping the vec in `Arc` (with pointer equality
+/// for PartialEq) lets us pass the context as a Dioxus prop to N rows
+/// without re-cloning or re-comparing the underlying vec.
+#[derive(Clone)]
+struct TrackContext(Arc<Vec<Track>>);
+
+impl PartialEq for TrackContext {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl TrackContext {
+    fn new(tracks: Vec<Track>) -> Self {
+        Self(Arc::new(tracks))
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn iter(&self) -> std::slice::Iter<'_, Track> {
+        self.0.iter()
+    }
+
+    fn to_vec(&self) -> Vec<Track> {
+        (*self.0).clone()
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LibTab {
@@ -26,7 +62,13 @@ pub fn Library() -> Element {
     let active = *tab.read();
 
     let saved = likes.list();
-    let spotify_tracks = library.liked.read().clone();
+    // Wrap the (potentially ~900-track) Spotify-liked list in an Arc once
+    // per render. Without this we'd hand a `Vec<Track>` to SpotifyLikedList,
+    // which Dioxus diffs by `PartialEq` — a full O(N) walk — *and* the
+    // component cloned the vec again internally. Arc-as-PartialEq is
+    // pointer equality, so a no-op render is free.
+    let spotify_context = use_memo(move || TrackContext::new(library.liked.read().clone()));
+    let spotify_count = spotify_context.read().len();
     let is_loading = *library.is_loading.read();
     let lib_error = library.error.read().clone();
     let queue_error = queue.error.read().clone();
@@ -49,7 +91,7 @@ pub fn Library() -> Element {
                     onclick: move |_| tab.set(LibTab::Spotify),
                     i { class: "fa-brands fa-spotify" }
                     " Spotify Liked "
-                    span { class: "lib-tab-count", "{spotify_tracks.len()}" }
+                    span { class: "lib-tab-count", "{spotify_count}" }
                 }
             }
 
@@ -57,7 +99,7 @@ pub fn Library() -> Element {
                 LibTab::Saved => rsx! { SavedList { items: saved } },
                 LibTab::Spotify => rsx! {
                     SpotifyLikedList {
-                        tracks: spotify_tracks,
+                        context: spotify_context.read().clone(),
                         is_loading,
                         lib_error: lib_error.clone(),
                         queue_error: queue_error.clone(),
@@ -71,8 +113,6 @@ pub fn Library() -> Element {
 
 #[component]
 fn SavedList(items: Vec<LikedTrack>) -> Element {
-    let queue = use_queue();
-    let ctx = use_ctx_menu();
     let likes = use_likes();
 
     if items.is_empty() {
@@ -90,6 +130,7 @@ fn SavedList(items: Vec<LikedTrack>) -> Element {
     }
 
     let tracks: Vec<Track> = items.iter().map(|l| l.track.clone()).collect();
+    let context = TrackContext::new(tracks);
 
     rsx! {
         p { class: "hint", "{items.len()} tracks" }
@@ -98,11 +139,7 @@ fn SavedList(items: Vec<LikedTrack>) -> Element {
                 {
                     let track = entry.track.clone();
                     let liked_at = entry.liked_at;
-                    let tracks = tracks.clone();
-                    let queue = queue.clone();
-                    let ctx = ctx;
-                    let likes = likes;
-                    let t_for_ctx = track.clone();
+                    let context = context.clone();
                     let t_for_unlike = track.clone();
                     rsx! {
                         TrackRow {
@@ -110,13 +147,9 @@ fn SavedList(items: Vec<LikedTrack>) -> Element {
                             track: track.clone(),
                             saved_at: Some(liked_at),
                             show_unlike: true,
-                            on_play: move |_| queue.play_list(tracks.clone(), idx),
+                            context,
+                            index: idx,
                             on_unlike: move |_| likes.toggle(&t_for_unlike),
-                            on_context: move |e: MouseEvent| {
-                                e.prevent_default();
-                                let pos = e.data.client_coordinates();
-                                ctx.open(pos.x, pos.y, t_for_ctx.clone());
-                            },
                         }
                     }
                 }
@@ -127,14 +160,15 @@ fn SavedList(items: Vec<LikedTrack>) -> Element {
 
 #[component]
 fn SpotifyLikedList(
-    tracks: Vec<Track>,
+    context: TrackContext,
     is_loading: bool,
     lib_error: Option<String>,
     queue_error: Option<String>,
     progress: (u32, u32),
 ) -> Element {
-    let queue = use_queue();
-    let ctx = use_ctx_menu();
+    let total = context.len();
+    let mut visible_count = use_signal(|| LIKED_PAGE_SIZE);
+    let visible = (*visible_count.read()).min(total);
 
     rsx! {
         p { class: "hint",
@@ -145,9 +179,9 @@ fn SpotifyLikedList(
             p { class: "hint",
                 i { class: "fa-solid fa-circle-notch fa-spin" }
                 {
-                    let (loaded, total) = progress;
-                    if total > 0 {
-                        format!(" Loading {loaded} of {total}…")
+                    let (loaded, total_p) = progress;
+                    if total_p > 0 {
+                        format!(" Loading {loaded} of {total_p}…")
                     } else {
                         " Loading…".to_string()
                     }
@@ -155,11 +189,13 @@ fn SpotifyLikedList(
             }
         }
 
-        if let Some(err) = lib_error.as_ref().or(queue_error.as_ref()) {
-            div { class: "search-error", "{err}" }
+        if total == 0 {
+            if let Some(err) = lib_error.as_ref().or(queue_error.as_ref()) {
+                div { class: "search-error", "{err}" }
+            }
         }
 
-        if !is_loading && lib_error.is_none() && tracks.is_empty() {
+        if !is_loading && lib_error.is_none() && total == 0 {
             div { class: "discover-empty",
                 div { class: "discover-empty-glyph",
                     i { class: "fa-solid fa-heart" }
@@ -169,32 +205,32 @@ fn SpotifyLikedList(
             }
         }
 
-        if !tracks.is_empty() {
-            p { class: "hint", "{tracks.len()} tracks" }
+        if total > 0 {
+            p { class: "hint", "Showing {visible} of {total} tracks" }
             ul { class: "track-list",
-                for (idx, track) in tracks.iter().enumerate() {
+                for (idx, track) in context.iter().take(visible).enumerate() {
                     {
                         let track = track.clone();
-                        let tracks = tracks.clone();
-                        let queue = queue.clone();
-                        let ctx = ctx;
-                        let t_for_ctx = track.clone();
+                        let row_context = context.clone();
                         rsx! {
                             TrackRow {
                                 key: "{track.uri.0}",
                                 track: track.clone(),
                                 saved_at: None,
                                 show_unlike: false,
-                                on_play: move |_| queue.play_list(tracks.clone(), idx),
+                                context: row_context,
+                                index: idx,
                                 on_unlike: move |_| {},
-                                on_context: move |e: MouseEvent| {
-                                    e.prevent_default();
-                                    let pos = e.data.client_coordinates();
-                                    ctx.open(pos.x, pos.y, t_for_ctx.clone());
-                                },
                             }
                         }
                     }
+                }
+            }
+            if visible < total {
+                button {
+                    class: "sq-btn sq-btn-ghost sq-sm library-more-btn",
+                    onclick: move |_| visible_count.set((visible + LIKED_PAGE_SIZE).min(total)),
+                    "Show more"
                 }
             }
         }
@@ -206,23 +242,24 @@ fn TrackRow(
     track: Track,
     saved_at: Option<chrono::DateTime<chrono::Utc>>,
     show_unlike: bool,
-    on_play: EventHandler<()>,
+    context: TrackContext,
+    index: usize,
     on_unlike: EventHandler<()>,
-    on_context: EventHandler<MouseEvent>,
 ) -> Element {
-    let duration = fmt_duration(track.duration);
+    let queue = use_queue();
+    let ctx = use_ctx_menu();
+    let duration = format_duration(track.duration);
     let cover = track.cover_url.clone().unwrap_or_default();
-    let badge_class = match track.provider {
-        ProviderId::Spotify => "track-badge spotify",
-        ProviderId::SoundCloud => "track-badge soundcloud",
-        ProviderId::Local => "track-badge",
-    };
+    let badge_class = provider_badge_class(track.provider);
     let saved_str = saved_at.map(fmt_relative).unwrap_or_default();
+    let play_context = context.clone();
+    let ctx_track = track.clone();
 
     rsx! {
-        li { class: "track-row",
-            onclick: move |_| on_play.call(()),
-            oncontextmenu: move |e: MouseEvent| on_context.call(e),
+        li {
+            class: "track-row",
+            onclick: move |_| queue.play_context(play_context.to_vec(), index),
+            oncontextmenu: move |e: Event<MouseData>| open_track_context(ctx, e, ctx_track.clone()),
             div { class: "track-cover",
                 if !cover.is_empty() {
                     img { src: "{cover}", alt: "", loading: "lazy" }
@@ -256,13 +293,6 @@ fn TrackRow(
             }
         }
     }
-}
-
-fn fmt_duration(d: std::time::Duration) -> String {
-    let total = d.as_secs();
-    let m = total / 60;
-    let s = total % 60;
-    format!("{m}:{s:02}")
 }
 
 fn fmt_relative(t: chrono::DateTime<chrono::Utc>) -> String {

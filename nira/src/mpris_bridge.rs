@@ -25,9 +25,8 @@ use std::time::Duration;
 
 use hooks::Player;
 use mpris_server::{
-    LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property,
-    RootInterface, Server, Signal as MprisSignal, Time, TrackId, Volume,
-    zbus::fdo,
+    LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property, RootInterface,
+    Server, Signal as MprisSignal, Time, TrackId, Volume, zbus::fdo,
 };
 
 /// Start the MPRIS server in the background. Failures are logged and the
@@ -241,7 +240,7 @@ impl PlayerInterface for NiraMprisImpl {
         Ok(())
     }
     async fn stop(&self) -> fdo::Result<()> {
-        self.player.stop();
+        self.player.request_stop();
         Ok(())
     }
     async fn play(&self) -> fdo::Result<()> {

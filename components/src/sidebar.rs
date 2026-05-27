@@ -22,11 +22,6 @@ const DISCOVERY: &[NavItem] = &[
         label: "Discover",
         icon: "fa-solid fa-compass",
     },
-    NavItem {
-        section: Section::Search,
-        label: "Search",
-        icon: "fa-solid fa-magnifying-glass",
-    },
 ];
 
 const LIBRARY: &[NavItem] = &[NavItem {

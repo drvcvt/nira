@@ -295,9 +295,7 @@ impl EnrichmentClient {
             .listens
             .into_iter()
             .filter_map(|l| {
-                let listened_at = Utc
-                    .timestamp_opt(l.listened_at as i64, 0)
-                    .single()?;
+                let listened_at = Utc.timestamp_opt(l.listened_at as i64, 0).single()?;
                 Some(Listen {
                     mbid: l
                         .track_metadata

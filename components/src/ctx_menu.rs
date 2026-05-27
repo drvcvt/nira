@@ -48,13 +48,20 @@ pub fn ContextMenu() -> Element {
     } else {
         format!("{artist_name} · {provider}")
     };
-    let like_label = if liked_now { "Remove from Liked" } else { "Save to Liked" };
-    let like_icon_class = if liked_now { "ctx-icon accented fa-solid fa-heart" } else { "ctx-icon fa-regular fa-heart" };
+    let like_label = if liked_now {
+        "Remove from Liked"
+    } else {
+        "Save to Liked"
+    };
+    let like_icon_class = if liked_now {
+        "ctx-icon accented fa-solid fa-heart"
+    } else {
+        "ctx-icon fa-regular fa-heart"
+    };
     let x = state.x;
     let y = state.y;
 
     let artist_section = artist_nav.clone().map(|(uri, name)| {
-        let ctx = ctx;
         let label = format!("Go to {name}");
         rsx! {
             button {
@@ -72,7 +79,6 @@ pub fn ContextMenu() -> Element {
     });
 
     let album_section = album_nav.clone().map(|(uri, title_a)| {
-        let ctx = ctx;
         let label = format!("Go to {title_a}");
         rsx! {
             button {
@@ -95,16 +101,10 @@ pub fn ContextMenu() -> Element {
         button {
             class: "ctx-overlay",
             r#type: "button",
-            onclick: {
-                let ctx = ctx;
-                move |_| ctx.close()
-            },
-            oncontextmenu: {
-                let ctx = ctx;
-                move |e: Event<MouseData>| {
-                    e.prevent_default();
-                    ctx.close();
-                }
+            onclick: move |_| ctx.close(),
+            oncontextmenu: move |e: Event<MouseData>| {
+                e.prevent_default();
+                ctx.close();
             },
         }
         div {
@@ -121,7 +121,6 @@ pub fn ContextMenu() -> Element {
                 button {
                     class: "ctx-item",
                     onclick: {
-                        let ctx = ctx;
                         let queue = queue.clone();
                         let track = track.clone();
                         move |_| {
@@ -137,7 +136,6 @@ pub fn ContextMenu() -> Element {
                 button {
                     class: "ctx-item",
                     onclick: {
-                        let ctx = ctx;
                         let queue = queue.clone();
                         let track = track.clone();
                         move |_| {
@@ -158,7 +156,6 @@ pub fn ContextMenu() -> Element {
                 button {
                     class: "ctx-item",
                     onclick: {
-                        let ctx = ctx;
                         let queue = queue.clone();
                         let engine = engine.clone();
                         let track = track.clone();
@@ -181,8 +178,6 @@ pub fn ContextMenu() -> Element {
                 button {
                     class: "ctx-item",
                     onclick: {
-                        let ctx = ctx;
-                        let likes = likes;
                         let track = track.clone();
                         move |_| {
                             likes.toggle(&track);

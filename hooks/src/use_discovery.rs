@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use dioxus::prelude::*;
 use discovery::{
-    CrossPlatformMatch, DiscoveryEngine, DiscoveryResult, SimilarToSeed,
+    CrossPlatformMatch, DiscoveryEngine, DiscoveryResult, DiscoverySourcePrefs, SimilarToSeed,
 };
 use provider_api::Track;
 
@@ -89,6 +89,10 @@ impl UseDiscovery {
     /// Lets the UI distinguish `lf off` (no key) from `lf 0` (no hits).
     pub fn lastfm_configured(&self) -> bool {
         self.engine.lastfm_configured()
+    }
+
+    pub fn source_prefs(&self) -> DiscoverySourcePrefs {
+        self.engine.source_prefs()
     }
 
     /// Bridge mode trigger that takes a concrete track. The Discover page

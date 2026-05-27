@@ -1,8 +1,8 @@
-use components::{SearchBar, SearchBarShape};
+use components::SearchBar;
 use dioxus::prelude::*;
-use hooks::{ProviderId, Track, use_ctx_menu, use_queue, use_search};
+use hooks::{Track, use_queue, use_search};
 
-use crate::parts::ArtistLinks;
+use crate::parts::{ArtistLinks, PlayableLi, format_duration, provider_badge_class};
 
 #[component]
 pub fn Search() -> Element {
@@ -24,10 +24,9 @@ pub fn Search() -> Element {
                 "Click a track to stream — the rest of the list becomes the queue."
             }
 
-            // Pill-shaped input with inline icon and a contextual hint
-            // chip on the right (spinner → loading → enter hint).
+            // Shared app search input with a contextual hint chip on the
+            // right (spinner → loading → enter hint).
             SearchBar {
-                shape: SearchBarShape::Pill,
                 icon: Some("fa-solid fa-magnifying-glass".to_string()),
                 value: query_value.clone(),
                 placeholder: "artist, title, label, anything…".to_string(),
@@ -64,11 +63,8 @@ pub fn Search() -> Element {
                     TrackRow {
                         key: "{track.uri.0}",
                         track: track.clone(),
-                        on_play: {
-                            let results = results.clone();
-                            let queue = queue.clone();
-                            move |_| queue.play_list(results.clone(), idx)
-                        },
+                        tracks: results.clone(),
+                        index: idx,
                     }
                 }
             }
@@ -77,27 +73,17 @@ pub fn Search() -> Element {
 }
 
 #[component]
-fn TrackRow(track: Track, on_play: EventHandler<()>) -> Element {
+fn TrackRow(track: Track, tracks: Vec<Track>, index: usize) -> Element {
     let duration = format_duration(track.duration);
     let cover = track.cover_url.clone().unwrap_or_default();
-    let badge_class = match track.provider {
-        ProviderId::Spotify => "track-badge spotify",
-        ProviderId::SoundCloud => "track-badge soundcloud",
-        ProviderId::Local => "track-badge",
-    };
-    let ctx = use_ctx_menu();
+    let badge_class = provider_badge_class(track.provider);
 
     rsx! {
-        li { class: "track-row",
-            onclick: move |_| on_play.call(()),
-            oncontextmenu: {
-                let track = track.clone();
-                move |e: Event<MouseData>| {
-                    e.prevent_default();
-                    let pos = e.data.client_coordinates();
-                    ctx.open(pos.x, pos.y, track.clone());
-                }
-            },
+        PlayableLi {
+            track: track.clone(),
+            tracks,
+            index,
+            class: "track-row".to_string(),
             div { class: "track-cover",
                 if !cover.is_empty() {
                     img { src: "{cover}", alt: "", loading: "lazy" }
@@ -117,11 +103,4 @@ fn TrackRow(track: Track, on_play: EventHandler<()>) -> Element {
             div { class: "{badge_class}", "{track.provider.badge()}" }
         }
     }
-}
-
-fn format_duration(d: std::time::Duration) -> String {
-    let total = d.as_secs();
-    let m = total / 60;
-    let s = total % 60;
-    format!("{m}:{s:02}")
 }

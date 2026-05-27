@@ -81,17 +81,14 @@ impl SpotifyBackend {
 
         let backend_fn = audio_backend::find(None).ok_or(SpotifyBackendError::NoBackend)?;
         let mixer_fn = mixer::find(None).ok_or(SpotifyBackendError::NoMixer)?;
-        let mixer = mixer_fn(MixerConfig::default()).map_err(|e| {
-            SpotifyBackendError::Connect(format!("mixer open: {e}"))
-        })?;
+        let mixer = mixer_fn(MixerConfig::default())
+            .map_err(|e| SpotifyBackendError::Connect(format!("mixer open: {e}")))?;
         let volume_getter = mixer.get_soft_volume();
 
-        let player = LibrespotPlayer::new(
-            player_config,
-            session.clone(),
-            volume_getter,
-            move || backend_fn(None, audio_format),
-        );
+        let player =
+            LibrespotPlayer::new(player_config, session.clone(), volume_getter, move || {
+                backend_fn(None, audio_format)
+            });
 
         let state = Arc::new(RwLock::new(SpotifyState::default()));
         spawn_event_listener(player.clone(), state.clone());
@@ -145,7 +142,8 @@ impl SpotifyBackend {
         };
         let mut s = s_guard.clone();
         drop(s_guard);
-        if !s.is_paused && s.has_track
+        if !s.is_paused
+            && s.has_track
             && let Some(t) = s.last_position_at
         {
             let elapsed = t.elapsed().as_millis() as u32;

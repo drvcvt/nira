@@ -137,19 +137,14 @@ pub struct Artist {
 /// from singles + EPs without an extra round trip. Providers map their
 /// own taxonomy onto this; `Unknown` means "fall back to track-count
 /// heuristic in the UI."
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AlbumType {
     Album,
     Single,
     Ep,
     Compilation,
+    #[default]
     Unknown,
-}
-
-impl Default for AlbumType {
-    fn default() -> Self {
-        AlbumType::Unknown
-    }
 }
 
 /// Lightweight album reference — what we get back when listing an artist's
@@ -225,9 +220,7 @@ pub enum StreamHandle {
     },
     /// In-process session, e.g. librespot. The provider holds the live session
     /// and gives the player a handle to attach to the mixer.
-    InProcess {
-        session_id: u64,
-    },
+    InProcess { session_id: u64 },
 }
 
 #[async_trait]
@@ -242,11 +235,7 @@ pub trait Provider: Send + Sync {
     /// Artist "top tracks" — the popular-on-this-platform list. Spotify has
     /// a dedicated endpoint; SC fakes this with the user's own tracks
     /// endpoint. Default impl returns NotAvailable so providers opt in.
-    async fn artist_top_tracks(
-        &self,
-        _uri: &ArtistUri,
-        _limit: u32,
-    ) -> ProviderResult<Vec<Track>> {
+    async fn artist_top_tracks(&self, _uri: &ArtistUri, _limit: u32) -> ProviderResult<Vec<Track>> {
         Err(ProviderError::NotAvailable)
     }
 

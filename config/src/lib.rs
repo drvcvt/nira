@@ -7,13 +7,14 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Where the user's local music collection lives. Empty until set.
     pub library_root: Option<PathBuf>,
 
     /// 0.0 – 1.0 linear gain. The audio engine applies a square-law taper
     /// before feeding the output stream so the slider feels even.
+    #[serde(default = "default_volume")]
     pub volume: f32,
 
     /// User-registered Spotify Developer app Client ID. Required for the
@@ -39,19 +40,50 @@ pub struct AppConfig {
     /// `NIRA_LASTFM_API_KEY` env var at startup if this field is empty.
     #[serde(default)]
     pub lastfm_api_key: Option<String>,
+
+    /// Discovery/Radio candidate sources. Defaults keep the Aegis-style
+    /// SoundCloud-first feel: SC related + Last.fm, ListenBrainz opt-in.
+    #[serde(default = "default_true")]
+    pub discovery_soundcloud: bool,
+    #[serde(default)]
+    pub discovery_listenbrainz: bool,
+    #[serde(default = "default_true")]
+    pub discovery_lastfm: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            library_root: None,
+            volume: default_volume(),
+            spotify_client_id: None,
+            listenbrainz_token: None,
+            listenbrainz_username: None,
+            lastfm_api_key: None,
+            discovery_soundcloud: true,
+            discovery_listenbrainz: false,
+            discovery_lastfm: true,
+        }
+    }
+}
+
+fn default_volume() -> f32 {
+    0.8
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl AppConfig {
     pub fn config_dir() -> Option<PathBuf> {
-        directories::ProjectDirs::from("dev", "nira", "nira")
-            .map(|d| d.config_dir().to_path_buf())
+        directories::ProjectDirs::from("dev", "nira", "nira").map(|d| d.config_dir().to_path_buf())
     }
 
     /// XDG cache root for nira. Lower-trust state goes here — everything in
     /// `cache_dir()` is safe to nuke; the app rebuilds it on next launch.
     pub fn cache_dir() -> Option<PathBuf> {
-        directories::ProjectDirs::from("dev", "nira", "nira")
-            .map(|d| d.cache_dir().to_path_buf())
+        directories::ProjectDirs::from("dev", "nira", "nira").map(|d| d.cache_dir().to_path_buf())
     }
 
     pub fn config_path() -> Option<PathBuf> {
@@ -127,5 +159,29 @@ impl AppConfig {
         let raw = serde_json::to_string_pretty(self)?;
         std::fs::write(&path, raw)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_volume_is_sane() {
+        assert_eq!(AppConfig::default().volume, 0.8);
+    }
+
+    #[test]
+    fn missing_volume_deserialises_to_default() {
+        let cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.volume, 0.8);
+    }
+
+    #[test]
+    fn discovery_sources_default_to_aegis_style() {
+        let cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(cfg.discovery_soundcloud);
+        assert!(!cfg.discovery_listenbrainz);
+        assert!(cfg.discovery_lastfm);
     }
 }

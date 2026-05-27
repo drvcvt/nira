@@ -57,17 +57,19 @@ fn App() -> Element {
     // back the device) but everything else is just Arc allocation. We then
     // *do* fire one background task to pre-warm the SC client_id so the
     // first user-visible search doesn't pay the JS-scrape cost.
-    let player = use_hook(|| {
-        Player::spawn(AppConfig::play_history_path()).expect("audio engine failed to start")
-    });
     let app_cfg = use_hook(|| AppConfig::load().unwrap_or_default());
+    let player = use_hook({
+        let app_cfg = app_cfg.clone();
+        move || {
+            Player::spawn(AppConfig::play_history_path(), app_cfg.volume)
+                .expect("audio engine failed to start")
+        }
+    });
     let sc = use_hook(|| Arc::new(SoundCloudProvider::new().expect("SoundCloud provider init")));
     let sp = use_hook(|| {
         let client_id = app_cfg.spotify_client_id.clone().unwrap_or_default();
         let tokens_path = AppConfig::spotify_tokens_path();
-        Arc::new(
-            SpotifyProvider::new(client_id, tokens_path).expect("Spotify provider init"),
-        )
+        Arc::new(SpotifyProvider::new(client_id, tokens_path).expect("Spotify provider init"))
     });
     AppContext::install(player.clone(), sc.clone(), sp, app_cfg);
 
@@ -89,6 +91,7 @@ fn App() -> Element {
     });
 
     let section = use_signal(|| Section::Home);
+    let search_open = use_signal(|| false);
 
     rsx! {
         document::Stylesheet { href: MAIN_CSS }
@@ -104,22 +107,100 @@ fn App() -> Element {
                     l.rel='stylesheet';l.href=href;\
                     document.head.appendChild(l);\
                 }});\
+                if (!window.__nira_hotkeys_installed) {{\
+                    window.__nira_hotkeys_installed = true;\
+                    window.__nira_focus_search = function() {{\
+                        var tries = 0;\
+                        function focusWhenReady() {{\
+                            var input = document.querySelector('.search-overlay.open .searchbar-input');\
+                            if (input) {{\
+                                input.focus({{ preventScroll: true }});\
+                                input.select && input.select();\
+                                return;\
+                            }}\
+                            if (++tries < 12) requestAnimationFrame(focusWhenReady);\
+                        }}\
+                        requestAnimationFrame(focusWhenReady);\
+                    }};\
+                    document.addEventListener('keydown', function(e) {{\
+                        var key = (e.key || '').toLowerCase();\
+                        var isSpace = key === ' ' || key === 'space' || key === 'spacebar';\
+                        var openSearch = ((e.ctrlKey || e.metaKey) && key === 'f') || (e.altKey && isSpace);\
+                        if (openSearch) {{\
+                            e.preventDefault();\
+                            var open = document.getElementById('nira-search-hotkey');\
+                            if (open) open.click();\
+                            window.__nira_focus_search();\
+                            return;\
+                        }}\
+                        if (key === 'escape' && document.querySelector('.search-overlay.open')) {{\
+                            e.preventDefault();\
+                            var close = document.getElementById('nira-search-close-hotkey');\
+                            if (close) close.click();\
+                        }}\
+                    }}, true);\
+                }}\
             }})();"
         }
         div {
-            class: "shell",
+            class: if *search_open.read() { "shell search-open" } else { "shell" },
+            tabindex: "0",
             // Suppress wry's native context menu app-wide — without this
             // the webview overlays its own menu on top of ours. Track-row
             // handlers still fire and call ctx.open() because their
             // preventDefault doesn't stop propagation.
+            onmounted: move |e: Event<MountedData>| {
+                spawn(async move {
+                    let _ = e.data.set_focus(true).await;
+                });
+            },
             oncontextmenu: move |e: Event<MouseData>| {
                 e.prevent_default();
             },
+            onkeydown: {
+                let mut search_open = search_open;
+                move |e: Event<KeyboardData>| {
+                    let mods = e.modifiers();
+                    let key = e.key().to_string();
+                    let ctrl_or_meta = mods.contains(Modifiers::CONTROL) || mods.contains(Modifiers::META);
+                    let is_space = key == " " || key.eq_ignore_ascii_case("space");
+                    let open_search = (ctrl_or_meta && key.eq_ignore_ascii_case("f"))
+                        || (mods.contains(Modifiers::ALT) && is_space);
+                    if open_search {
+                        e.prevent_default();
+                        search_open.set(true);
+                    } else if e.key() == Key::Escape && *search_open.peek() {
+                        e.prevent_default();
+                        search_open.set(false);
+                    }
+                }
+            },
+            button {
+                id: "nira-search-hotkey",
+                class: "hotkey-bridge",
+                r#type: "button",
+                tabindex: "-1",
+                onclick: {
+                    let mut search_open = search_open;
+                    move |_| search_open.set(true)
+                },
+            }
+            button {
+                id: "nira-search-close-hotkey",
+                class: "hotkey-bridge",
+                r#type: "button",
+                tabindex: "-1",
+                onclick: {
+                    let mut search_open = search_open;
+                    move |_| search_open.set(false)
+                },
+            }
             components::sidebar::Sidebar { section }
             main { class: "content",
                 MainContent { section }
             }
             components::bottombar::Bottombar {}
+            pages::search_overlay::SearchOverlay { open: search_open }
             // Global right-click menu — singleton, reads its own state from
             // the `use_ctx_menu` signal. Rows on any page open it.
             components::ctx_menu::ContextMenu {}
@@ -144,7 +225,6 @@ fn MainContent(section: Signal<Section>) -> Element {
             {match *section.read() {
                 Section::Home     => rsx! { pages::home::Home {} },
                 Section::Discover => rsx! { pages::discover::Discover {} },
-                Section::Search   => rsx! { pages::search::Search {} },
                 Section::Library  => rsx! { pages::library::Library {} },
                 Section::Settings => rsx! { pages::settings::Settings {} },
             }}

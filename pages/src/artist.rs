@@ -11,9 +11,10 @@
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
 use hooks::{
-    AlbumBrief, ArtistUri, RelatedArtist, Track, is_long_play, use_artist, use_ctx_menu,
-    use_detail, use_queue,
+    AlbumBrief, ArtistUri, RelatedArtist, Track, is_long_play, use_artist, use_detail, use_queue,
 };
+
+use crate::parts::PlayableLi;
 
 #[component]
 pub fn ArtistPage(uri: ArtistUri) -> Element {
@@ -56,7 +57,7 @@ pub fn ArtistPage(uri: ArtistUri) -> Element {
                         let tracks = v.top_tracks.clone();
                         move |_| {
                             if !tracks.is_empty() {
-                                queue.play_list(tracks.clone(), 0);
+                                queue.play_context(tracks.clone(), 0);
                             }
                         }
                     }
@@ -65,7 +66,6 @@ pub fn ArtistPage(uri: ArtistUri) -> Element {
                     view: v.clone(),
                     active: active_tab,
                     on_tab_change: {
-                        let artist = artist;
                         let v = v.clone();
                         move |t: ArtistTab| {
                             // Lazy-load Related the first time the tab is opened.
@@ -264,8 +264,6 @@ fn ArtistTabBody(
 
 #[component]
 fn TopTracksList(tracks: Vec<Track>) -> Element {
-    let queue = use_queue();
-    let ctx = use_ctx_menu();
     if tracks.is_empty() {
         return rsx! {
             div { class: "discover-empty",
@@ -276,23 +274,12 @@ fn TopTracksList(tracks: Vec<Track>) -> Element {
     rsx! {
         ul { class: "track-list",
             for (i, t) in tracks.iter().enumerate() {
-                li {
-                    class: "track-row top-track-row",
+                PlayableLi {
                     key: "{t.uri.0}",
-                    onclick: {
-                        let tracks = tracks.clone();
-                        let queue = queue.clone();
-                        let idx = i;
-                        move |_| queue.play_list(tracks.clone(), idx)
-                    },
-                    oncontextmenu: {
-                        let t = t.clone();
-                        move |e: Event<MouseData>| {
-                            e.prevent_default();
-                            let pos = e.data.client_coordinates();
-                            ctx.open(pos.x, pos.y, t.clone());
-                        }
-                    },
+                    track: t.clone(),
+                    tracks: tracks.clone(),
+                    index: i,
+                    class: "track-row top-track-row".to_string(),
                     span { class: "track-index", "{i + 1:02}" }
                     div { class: "track-cover",
                         if let Some(c) = t.cover_url.as_ref() {
@@ -356,7 +343,10 @@ fn AlbumCard(album: AlbumBrief, on_open: EventHandler<()>) -> Element {
         hooks::AlbumType::Compilation => "compilation".to_string(),
         hooks::AlbumType::Unknown => "release".to_string(),
     };
-    let year_str = album.release_year.map(|y| y.to_string()).unwrap_or_default();
+    let year_str = album
+        .release_year
+        .map(|y| y.to_string())
+        .unwrap_or_default();
     let tracks_str = album
         .total_tracks
         .map(|t| format!("{t} tracks"))
@@ -391,11 +381,7 @@ fn AlbumCard(album: AlbumBrief, on_open: EventHandler<()>) -> Element {
 }
 
 #[component]
-fn RelatedGrid(
-    related: Vec<RelatedArtist>,
-    is_loading: bool,
-    already_loaded: bool,
-) -> Element {
+fn RelatedGrid(related: Vec<RelatedArtist>, is_loading: bool, already_loaded: bool) -> Element {
     let detail = use_detail();
     if is_loading || !already_loaded {
         return rsx! {
@@ -438,4 +424,3 @@ fn RelatedGrid(
         }
     }
 }
-

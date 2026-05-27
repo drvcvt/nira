@@ -8,13 +8,18 @@
 //! works on a fresh install (everything empty with CTAs) and fills in as
 //! providers connect.
 
-use components::{Button, ButtonVariant};
+use std::sync::Arc;
+
+use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
 use hooks::{
-    DiscoveryResult, HistoryEntry, Listen, Provider, Query, Track, UseFeatured,
-    UseLibrary, UseListenBrainzFeed, use_ctx_menu, use_featured, use_history, use_library,
-    use_listenbrainz_feed, use_queue, use_soundcloud, use_spotify,
+    DiscoveryResult, HistoryEntry, Listen, Provider, Query, RecommendationMix, RecommendationShelf,
+    RecommendationTile, Track, TrackUri, UseFeatured, UseLibrary, UseListenBrainzFeed,
+    UseRecommendations, use_ctx_menu, use_featured, use_history, use_library,
+    use_listenbrainz_feed, use_queue, use_recommendations, use_soundcloud, use_spotify,
 };
+
+use crate::parts::{PlayableButton, provider_badge_class};
 
 #[component]
 pub fn Home() -> Element {
@@ -22,6 +27,7 @@ pub fn Home() -> Element {
     let library = use_library();
     let feed = use_listenbrainz_feed();
     let featured = use_featured(library.clone());
+    let recommendations = use_recommendations(library.clone(), history.entries);
 
     rsx! {
         section { class: "page home-page",
@@ -31,6 +37,7 @@ pub fn Home() -> Element {
             }
 
             Featured { featured: featured.clone() }
+            ForYouRecommendations { recommendations: recommendations.clone() }
             RecentlyPlayed { entries: history.entries.read().clone() }
             RecentlyLiked { library: library.clone() }
             ListenedLately { feed: feed.clone() }
@@ -104,7 +111,11 @@ fn Featured(featured: UseFeatured) -> Element {
 }
 
 #[component]
-fn FeaturedCard(result: DiscoveryResult, seed: Option<Track>, on_play: EventHandler<()>) -> Element {
+fn FeaturedCard(
+    result: DiscoveryResult,
+    seed: Option<Track>,
+    on_play: EventHandler<()>,
+) -> Element {
     let cover = result.cover_url.clone().unwrap_or_default();
     let title = result.title.clone();
     let artist = result.artist.clone();
@@ -209,6 +220,512 @@ fn FeaturedSkeleton(seed: Option<Track>) -> Element {
     }
 }
 
+// ─── For You ─────────────────────────────────────────────────────────────
+//
+// Layout:
+//
+// 1. Slim header (eyebrow + title + actions). No card chrome — just the
+//    page-level hierarchy.
+// 2. Dashboard row: 2-col on desktop, 1-col below ~1080px content width.
+//      - left: Spotlight ("Made for you") — lead art + secondary picks.
+//      - right: 2×2 Daily Mixes grid + 1–2 quick tiles below.
+// 3. Rails group: compact horizontal scroll rails with smaller cards and
+//    no card chrome — Because You Played, From Your Artists, From Your
+//    Likes, Trending. Hierarchy via spacing, not duplicated borders.
+// 4. Scenes panel: 2-col grid of compact rails for SoundCloud genres.
+
+#[component]
+fn ForYouRecommendations(recommendations: UseRecommendations) -> Element {
+    let shelves = recommendations.shelves.read().clone();
+    let mixes = recommendations.mixes.read().clone();
+    let tiles = recommendations.tiles.read().clone();
+    let is_loading = *recommendations.is_loading.read();
+    let error = recommendations.error.read().clone();
+    let pool = merged_recommendation_tracks(&shelves, &mixes);
+    let spotlight = shelf_by_id(&shelves, "made-for-you");
+    let because = shelf_by_id(&shelves, "because-recent");
+    let new_artists = shelf_by_id(&shelves, "new-from-artists");
+    let from_likes = shelf_by_id(&shelves, "from-likes");
+    let trending = shelf_by_id(&shelves, "trending-now");
+    let scenes = shelves
+        .iter()
+        .filter(|s| s.id.starts_with("genre-"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let queue = use_queue();
+    let dashboard_has_content = spotlight.is_some() || !mixes.is_empty() || !tiles.is_empty();
+    let rails: Vec<RecommendationShelf> = [because, new_artists, from_likes, trending]
+        .into_iter()
+        .flatten()
+        .collect();
+    let everything_empty =
+        tiles.is_empty() && shelves.is_empty() && mixes.is_empty() && !is_loading;
+
+    rsx! {
+        section { class: "home-section for-you-section",
+            header { class: "for-you-header",
+                div { class: "for-you-header-text",
+                    span { class: "for-you-eyebrow", "Made for you" }
+                    h2 { class: "for-you-title", "For You" }
+                    p { class: "for-you-sub",
+                        if is_loading && pool.is_empty() {
+                            "Loading mixes, related tracks and scene rows…"
+                        } else if pool.is_empty() {
+                            "Play or like a few tracks — nira will build your dashboard here."
+                        } else {
+                            "{pool.len()} tracks across mixes, related picks and scene rows."
+                        }
+                    }
+                }
+                div { class: "for-you-header-actions",
+                    Button {
+                        label: "Refresh".to_string(),
+                        icon: Some(if is_loading { "fa-solid fa-circle-notch fa-spin".to_string() } else { "fa-solid fa-rotate".to_string() }),
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::Sm,
+                        disabled: is_loading,
+                        on_click: {
+                            let recommendations = recommendations.clone();
+                            move |_| recommendations.refresh_all()
+                        },
+                    }
+                    Button {
+                        label: "Surprise me".to_string(),
+                        icon: Some("fa-solid fa-dice".to_string()),
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::Sm,
+                        disabled: pool.is_empty(),
+                        on_click: {
+                            let queue = queue.clone();
+                            let pool = pool.clone();
+                            move |_| {
+                                if pool.is_empty() { return; }
+                                let idx = (chrono::Utc::now().timestamp_millis().unsigned_abs() as usize) % pool.len();
+                                queue.play_context(pool.clone(), idx);
+                            }
+                        },
+                    }
+                    Button {
+                        label: "Shuffle".to_string(),
+                        icon: Some("fa-solid fa-shuffle".to_string()),
+                        variant: ButtonVariant::Primary,
+                        size: ButtonSize::Sm,
+                        disabled: pool.is_empty(),
+                        on_click: {
+                            let queue = queue.clone();
+                            let pool = pool.clone();
+                            move |_| queue.play_context(pool.clone(), 0)
+                        },
+                    }
+                }
+            }
+
+            if let Some(msg) = error.as_ref() {
+                div { class: "home-error", "{msg}" }
+            }
+
+            if everything_empty {
+                EmptyState {
+                    icon: "fa-solid fa-wand-magic-sparkles",
+                    title: "No Explore data yet.",
+                    body: "Play or like a few tracks — nira builds Aegis-style shelves here.",
+                }
+            } else {
+                if dashboard_has_content {
+                    div { class: "for-you-dashboard",
+                        if let Some(shelf) = spotlight.clone() {
+                            ForYouSpotlightCard {
+                                shelf,
+                                recommendations: recommendations.clone(),
+                            }
+                        }
+                        div { class: "for-you-dashboard-side",
+                            if !mixes.is_empty() {
+                                DailyMixesGrid {
+                                    mixes: mixes.clone(),
+                                    recommendations: recommendations.clone(),
+                                }
+                            }
+                            if !tiles.is_empty() {
+                                ForYouQuickTiles { tiles: tiles.clone() }
+                            }
+                        }
+                    }
+                }
+
+                if !rails.is_empty() {
+                    section { class: "for-you-rails",
+                        for shelf in rails.iter() {
+                            CompactRail {
+                                key: "{shelf.id}",
+                                shelf: shelf.clone(),
+                                recommendations: recommendations.clone(),
+                            }
+                        }
+                    }
+                }
+
+                if !scenes.is_empty() {
+                    section { class: "for-you-scenes",
+                        header { class: "for-you-scenes-head",
+                            div {
+                                span { class: "shelf-eyebrow", "Scenes" }
+                                h3 { "SoundCloud lanes" }
+                                p { class: "for-you-subtitle",
+                                    "Compact genre rows — not another wall of identical shelves."
+                                }
+                            }
+                        }
+                        div { class: "for-you-scenes-grid",
+                            for shelf in scenes.iter() {
+                                CompactRail {
+                                    key: "{shelf.id}",
+                                    shelf: shelf.clone(),
+                                    recommendations: recommendations.clone(),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ForYouQuickTiles(tiles: Vec<RecommendationTile>) -> Element {
+    rsx! {
+        div { class: "quick-tiles",
+            for tile in tiles.iter() {
+                ForYouTile { key: "{tile.id}", tile: tile.clone() }
+            }
+        }
+    }
+}
+
+#[component]
+fn ForYouTile(tile: RecommendationTile) -> Element {
+    let queue = use_queue();
+    let tracks = tile.tracks.clone();
+    let hue = accent_hue(tile.accent_index);
+    let cover = tile.cover_url.clone().unwrap_or_default();
+
+    rsx! {
+        button {
+            class: "quick-tile",
+            style: "--tile-hue: {hue};",
+            disabled: tracks.is_empty(),
+            onclick: move |_| queue.play_context(tracks.clone(), 0),
+            div { class: "quick-tile-art",
+                if !cover.is_empty() {
+                    img { src: "{cover}", alt: "", loading: "lazy" }
+                } else {
+                    span { class: "quick-tile-glyph", "{tile.glyph}" }
+                }
+            }
+            div { class: "quick-tile-text",
+                div { class: "quick-tile-label", "{tile.label}" }
+                div { class: "quick-tile-sub", "{tile.sub}" }
+            }
+            span { class: "quick-tile-play", i { class: "fa-solid fa-play" } }
+        }
+    }
+}
+
+#[component]
+fn DailyMixesGrid(mixes: Vec<RecommendationMix>, recommendations: UseRecommendations) -> Element {
+    let any_loading = mixes.iter().any(|m| m.is_loading);
+    rsx! {
+        section { class: "daily-mixes",
+            header { class: "daily-mixes-head",
+                div { class: "daily-mixes-titles",
+                    span { class: "shelf-eyebrow", "Clusters" }
+                    h3 { class: "daily-mixes-title", "Daily Mixes" }
+                }
+                Button {
+                    label: "Reroll".to_string(),
+                    icon: Some("fa-solid fa-shuffle".to_string()),
+                    variant: ButtonVariant::Ghost,
+                    size: ButtonSize::Sm,
+                    disabled: any_loading,
+                    on_click: {
+                        let recommendations = recommendations.clone();
+                        move |_| recommendations.reroll_shelf("daily-mixes".to_string())
+                    },
+                }
+            }
+            div { class: "daily-mix-grid",
+                for mix in mixes.iter() {
+                    DailyMixCard { key: "{mix.id}", mix: mix.clone() }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn DailyMixCard(mix: RecommendationMix) -> Element {
+    let queue = use_queue();
+    let tracks = mix.tracks.clone();
+    let artworks = mix_artworks(&tracks);
+    let hue = accent_hue(mix.accent_index);
+
+    rsx! {
+        button {
+            class: "mix-card",
+            style: "--mix-hue: {hue};",
+            disabled: tracks.is_empty() || mix.is_loading,
+            onclick: move |_| queue.play_context(tracks.clone(), 0),
+            div { class: "mix-card-art",
+                if mix.is_loading && artworks.is_empty() {
+                    div { class: "mix-card-cover mix-card-empty", i { class: "fa-solid fa-circle-notch fa-spin" } }
+                } else if artworks.len() >= 4 {
+                    div { class: "mix-mosaic",
+                        for src in artworks.iter().take(4) {
+                            div { key: "{src}", class: "mix-mosaic-cell", style: "background-image: url('{src}')" }
+                        }
+                    }
+                } else if let Some(src) = artworks.first() {
+                    img { class: "mix-card-cover", src: "{src}", alt: "", loading: "lazy" }
+                } else {
+                    div { class: "mix-card-cover mix-card-empty", span { "♫" } }
+                }
+                div { class: "mix-card-overlay",
+                    div { class: "mix-card-label", "{mix.title}" }
+                }
+            }
+            div { class: "mix-card-title", "{mix.title}" }
+            div { class: "mix-card-sub", title: "{mix.subtitle}", "{mix.subtitle}" }
+        }
+    }
+}
+
+#[component]
+fn ForYouSpotlightCard(shelf: RecommendationShelf, recommendations: UseRecommendations) -> Element {
+    let tracks = shelf.tracks.clone();
+    let shelf_id = shelf.id.clone();
+    let queue = use_queue();
+
+    rsx! {
+        section { class: "for-you-spotlight",
+            header { class: "for-you-spotlight-head",
+                div { class: "for-you-spotlight-titles",
+                    span { class: "shelf-eyebrow", "{shelf.eyebrow}" }
+                    h3 { class: "for-you-spotlight-title", "{shelf.title}" }
+                    if !shelf.seed_label.is_empty() {
+                        p { class: "for-you-seed",
+                            "based on "
+                            span { "{shelf.seed_label}" }
+                        }
+                    }
+                    p { class: "for-you-subtitle", "{shelf.subtitle}" }
+                }
+                div { class: "for-you-spotlight-actions",
+                    Button {
+                        label: "Play".to_string(),
+                        icon: Some("fa-solid fa-play".to_string()),
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::Sm,
+                        disabled: tracks.is_empty(),
+                        on_click: {
+                            let queue = queue.clone();
+                            let tracks = tracks.clone();
+                            move |_| queue.play_context(tracks.clone(), 0)
+                        },
+                    }
+                    if shelf.rerollable {
+                        Button {
+                            label: if shelf.is_loading { "Rerolling".to_string() } else { "Reroll".to_string() },
+                            icon: Some(if shelf.is_loading { "fa-solid fa-circle-notch fa-spin".to_string() } else { "fa-solid fa-shuffle".to_string() }),
+                            variant: ButtonVariant::Ghost,
+                            size: ButtonSize::Sm,
+                            disabled: shelf.is_loading,
+                            on_click: {
+                                let recommendations = recommendations.clone();
+                                move |_| recommendations.reroll_shelf(shelf_id.clone())
+                            },
+                        }
+                    }
+                }
+            }
+            if let Some(msg) = shelf.error.as_ref() {
+                div { class: "home-error", "{msg}" }
+            } else if shelf.is_loading && shelf.tracks.is_empty() {
+                SpotlightSkeleton {}
+            } else if shelf.tracks.is_empty() {
+                div { class: "shelf-empty", "Nothing here yet." }
+            } else {
+                ForYouSpotlightBody { tracks: tracks.clone() }
+            }
+        }
+    }
+}
+
+#[component]
+fn ForYouSpotlightBody(tracks: Vec<Track>) -> Element {
+    let first = tracks.first().cloned();
+    rsx! {
+        div { class: "for-you-spotlight-body",
+            if let Some(track) = first {
+                div { class: "for-you-spotlight-main",
+                    TrackCard { track: track.clone(), tracks: tracks.clone(), index: 0 }
+                }
+            }
+            div { class: "for-you-spotlight-side",
+                for (idx, track) in tracks.iter().enumerate().skip(1).take(6) {
+                    TrackCard {
+                        key: "{track.uri.0}",
+                        track: track.clone(),
+                        tracks: tracks.clone(),
+                        index: idx,
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SpotlightSkeleton() -> Element {
+    rsx! {
+        div { class: "for-you-spotlight-body",
+            div { class: "for-you-spotlight-main",
+                div { class: "cover-card for-you-skeleton-card",
+                    div { class: "cover-card-art" }
+                    div { class: "featured-skeleton-line wide" }
+                    div { class: "featured-skeleton-line" }
+                }
+            }
+            div { class: "for-you-spotlight-side",
+                for idx in 0..4 {
+                    div { key: "{idx}", class: "cover-card for-you-skeleton-card",
+                        div { class: "cover-card-art" }
+                        div { class: "featured-skeleton-line wide" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn CompactRail(shelf: RecommendationShelf, recommendations: UseRecommendations) -> Element {
+    let tracks = shelf.tracks.clone();
+    let shelf_id = shelf.id.clone();
+    let queue = use_queue();
+
+    rsx! {
+        section { class: "for-you-rail",
+            header { class: "for-you-rail-head",
+                div { class: "for-you-rail-titles",
+                    span { class: "shelf-eyebrow", "{shelf.eyebrow}" }
+                    h4 { class: "for-you-rail-title", "{shelf.title}" }
+                    if !shelf.subtitle.is_empty() {
+                        p { class: "for-you-rail-sub", "{shelf.subtitle}" }
+                    }
+                }
+                div { class: "for-you-rail-actions",
+                    Button {
+                        label: "Play".to_string(),
+                        icon: Some("fa-solid fa-play".to_string()),
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::Sm,
+                        disabled: tracks.is_empty(),
+                        on_click: {
+                            let queue = queue.clone();
+                            let tracks = tracks.clone();
+                            move |_| queue.play_context(tracks.clone(), 0)
+                        },
+                    }
+                    if shelf.rerollable {
+                        Button {
+                            label: if shelf.is_loading { "Rerolling".to_string() } else { "Reroll".to_string() },
+                            icon: Some(if shelf.is_loading { "fa-solid fa-circle-notch fa-spin".to_string() } else { "fa-solid fa-shuffle".to_string() }),
+                            variant: ButtonVariant::Ghost,
+                            size: ButtonSize::Sm,
+                            disabled: shelf.is_loading,
+                            on_click: {
+                                let recommendations = recommendations.clone();
+                                move |_| recommendations.reroll_shelf(shelf_id.clone())
+                            },
+                        }
+                    }
+                }
+            }
+            if let Some(msg) = shelf.error.as_ref() {
+                div { class: "home-error", "{msg}" }
+            } else if shelf.is_loading && shelf.tracks.is_empty() {
+                div { class: "for-you-rail-row for-you-loading-row",
+                    for idx in 0..6 {
+                        div { key: "{idx}", class: "cover-card for-you-skeleton-card",
+                            div { class: "cover-card-art" }
+                            div { class: "featured-skeleton-line wide" }
+                            div { class: "featured-skeleton-line" }
+                        }
+                    }
+                }
+            } else if shelf.tracks.is_empty() {
+                div { class: "shelf-empty", "Nothing here yet." }
+            } else {
+                div { class: "for-you-rail-row",
+                    for (idx, track) in tracks.iter().enumerate() {
+                        TrackCard {
+                            key: "{track.uri.0}",
+                            track: track.clone(),
+                            tracks: tracks.clone(),
+                            index: idx,
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn shelf_by_id(shelves: &[RecommendationShelf], id: &str) -> Option<RecommendationShelf> {
+    shelves.iter().find(|s| s.id == id).cloned()
+}
+
+fn merged_recommendation_tracks(
+    shelves: &[RecommendationShelf],
+    mixes: &[RecommendationMix],
+) -> Vec<Track> {
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut out = Vec::new();
+    for track in shelves
+        .iter()
+        .flat_map(|s| s.tracks.iter())
+        .chain(mixes.iter().flat_map(|m| m.tracks.iter()))
+    {
+        if seen.insert(track.uri.0.clone()) {
+            out.push(track.clone());
+        }
+    }
+    out
+}
+
+fn mix_artworks(tracks: &[Track]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut out = Vec::new();
+    for track in tracks {
+        let Some(url) = track.cover_url.as_ref() else {
+            continue;
+        };
+        if seen.insert(url.clone()) {
+            out.push(url.clone());
+        }
+        if out.len() >= 4 {
+            break;
+        }
+    }
+    out
+}
+
+fn accent_hue(idx: usize) -> u16 {
+    const HUES: &[u16] = &[200, 20, 280, 140, 340, 60, 180, 310];
+    HUES[idx % HUES.len()]
+}
+
 // ─── Recently played ──────────────────────────────────────────────────────
 
 #[component]
@@ -234,8 +751,12 @@ fn RecentlyPlayed(entries: Vec<HistoryEntry>) -> Element {
                 }
             } else {
                 div { class: "cover-row",
-                    for entry in entries.iter() {
-                        HistoryCard { entry: entry.clone() }
+                    for (idx, entry) in entries.iter().enumerate() {
+                        HistoryCard {
+                            entry: entry.clone(),
+                            entries: entries.clone(),
+                            index: idx,
+                        }
                     }
                 }
             }
@@ -244,47 +765,63 @@ fn RecentlyPlayed(entries: Vec<HistoryEntry>) -> Element {
 }
 
 #[component]
-fn HistoryCard(entry: HistoryEntry) -> Element {
+fn HistoryCard(entry: HistoryEntry, entries: Vec<HistoryEntry>, index: usize) -> Element {
     let queue = use_queue();
-    let sc = use_soundcloud();
-    let sp = use_spotify();
+    let ctx = use_ctx_menu();
+    let sc: Arc<dyn Provider> = use_soundcloud();
+    let sp: Arc<dyn Provider> = use_spotify();
     let cover = entry.cover_url.clone().unwrap_or_default();
     let badge_class = badge_class_for(&entry.provider);
     let badge = badge_glyph_for(&entry.provider);
     let title = entry.title.clone();
     let artist = entry.artist.clone();
     let played_label = format_relative(entry.played_at);
-    let provider = entry.provider.clone();
+    let sc_for_click = sc.clone();
+    let sp_for_click = sp.clone();
+    let sc_for_context = sc.clone();
+    let sp_for_context = sp.clone();
 
     rsx! {
         button {
             class: "cover-card clickable",
             title: "{title} — {artist}\nplayed {played_label}",
             onclick: move |_| {
-                // Resolve back to a real Track via the original provider's
-                // search — we don't store the full URI in the play log, so a
-                // round-trip is the price of replaying an old row. First hit
-                // wins; same heuristic as Discovery's cross-platform resolve.
-                let title = title.clone();
-                let artist = artist.clone();
-                let provider = provider.clone();
                 let queue = queue.clone();
-                let sc = sc.clone();
-                let sp = sp.clone();
+                let sc = sc_for_click.clone();
+                let sp = sp_for_click.clone();
+                let entries = entries.clone();
                 spawn(async move {
-                    let q = Query {
-                        text: format!("{} {}", artist, title),
-                        limit: Some(5),
-                    };
-                    let result: Option<Track> = match provider.as_str() {
-                        "Spotify" => sp.search(&q).await.ok().and_then(|r| r.tracks.into_iter().next()),
-                        "SoundCloud" => sc.search(&q).await.ok().and_then(|r| r.tracks.into_iter().next()),
-                        _ => None,
-                    };
-                    if let Some(track) = result {
-                        queue.play_list(vec![track], 0);
+                    let mut tracks = Vec::<Track>::new();
+                    let mut start_idx = None::<usize>;
+                    for (i, row) in entries.iter().enumerate() {
+                        if let Some(track) = resolve_history_entry(sc.clone(), sp.clone(), row).await {
+                            if i == index {
+                                start_idx = Some(tracks.len());
+                            }
+                            tracks.push(track);
+                        }
+                    }
+                    if let Some(start) = start_idx {
+                        queue.play_context(tracks, start);
                     }
                 });
+            },
+            oncontextmenu: {
+                let entry = entry.clone();
+                let sc = sc_for_context.clone();
+                let sp = sp_for_context.clone();
+                move |e: Event<MouseData>| {
+                    e.prevent_default();
+                    let pos = e.data.client_coordinates();
+                    let sc = sc.clone();
+                    let sp = sp.clone();
+                    let entry = entry.clone();
+                    spawn(async move {
+                        if let Some(track) = resolve_history_entry(sc, sp, &entry).await {
+                            ctx.open(pos.x, pos.y, track);
+                        }
+                    });
+                }
             },
             div { class: "cover-card-art",
                 if !cover.is_empty() {
@@ -303,6 +840,39 @@ fn HistoryCard(entry: HistoryEntry) -> Element {
     }
 }
 
+async fn resolve_history_entry(
+    sc: Arc<dyn Provider>,
+    sp: Arc<dyn Provider>,
+    entry: &HistoryEntry,
+) -> Option<Track> {
+    let exact = match (entry.provider.as_str(), entry.track_uri.as_ref()) {
+        ("Spotify", Some(uri)) => sp.track(&TrackUri(uri.clone())).await.ok(),
+        ("SoundCloud", Some(uri)) => sc.track(&TrackUri(uri.clone())).await.ok(),
+        _ => None,
+    };
+    if exact.is_some() {
+        return exact;
+    }
+
+    let q = Query {
+        text: format!("{} {}", entry.artist, entry.title),
+        limit: Some(5),
+    };
+    match entry.provider.as_str() {
+        "Spotify" => sp
+            .search(&q)
+            .await
+            .ok()
+            .and_then(|r| r.tracks.into_iter().next()),
+        "SoundCloud" => sc
+            .search(&q)
+            .await
+            .ok()
+            .and_then(|r| r.tracks.into_iter().next()),
+        _ => None,
+    }
+}
+
 // ─── Recently liked ────────────────────────────────────────────────────────
 
 #[component]
@@ -311,8 +881,13 @@ fn RecentlyLiked(library: UseLibrary) -> Element {
     let total_liked = library.liked.read().len();
     let is_loading = *library.is_loading.read();
     let error = library.error.read().clone();
-    let queue = use_queue();
-    let full_list = library.recently_liked;
+    // Use the same sorted slice for both the visible cards *and* the
+    // playback context. The earlier code called `full_list.read().clone()`
+    // inside the loop, which copied the full liked vector per card —
+    // O(visible × liked) and noticeable at ~900 likes. With ~8 visible
+    // cards the playback context here is also short, so we can share
+    // `tracks` directly.
+    let context_tracks = tracks.clone();
 
     rsx! {
         section { class: "home-section",
@@ -329,8 +904,8 @@ fn RecentlyLiked(library: UseLibrary) -> Element {
                 }
             }
 
-            if let Some(msg) = error.as_ref() {
-                div { class: "home-error", "{msg}" }
+            if tracks.is_empty() && error.is_some() {
+                div { class: "home-error", "{error.as_deref().unwrap_or_default()}" }
             } else if tracks.is_empty() && !is_loading {
                 EmptyState {
                     icon: "fa-solid fa-heart",
@@ -343,12 +918,8 @@ fn RecentlyLiked(library: UseLibrary) -> Element {
                         TrackCard {
                             key: "{track.uri.0}",
                             track: track.clone(),
-                            on_click: {
-                                let queue = queue.clone();
-                                move |_| {
-                                    queue.play_list(full_list.read().clone(), idx);
-                                }
-                            },
+                            tracks: context_tracks.clone(),
+                            index: idx,
                         }
                     }
                 }
@@ -358,7 +929,7 @@ fn RecentlyLiked(library: UseLibrary) -> Element {
 }
 
 #[component]
-fn TrackCard(track: Track, on_click: EventHandler<()>) -> Element {
+fn TrackCard(track: Track, tracks: Vec<Track>, index: usize) -> Element {
     let cover = track.cover_url.clone().unwrap_or_default();
     let title = track.title.clone();
     let artist = track
@@ -367,26 +938,15 @@ fn TrackCard(track: Track, on_click: EventHandler<()>) -> Element {
         .map(|a| a.name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    let badge_class = match track.provider {
-        hooks::ProviderId::Spotify => "track-badge spotify",
-        hooks::ProviderId::SoundCloud => "track-badge soundcloud",
-        hooks::ProviderId::Local => "track-badge",
-    };
-    let ctx = use_ctx_menu();
+    let badge_class = provider_badge_class(track.provider);
 
     rsx! {
-        button {
-            class: "cover-card clickable",
-            title: "{title} — {artist}",
-            onclick: move |_| on_click.call(()),
-            oncontextmenu: {
-                let track = track.clone();
-                move |e: Event<MouseData>| {
-                    e.prevent_default();
-                    let pos = e.data.client_coordinates();
-                    ctx.open(pos.x, pos.y, track.clone());
-                }
-            },
+        PlayableButton {
+            track: track.clone(),
+            tracks,
+            index,
+            class: "cover-card clickable".to_string(),
+            title: format!("{title} — {artist}"),
             div { class: "cover-card-art",
                 if !cover.is_empty() {
                     img { src: "{cover}", alt: "", loading: "lazy" }

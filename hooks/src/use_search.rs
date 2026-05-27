@@ -62,16 +62,13 @@ pub fn use_search() -> UseSearch {
                 let sp_connected = sp.is_connected();
                 let q_sc = q.clone();
                 let q_sp = q.clone();
-                let (sc_res, sp_res) = tokio::join!(
-                    sc.search(&q_sc),
-                    async move {
-                        if sp_connected {
-                            sp.search(&q_sp).await
-                        } else {
-                            Ok(SearchResults::default())
-                        }
-                    },
-                );
+                let (sc_res, sp_res) = tokio::join!(sc.search(&q_sc), async move {
+                    if sp_connected {
+                        sp.search(&q_sp).await
+                    } else {
+                        Ok(SearchResults::default())
+                    }
+                },);
 
                 if *q_sig.peek() != snapshot {
                     is_searching_sig.set(false);

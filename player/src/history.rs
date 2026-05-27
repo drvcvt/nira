@@ -24,6 +24,10 @@ pub struct HistoryEntry {
     /// Provider label as it appears in `ProviderId::label()` —
     /// "Spotify" / "SoundCloud" / "Local".
     pub provider: String,
+    /// Exact provider track URI when known. Older history rows won't have it;
+    /// Home falls back to text search for those.
+    #[serde(default)]
+    pub track_uri: Option<String>,
     #[serde(default)]
     pub cover_url: Option<String>,
     pub played_at: DateTime<Utc>,
@@ -97,6 +101,21 @@ impl History {
         let entries = self.entries.lock().unwrap();
         entries.iter().rev().take(n).cloned().collect()
     }
+
+    /// Clear both the in-memory buffer and the persisted JSONL file.
+    pub fn clear(&self) -> std::io::Result<()> {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.clear();
+        }
+        if let Some(path) = self.path.as_ref() {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
 }
 
 fn load_jsonl(path: &Path) -> Vec<HistoryEntry> {
@@ -134,4 +153,37 @@ fn rewrite_jsonl(path: &Path, entries: &[HistoryEntry]) -> std::io::Result<()> {
     std::fs::write(&tmp, buf)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(title: &str, uri: Option<&str>) -> HistoryEntry {
+        HistoryEntry {
+            title: title.to_string(),
+            artist: "Artist".to_string(),
+            provider: "SoundCloud".to_string(),
+            track_uri: uri.map(str::to_string),
+            cover_url: None,
+            played_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn records_exact_track_uri_for_replay() {
+        let history = History::open(None);
+        history.record(entry("Track", Some("soundcloud:track:123")));
+        let recent = history.recent(1);
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].track_uri.as_deref(), Some("soundcloud:track:123"));
+    }
+
+    #[test]
+    fn dedupes_immediate_repeats() {
+        let history = History::open(None);
+        history.record(entry("Track", Some("soundcloud:track:123")));
+        history.record(entry("Track", Some("soundcloud:track:123")));
+        assert_eq!(history.recent(10).len(), 1);
+    }
 }

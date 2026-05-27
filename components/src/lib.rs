@@ -11,7 +11,7 @@ pub mod searchbar;
 pub mod sidebar;
 
 pub use button::{Button, ButtonSize, ButtonVariant};
-pub use searchbar::{SearchBar, SearchBarShape};
+pub use searchbar::SearchBar;
 
 /// Which top-level view is currently active.
 ///
@@ -21,7 +21,6 @@ pub use searchbar::{SearchBar, SearchBarShape};
 pub enum Section {
     Home,
     Discover,
-    Search,
     Library,
     Settings,
 }

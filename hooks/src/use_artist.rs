@@ -59,9 +59,7 @@ impl UseArtist {
                 _ => None,
             };
             let Some(provider) = provider else {
-                error.set(Some(
-                    "No provider available for this artist URI.".into(),
-                ));
+                error.set(Some("No provider available for this artist URI.".into()));
                 is_loading.set(false);
                 return;
             };

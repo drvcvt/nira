@@ -102,6 +102,11 @@ impl EnrichmentClient {
         }
     }
 
+    /// Clear cached MusicBrainz / ListenBrainz / Last.fm enrichment data.
+    pub fn clear_cache(&self) {
+        self.cache.clear();
+    }
+
     pub(crate) fn http(&self) -> &Client {
         &self.http
     }

@@ -26,9 +26,10 @@ pub mod use_library;
 pub mod use_likes;
 pub mod use_listenbrainz_feed;
 pub mod use_player;
+pub mod use_recommendations;
 pub mod use_search;
 
-pub use queue::{RadioStatus, UseQueue, use_queue};
+pub use queue::{RadioStatus, RepeatMode, UseQueue, use_queue};
 pub use use_album::{UseAlbum, use_album};
 pub use use_artist::{ArtistView, UseArtist, is_long_play, use_artist};
 pub use use_ctx_menu::{CtxMenuState, UseCtxMenu, use_ctx_menu};
@@ -40,17 +41,23 @@ pub use use_library::{UseLibrary, use_library};
 pub use use_likes::{LikedTrack, UseLikes, use_likes};
 pub use use_listenbrainz_feed::{UseListenBrainzFeed, use_listenbrainz_feed};
 pub use use_player::{PlayerContext, UsePlayer, use_player};
+pub use use_recommendations::{
+    RecommendationMix, RecommendationShelf, RecommendationTile, UseRecommendations,
+    use_recommendations,
+};
 pub use use_search::{UseSearch, use_search};
 
 // Re-export the player- and provider-side types pages/components consume so
 // they never need to depend on those crates directly.
 pub use config::AppConfig;
-pub use discovery::{CrossPlatformMatch, DiscoveryEngine, DiscoveryResult, SimilarToSeed};
+pub use discovery::{
+    CrossPlatformMatch, DiscoveryEngine, DiscoveryResult, DiscoverySourcePrefs, SimilarToSeed,
+};
 pub use enrichment::Listen;
 pub use player::{HistoryEntry, NowPlaying, Player, PlayerError, PlayerSnapshot};
 pub use provider_api::{
-    AlbumBrief, AlbumDetail, AlbumRef, AlbumType, AlbumUri, Artist, ArtistRef, ArtistUri,
-    Provider, ProviderError, ProviderId, Query, RelatedArtist, Track, TrackUri,
+    AlbumBrief, AlbumDetail, AlbumRef, AlbumType, AlbumUri, Artist, ArtistRef, ArtistUri, Provider,
+    ProviderError, ProviderId, Query, RelatedArtist, Track, TrackUri,
 };
 
 /// One-shot context installer for the root `App` component. Provisions the
@@ -91,7 +98,16 @@ impl AppContext {
             sc.clone() as Arc<dyn Provider>,
             spotify.clone() as Arc<dyn Provider>,
         ];
-        let engine = Arc::new(DiscoveryEngine::new(enrichment.clone(), providers, sc.clone()));
+        let engine = Arc::new(DiscoveryEngine::new(
+            enrichment.clone(),
+            providers,
+            sc.clone(),
+            DiscoverySourcePrefs {
+                soundcloud: config.discovery_soundcloud,
+                listenbrainz: config.discovery_listenbrainz,
+                lastfm: config.discovery_lastfm,
+            },
+        ));
         use_context_provider(move || engine);
 
         // Expose the enrichment client directly so the Home "Listened lately"
@@ -138,6 +154,10 @@ pub fn use_spotify() -> Arc<SpotifyProvider> {
 
 pub fn use_enrichment() -> Arc<EnrichmentClient> {
     use_context::<Arc<EnrichmentClient>>()
+}
+
+pub fn use_discovery_engine() -> Arc<DiscoveryEngine> {
+    use_context::<Arc<DiscoveryEngine>>()
 }
 
 pub fn use_config() -> Signal<AppConfig> {

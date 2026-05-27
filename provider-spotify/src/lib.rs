@@ -26,9 +26,9 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use provider_api::{
-    AlbumBrief, AlbumDetail, AlbumRef, AlbumType, AlbumUri, Artist, ArtistRef, ArtistUri,
-    Provider, ProviderCaps, ProviderError, ProviderId, ProviderResult, Query, RelatedArtist,
-    SearchResults, StreamHandle, Track, TrackUri,
+    AlbumBrief, AlbumDetail, AlbumRef, AlbumType, AlbumUri, Artist, ArtistRef, ArtistUri, Provider,
+    ProviderCaps, ProviderError, ProviderId, ProviderResult, Query, RelatedArtist, SearchResults,
+    StreamHandle, Track, TrackUri,
 };
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -131,10 +131,7 @@ impl SpotifyProvider {
 
     /// Has a token in memory (regardless of expiry — refresh handles that).
     pub fn is_connected(&self) -> bool {
-        self.token
-            .try_read()
-            .map(|t| t.is_some())
-            .unwrap_or(false)
+        self.token.try_read().map(|t| t.is_some()).unwrap_or(false)
     }
 
     /// Fresh access token (refreshes if within 60s of expiry). Public so the
@@ -187,7 +184,9 @@ impl SpotifyProvider {
 
         let (code, state) = wait_for_callback(listener).await?;
         if state != csrf_state {
-            return Err(ProviderError::Other("CSRF state mismatch in callback".into()));
+            return Err(ProviderError::Other(
+                "CSRF state mismatch in callback".into(),
+            ));
         }
 
         // Exchange the code for tokens. PKCE means no client_secret.
@@ -362,15 +361,14 @@ impl Provider for SpotifyProvider {
             audio_features: false,
             playlists: true,
             reposts: false,
-            // Phase 2A is metadata-only; flip to true when librespot lands.
-            playable: false,
+            // Playback is routed through the queue/player via librespot.
+            playable: true,
         }
     }
 
     async fn search(&self, q: &Query) -> ProviderResult<SearchResults> {
         let limit = q.limit.unwrap_or(20).clamp(1, 50);
-        let encoded =
-            url::form_urlencoded::byte_serialize(q.text.as_bytes()).collect::<String>();
+        let encoded = url::form_urlencoded::byte_serialize(q.text.as_bytes()).collect::<String>();
         let url = format!("{SP_API}/search?q={encoded}&type=track&limit={limit}");
         let raw: SpSearchResp = self.fetch_json(&url).await?;
         Ok(SearchResults {
@@ -399,11 +397,7 @@ impl Provider for SpotifyProvider {
         Err(ProviderError::NotAvailable)
     }
 
-    async fn artist_top_tracks(
-        &self,
-        uri: &ArtistUri,
-        limit: u32,
-    ) -> ProviderResult<Vec<Track>> {
+    async fn artist_top_tracks(&self, uri: &ArtistUri, limit: u32) -> ProviderResult<Vec<Track>> {
         let id = id_from_uri(&uri.0, "artist")?;
         // `market=from_token` lets Spotify return the playable set for the
         // signed-in user's region. Without it Spotify rejects the request.
@@ -417,11 +411,7 @@ impl Provider for SpotifyProvider {
             .collect())
     }
 
-    async fn artist_albums(
-        &self,
-        uri: &ArtistUri,
-        limit: u32,
-    ) -> ProviderResult<Vec<AlbumBrief>> {
+    async fn artist_albums(&self, uri: &ArtistUri, limit: u32) -> ProviderResult<Vec<AlbumBrief>> {
         let id = id_from_uri(&uri.0, "artist")?;
         // include_groups picks up everything Spotify lets us show. We pass
         // `appears_on` so collabs show up too; the UI sorts them into the
@@ -556,8 +546,7 @@ fn generate_pkce_pair() -> (String, String) {
 
 fn random_unreserved(len: usize) -> String {
     use rand::Rng;
-    const CHARSET: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
     let mut rng = rand::rng();
     (0..len)
         .map(|_| CHARSET[rng.random_range(0..CHARSET.len())] as char)
@@ -566,8 +555,7 @@ fn random_unreserved(len: usize) -> String {
 
 fn random_alphanum(len: usize) -> String {
     use rand::Rng;
-    const CHARSET: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::rng();
     (0..len)
         .map(|_| CHARSET[rng.random_range(0..CHARSET.len())] as char)
@@ -791,7 +779,7 @@ fn sp_album_to_brief(a: SpAlbumBrief) -> AlbumBrief {
 }
 
 fn sp_album_to_detail(a: SpAlbumFull) -> AlbumDetail {
-    let cover_url = a.images.iter().next().map(|i| i.url.clone());
+    let cover_url = a.images.first().map(|i| i.url.clone());
     let release_year = a.release_date.as_deref().and_then(year_from_release);
     let album_type = a
         .album_type

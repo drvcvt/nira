@@ -5,14 +5,14 @@
 //! once results land, the seed promotes itself to a banner and each
 //! row exposes which of the three sources voted for it.
 
-use components::{Button, ButtonSize, ButtonVariant, SearchBar, SearchBarShape};
+use components::{Button, ButtonSize, ButtonVariant, SearchBar};
 use dioxus::prelude::*;
 use hooks::{
     CrossPlatformMatch, DiscoveryMode, DiscoveryResult, Track, use_ctx_menu, use_discovery,
     use_queue,
 };
 
-use crate::parts::ArtistLinks;
+use crate::parts::{ArtistLinks, PlayableButton, open_track_context};
 
 #[component]
 pub fn Discover() -> Element {
@@ -42,6 +42,7 @@ pub fn Discover() -> Element {
         (s + a as u32, l + b as u32, f + c as u32)
     });
     let lf_configured = disc.lastfm_configured();
+    let source_prefs = disc.source_prefs();
 
     rsx! {
         section { class: "page discover-page",
@@ -76,7 +77,7 @@ pub fn Discover() -> Element {
 
             div { class: "searchbar-row",
                 SearchBar {
-                    shape: SearchBarShape::Rounded,
+                    icon: Some("fa-solid fa-magnifying-glass".to_string()),
                     value: input_value.clone(),
                     placeholder: "artist - title   (e.g. Burial - Archangel)".to_string(),
                     on_input: move |v: String| disc.input.set(v),
@@ -129,6 +130,9 @@ pub fn Discover() -> Element {
                     sc_count: sc_n,
                     lb_count: lb_n,
                     lf_count: lf_n,
+                    sc_enabled: source_prefs.soundcloud,
+                    lb_enabled: source_prefs.listenbrainz,
+                    lf_enabled: source_prefs.lastfm,
                     lf_configured,
                     mode: current_mode,
                     on_reroll: {
@@ -174,15 +178,7 @@ pub fn Discover() -> Element {
             }
 
             if let Some(m) = bridge_match.as_ref() {
-                BridgeResult {
-                    bridge: m.clone(),
-                    on_play: {
-                        let queue = queue.clone();
-                        move |t: Track| {
-                            queue.play_list(vec![t], 0);
-                        }
-                    }
-                }
+                BridgeResult { bridge: m.clone() }
             }
         }
     }
@@ -199,7 +195,11 @@ fn OrbitalCanvas(searching: bool, has_input: bool) -> Element {
         "discover-canvas"
     };
 
-    let core_label = if searching { "querying…" } else { "drop a seed" };
+    let core_label = if searching {
+        "querying…"
+    } else {
+        "drop a seed"
+    };
     let core_hint = if searching {
         "fanning out across three similarity graphs"
     } else if has_input {
@@ -275,6 +275,9 @@ fn DiscoverSeedBanner(
     sc_count: u32,
     lb_count: u32,
     lf_count: u32,
+    sc_enabled: bool,
+    lb_enabled: bool,
+    lf_enabled: bool,
     lf_configured: bool,
     mode: DiscoveryMode,
     on_reroll: EventHandler<()>,
@@ -292,16 +295,26 @@ fn DiscoverSeedBanner(
                 div { class: "discover-seed-text", "{seed_text}" }
                 div { class: "discover-seed-stats",
                     span { "{count} candidates · " }
-                    span { class: "stats-src stats-src-sc", "sc {sc_count}" }
+                    if sc_enabled {
+                        span { class: "stats-src stats-src-sc", "sc {sc_count}" }
+                    } else {
+                        span { class: "stats-src stats-src-off", "sc off" }
+                    }
                     span { class: "stats-sep", " · " }
-                    span { class: "stats-src stats-src-lb", "lb {lb_count}" }
+                    if lb_enabled {
+                        span { class: "stats-src stats-src-lb", "lb {lb_count}" }
+                    } else {
+                        span { class: "stats-src stats-src-off", "lb off" }
+                    }
                     span { class: "stats-sep", " · " }
-                    if lf_configured {
+                    if !lf_enabled {
+                        span { class: "stats-src stats-src-off", "lf off" }
+                    } else if lf_configured {
                         span { class: "stats-src stats-src-lf", "lf {lf_count}" }
                     } else {
                         span { class: "stats-src stats-src-off",
                             title: "Set a Last.fm API key in Settings to enable this source.",
-                            "lf off"
+                            "lf no key"
                         }
                     }
                 }
@@ -360,8 +373,7 @@ fn DiscoveryRow(result: DiscoveryResult, on_play: EventHandler<()>) -> Element {
                 move |e: Event<MouseData>| {
                     e.prevent_default();
                     let Some(t) = ctx_target.clone() else { return; };
-                    let pos = e.data.client_coordinates();
-                    ctx.open(pos.x, pos.y, t);
+                    open_track_context(ctx, e, t);
                 }
             },
             div { class: "track-cover",
@@ -411,7 +423,7 @@ fn DiscoveryRow(result: DiscoveryResult, on_play: EventHandler<()>) -> Element {
 }
 
 #[component]
-fn BridgeResult(bridge: CrossPlatformMatch, on_play: EventHandler<Track>) -> Element {
+fn BridgeResult(bridge: CrossPlatformMatch) -> Element {
     let source = bridge.source.clone();
     let source_label = source.provider.label();
     let source_cover = source.cover_url.clone().unwrap_or_default();
@@ -422,15 +434,15 @@ fn BridgeResult(bridge: CrossPlatformMatch, on_play: EventHandler<Track>) -> Ele
     // (not the seed's own). If we resolved to both, show "SP · SC".
     let target_label = match (spotify.as_ref(), soundcloud.as_ref()) {
         (Some(_), Some(_)) => "spotify · soundcloud".to_string(),
-        (Some(_), None)    => "spotify".to_string(),
-        (None, Some(_))    => "soundcloud".to_string(),
-        (None, None)       => "no match".to_string(),
+        (Some(_), None) => "spotify".to_string(),
+        (None, Some(_)) => "soundcloud".to_string(),
+        (None, None) => "no match".to_string(),
     };
     let target_provider_attr = match (spotify.as_ref(), soundcloud.as_ref()) {
         (Some(_), Some(_)) => "Spotify",
-        (Some(_), None)    => "Spotify",
-        (None, Some(_))    => "SoundCloud",
-        (None, None)       => "Local",
+        (Some(_), None) => "Spotify",
+        (None, Some(_)) => "SoundCloud",
+        (None, None) => "Local",
     };
 
     rsx! {
@@ -478,11 +490,6 @@ fn BridgeResult(bridge: CrossPlatformMatch, on_play: EventHandler<Track>) -> Ele
                         track: sp.clone(),
                         badge_class: "spotify".to_string(),
                         badge_label: "S".to_string(),
-                        on_play: {
-                            let on_play = on_play.clone();
-                            let sp = sp.clone();
-                            move |_| on_play.call(sp.clone())
-                        },
                     }
                 }
                 if let Some(sc) = soundcloud.as_ref() {
@@ -490,11 +497,6 @@ fn BridgeResult(bridge: CrossPlatformMatch, on_play: EventHandler<Track>) -> Ele
                         track: sc.clone(),
                         badge_class: "soundcloud".to_string(),
                         badge_label: "SC".to_string(),
-                        on_play: {
-                            let on_play = on_play.clone();
-                            let sc = sc.clone();
-                            move |_| on_play.call(sc.clone())
-                        },
                     }
                 }
             }
@@ -503,19 +505,16 @@ fn BridgeResult(bridge: CrossPlatformMatch, on_play: EventHandler<Track>) -> Ele
 }
 
 #[component]
-fn BridgeTargetCard(
-    track: Track,
-    badge_class: String,
-    badge_label: String,
-    on_play: EventHandler<()>,
-) -> Element {
+fn BridgeTargetCard(track: Track, badge_class: String, badge_label: String) -> Element {
     let cover = track.cover_url.clone().unwrap_or_default();
     let badge_class_inline = format!("track-badge {badge_class}");
 
     rsx! {
-        button {
-            class: "bridge-target-btn",
-            onclick: move |_| on_play.call(()),
+        PlayableButton {
+            track: track.clone(),
+            tracks: vec![track.clone()],
+            index: 0,
+            class: "bridge-target-btn".to_string(),
             div { class: "bridge-track-card",
                 div { class: "track-cover",
                     if !cover.is_empty() {

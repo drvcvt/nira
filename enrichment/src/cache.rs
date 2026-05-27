@@ -83,6 +83,19 @@ impl TtlCache {
         self.flush();
     }
 
+    /// Clear both the in-memory map and the persisted cache file.
+    pub fn clear(&self) {
+        if let Ok(mut map) = self.inner.lock() {
+            map.clear();
+        }
+        if let Some(path) = self.path.as_ref()
+            && let Err(e) = std::fs::remove_file(path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(error = %e, "enrichment cache clear failed");
+        }
+    }
+
     /// Write the current map atomically. Called after each `put` — the cache
     /// is small enough (~10KB) that the cost is sub-millisecond and we get
     /// "survives a kill at any moment" for free.

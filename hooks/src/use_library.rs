@@ -3,6 +3,7 @@
 //! call `queue.play_list(liked, idx)`.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use config::AppConfig;
@@ -11,7 +12,9 @@ use provider_api::Track;
 use provider_spotify::SpotifyProvider;
 use serde::{Deserialize, Serialize};
 
-const REFRESH_AFTER_SECS: u64 = 60 * 60; // 1 hour
+const REFRESH_AFTER_SECS: u64 = 60 * 60 * 6; // 6 hours
+const RETRY_AFTER_SECS: u64 = 60 * 15; // rate-limit/backoff guard
+static LAST_SPOTIFY_REFRESH_ATTEMPT: AtomicU64 = AtomicU64::new(0);
 
 /// Bump when the on-disk shape changes. v2 introduced `Track::added_at`;
 /// older caches lose their `added_at` on read so Home's "Recently liked"
@@ -73,6 +76,15 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+fn spotify_refresh_allowed(now: u64) -> bool {
+    let last = LAST_SPOTIFY_REFRESH_ATTEMPT.load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < RETRY_AFTER_SECS {
+        return false;
+    }
+    LAST_SPOTIFY_REFRESH_ATTEMPT.store(now, Ordering::Relaxed);
+    true
+}
+
 pub fn use_library() -> UseLibrary {
     let sp = use_context::<Arc<SpotifyProvider>>();
 
@@ -91,6 +103,8 @@ pub fn use_library() -> UseLibrary {
             let mut error_sig = error;
 
             let cache = read_disk_cache();
+            let cached_len = cache.as_ref().map(|c| c.tracks.len()).unwrap_or(0);
+            let has_cache = cached_len > 0;
             let cache_fresh = cache
                 .as_ref()
                 .map(|c| now_unix().saturating_sub(c.fetched_at_unix) < REFRESH_AFTER_SECS)
@@ -102,14 +116,21 @@ pub fn use_library() -> UseLibrary {
 
             spawn(async move {
                 if !sp.is_connected() {
-                    if cache.is_none() {
+                    if !has_cache {
                         error_sig.set(Some(
                             "Connect Spotify in Settings to see your Liked Songs.".into(),
                         ));
                     }
                     return;
                 }
-                let show_spinner = !cache_fresh;
+                if cache_fresh {
+                    return;
+                }
+                if has_cache && !spotify_refresh_allowed(now_unix()) {
+                    return;
+                }
+
+                let show_spinner = !has_cache;
                 if show_spinner {
                     loading_sig.set(true);
                     error_sig.set(None);
@@ -130,12 +151,13 @@ pub fn use_library() -> UseLibrary {
                     Ok(()) => {
                         liked_sig.set(accumulator.clone());
                         write_disk_cache(&accumulator);
+                        LAST_SPOTIFY_REFRESH_ATTEMPT.store(0, Ordering::Relaxed);
                     }
                     Err(e) => {
-                        if show_spinner {
-                            error_sig.set(Some(e.to_string()));
-                        } else {
+                        if has_cache {
                             tracing::warn!(error = %e, "background liked-tracks refresh failed");
+                        } else {
+                            error_sig.set(Some(e.to_string()));
                         }
                     }
                 }

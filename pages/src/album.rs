@@ -2,7 +2,9 @@
 
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
-use hooks::{AlbumUri, Track, use_album, use_ctx_menu, use_detail, use_queue};
+use hooks::{AlbumUri, Track, use_album, use_detail, use_queue};
+
+use crate::parts::{PlayableLi, format_duration};
 
 #[component]
 pub fn AlbumPage(uri: AlbumUri) -> Element {
@@ -44,7 +46,7 @@ pub fn AlbumPage(uri: AlbumUri) -> Element {
                         let tracks = d.tracks.clone();
                         move |_| {
                             if !tracks.is_empty() {
-                                queue.play_list(tracks.clone(), 0);
+                                queue.play_context(tracks.clone(), 0);
                             }
                         }
                     }
@@ -117,8 +119,6 @@ fn AlbumHeader(detail: hooks::AlbumDetail, on_play_all: EventHandler<()>) -> Ele
 
 #[component]
 fn AlbumTrackList(tracks: Vec<Track>) -> Element {
-    let queue = use_queue();
-    let ctx = use_ctx_menu();
     if tracks.is_empty() {
         return rsx! {
             div { class: "discover-empty",
@@ -129,23 +129,12 @@ fn AlbumTrackList(tracks: Vec<Track>) -> Element {
     rsx! {
         ul { class: "track-list",
             for (i, t) in tracks.iter().enumerate() {
-                li {
-                    class: "track-row top-track-row",
+                PlayableLi {
                     key: "{t.uri.0}",
-                    onclick: {
-                        let tracks = tracks.clone();
-                        let queue = queue.clone();
-                        let idx = i;
-                        move |_| queue.play_list(tracks.clone(), idx)
-                    },
-                    oncontextmenu: {
-                        let t = t.clone();
-                        move |e: Event<MouseData>| {
-                            e.prevent_default();
-                            let pos = e.data.client_coordinates();
-                            ctx.open(pos.x, pos.y, t.clone());
-                        }
-                    },
+                    track: t.clone(),
+                    tracks: tracks.clone(),
+                    index: i,
+                    class: "track-row top-track-row".to_string(),
                     span { class: "track-index", "{i + 1:02}" }
                     div { class: "track-meta",
                         div { class: "track-title", "{t.title}" }
@@ -160,11 +149,4 @@ fn AlbumTrackList(tracks: Vec<Track>) -> Element {
             }
         }
     }
-}
-
-fn format_duration(d: std::time::Duration) -> String {
-    let total = d.as_secs();
-    let m = total / 60;
-    let s = total % 60;
-    format!("{m}:{s:02}")
 }

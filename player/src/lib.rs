@@ -21,8 +21,8 @@ pub use spotify_backend::{SpotifyBackend, SpotifyBackendError};
 
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -41,6 +41,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 pub enum TransportCmd {
     Next,
     Previous,
+    Stop,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -64,6 +65,9 @@ pub struct NowPlaying {
     pub cover_url: Option<String>,
     pub source_label: String,
     pub provider: String,
+    /// Provider-scoped URI string, when playback came from a real track.
+    /// Used by History/Home to replay exact entries instead of text-searching.
+    pub track_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,7 +119,7 @@ impl Player {
     /// Boot the audio worker. `history_path`, when present, points at the
     /// JSONL play-log Home consumes — passed in (rather than resolved here)
     /// so `player/` doesn't need to know about `config/`.
-    pub fn spawn(history_path: Option<PathBuf>) -> Result<Self, PlayerError> {
+    pub fn spawn(history_path: Option<PathBuf>, initial_volume: f32) -> Result<Self, PlayerError> {
         let (tx, rx) = mpsc::sync_channel::<Result<Arc<RodioPlayer>, PlayerError>>(1);
 
         std::thread::Builder::new()
@@ -138,9 +142,10 @@ impl Player {
             .map_err(|e| PlayerError::Device(format!("spawn worker: {e}")))?;
 
         let rodio = rx.recv().map_err(|_| PlayerError::WorkerDied)??;
-        // 0.8 slider position → log-curved gain so the initial level matches
-        // what the Spotify side will hand back too.
-        rodio.set_volume(Self::slider_to_gain(0.8));
+        let initial_volume = initial_volume.clamp(0.0, 1.0);
+        // Configured slider position → log-curved gain so the initial level
+        // matches what the Spotify side will hand back too.
+        rodio.set_volume(Self::slider_to_gain(initial_volume));
         let (transport_tx, transport_rx) = tokio_mpsc::unbounded_channel();
         Ok(Player {
             rodio,
@@ -149,7 +154,7 @@ impl Player {
             duration: Arc::new(RwLock::new(None)),
             now_playing: Arc::new(RwLock::new(None)),
             history: History::open(history_path),
-            user_volume: Arc::new(RwLock::new(0.8)),
+            user_volume: Arc::new(RwLock::new(initial_volume)),
             transport_tx,
             transport_rx: Arc::new(Mutex::new(Some(transport_rx))),
         })
@@ -168,6 +173,10 @@ impl Player {
         let _ = self.transport_tx.send(TransportCmd::Previous);
     }
 
+    pub fn request_stop(&self) {
+        let _ = self.transport_tx.send(TransportCmd::Stop);
+    }
+
     /// Take the single receiver. Returns `Some` exactly once per Player —
     /// subsequent calls yield `None`. Queue install owns this on app boot.
     pub fn take_transport_rx(&self) -> Option<tokio_mpsc::UnboundedReceiver<TransportCmd>> {
@@ -175,10 +184,7 @@ impl Player {
     }
 
     fn current_volume(&self) -> f32 {
-        *self
-            .user_volume
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
+        *self.user_volume.read().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Map a 0..1 slider position to a linear gain via a 60 dB log curve —
@@ -201,6 +207,10 @@ impl Player {
         &self.history
     }
 
+    pub fn clear_history(&self) -> std::io::Result<()> {
+        self.history.clear()
+    }
+
     pub fn set_now_playing(&self, np: Option<NowPlaying>) {
         if let Ok(mut w) = self.now_playing.write() {
             *w = np;
@@ -216,7 +226,8 @@ impl Player {
         let tone = rodio::source::SineWave::new(440.0)
             .take_duration(Duration::from_secs(30))
             .amplify(0.2);
-        self.rodio.set_volume(Self::slider_to_gain(self.current_volume()));
+        self.rodio
+            .set_volume(Self::slider_to_gain(self.current_volume()));
         self.rodio.append(tone);
         self.rodio.play();
         if let Ok(mut d) = self.duration.write() {
@@ -229,6 +240,7 @@ impl Player {
             cover_url: None,
             source_label: "test signal".into(),
             provider: "Local".into(),
+            track_uri: None,
         }));
     }
 
@@ -238,8 +250,7 @@ impl Player {
         self.silence_spotify();
         let gain = Self::slider_to_gain(self.current_volume());
         let cursor = Cursor::new(bytes);
-        let decoder =
-            Decoder::try_from(cursor).map_err(|e| PlayerError::Decode(e.to_string()))?;
+        let decoder = Decoder::try_from(cursor).map_err(|e| PlayerError::Decode(e.to_string()))?;
         let dur = decoder.total_duration();
         self.rodio.clear();
         // Re-assert log-curved gain *before* append so the very first 5 ms
@@ -272,10 +283,7 @@ impl Player {
         // bottombar was sitting at 5%.
         backend.set_volume(self.current_volume());
 
-        let mut guard = self
-            .spotify
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut guard = self.spotify.lock().unwrap_or_else(|p| p.into_inner());
         if guard.is_none() {
             *guard = Some(Arc::new(backend));
         }
@@ -285,7 +293,12 @@ impl Player {
     /// Drop the Spotify backend, e.g. after the user disconnects. The next
     /// `ensure_spotify` will fully reconnect.
     pub fn reset_spotify(&self) {
-        if let Some(b) = self.spotify.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        if let Some(b) = self
+            .spotify
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+        {
             b.stop();
             drop(b);
         }
@@ -293,7 +306,9 @@ impl Player {
         let mut a = self.active.write().unwrap_or_else(|p| p.into_inner());
         if matches!(*a, Active::Spotify) {
             *a = Active::None;
-            if let Ok(mut d) = self.duration.write() { *d = None; }
+            if let Ok(mut d) = self.duration.write() {
+                *d = None;
+            }
         }
     }
 
@@ -319,7 +334,12 @@ impl Player {
     pub fn pause(&self) {
         match *self.active.read().unwrap_or_else(|p| p.into_inner()) {
             Active::Spotify => {
-                if let Some(b) = self.spotify.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+                if let Some(b) = self
+                    .spotify
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .as_ref()
+                {
                     b.pause();
                 }
             }
@@ -330,7 +350,12 @@ impl Player {
     pub fn resume(&self) {
         match *self.active.read().unwrap_or_else(|p| p.into_inner()) {
             Active::Spotify => {
-                if let Some(b) = self.spotify.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+                if let Some(b) = self
+                    .spotify
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .as_ref()
+                {
                     b.resume();
                 }
             }
@@ -355,7 +380,12 @@ impl Player {
     pub fn seek(&self, target: Duration) {
         match *self.active.read().unwrap_or_else(|p| p.into_inner()) {
             Active::Spotify => {
-                if let Some(b) = self.spotify.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+                if let Some(b) = self
+                    .spotify
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .as_ref()
+                {
                     let ms = u32::try_from(target.as_millis()).unwrap_or(u32::MAX);
                     b.seek(ms);
                 }
@@ -378,7 +408,12 @@ impl Player {
         // 60 dB log curve. librespot's `SoftMixer` already applies the same
         // curve internally, so we pass the raw slider value over there.
         self.rodio.set_volume(Self::slider_to_gain(v));
-        if let Some(b) = self.spotify.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+        if let Some(b) = self
+            .spotify
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+        {
             b.set_volume(v);
         }
     }
@@ -386,7 +421,12 @@ impl Player {
     pub fn snapshot(&self) -> PlayerSnapshot {
         let active = *self.active.read().unwrap_or_else(|p| p.into_inner());
         let (is_paused, position, has_source) = match active {
-            Active::Spotify => match self.spotify.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+            Active::Spotify => match self
+                .spotify
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+            {
                 Some(b) => {
                     let s = b.snapshot();
                     (
@@ -419,7 +459,11 @@ impl Player {
     }
 
     fn silence_spotify(&self) {
-        if let Some(b) = self.spotify.lock().unwrap_or_else(|p| p.into_inner()).as_ref()
+        if let Some(b) = self
+            .spotify
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
             && *self.active.read().unwrap_or_else(|p| p.into_inner()) == Active::Spotify
         {
             b.stop();
@@ -448,6 +492,7 @@ impl Player {
             title: np.title,
             artist: np.artist,
             provider: np.provider,
+            track_uri: np.track_uri,
             cover_url: np.cover_url,
             played_at: Utc::now(),
         });

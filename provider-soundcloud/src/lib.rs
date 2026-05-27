@@ -65,6 +65,24 @@ impl SoundCloudProvider {
         let _ = self.client_id().await;
     }
 
+    pub fn has_cached_client_id(&self) -> bool {
+        self.client_id
+            .try_read()
+            .map(|id| id.is_some())
+            .unwrap_or(false)
+    }
+
+    pub async fn clear_client_id_cache(&self) -> ProviderResult<()> {
+        *self.client_id.write().await = None;
+        if let Some(path) = config::AppConfig::soundcloud_client_id_cache_path()
+            && let Err(e) = std::fs::remove_file(path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(ProviderError::Other(format!("client_id cache clear: {e}")));
+        }
+        Ok(())
+    }
+
     /// Cached client_id getter. Hot path is a single RwLock read; cold path
     /// drops to the web-scrape resolver below.
     async fn client_id(&self) -> ProviderResult<String> {
@@ -97,7 +115,7 @@ impl SoundCloudProvider {
     }
 
     /// Invalidate the cached client_id (e.g. after a 401) and resolve again.
-    async fn refresh_client_id(&self) -> ProviderResult<String> {
+    pub async fn refresh_client_id(&self) -> ProviderResult<String> {
         let mut w = self.client_id.write().await;
         *w = None;
         drop(w);
@@ -200,11 +218,7 @@ fn extract_client_id(js: &str) -> Option<String> {
     let rest = &js[i..];
     let j = rest.find('"')?;
     let candidate = &rest[..j];
-    if candidate.len() >= 16
-        && candidate
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric())
-    {
+    if candidate.len() >= 16 && candidate.chars().all(|c| c.is_ascii_alphanumeric()) {
         Some(candidate.to_string())
     } else {
         None
@@ -267,9 +281,7 @@ impl Provider for SoundCloudProvider {
         let limit = q.limit.unwrap_or(20).clamp(1, 50);
         let encoded = url::form_urlencoded::byte_serialize(q.text.as_bytes()).collect::<String>();
         self.with_client_id(|cid| {
-            let url = format!(
-                "{SC_API}/search/tracks?q={encoded}&limit={limit}&client_id={cid}"
-            );
+            let url = format!("{SC_API}/search/tracks?q={encoded}&limit={limit}&client_id={cid}");
             async move {
                 let raw: ScSearchResp = self.fetch_json(&url).await?;
                 let tracks = raw.collection.into_iter().map(sc_to_track).collect();
@@ -315,27 +327,8 @@ impl Provider for SoundCloudProvider {
         .await
     }
 
-    async fn artist_top_tracks(
-        &self,
-        uri: &ArtistUri,
-        limit: u32,
-    ) -> ProviderResult<Vec<Track>> {
-        let id = user_id_from_uri(uri)?;
-        let limit = limit.clamp(1, 50);
-        self.with_client_id(|cid| {
-            // SC has no "top tracks" endpoint, but `/users/{id}/tracks` is
-            // ordered by upload date and tends to surface the popular ones
-            // for active accounts. Good enough for the artist banner; the
-            // user can dig deeper via the upcoming "All tracks" view.
-            let url = format!(
-                "{SC_API}/users/{id}/tracks?limit={limit}&client_id={cid}"
-            );
-            async move {
-                let raw: ScSearchResp = self.fetch_json(&url).await?;
-                Ok(raw.collection.into_iter().map(sc_to_track).collect())
-            }
-        })
-        .await
+    async fn artist_top_tracks(&self, uri: &ArtistUri, limit: u32) -> ProviderResult<Vec<Track>> {
+        self.user_tracks(uri, limit).await
     }
     // Albums + album detail + related artists deliberately fall through to
     // the trait's default-not-available impls; SC has no first-class album
@@ -516,15 +509,49 @@ impl SoundCloudProvider {
     /// SoundCloud's own "related tracks" feed for a given track. Used by the
     /// discovery engine as the primary candidate source for niche electronic
     /// where ListenBrainz' similarity graph has no coverage.
-    pub async fn related_tracks(
-        &self,
-        uri: &TrackUri,
-        limit: u32,
-    ) -> ProviderResult<Vec<Track>> {
+    pub async fn related_tracks(&self, uri: &TrackUri, limit: u32) -> ProviderResult<Vec<Track>> {
         let id = track_id_from_uri(uri)?;
         let limit = limit.clamp(1, 50);
         self.with_client_id(|cid| {
             let url = format!("{SC_API}/tracks/{id}/related?limit={limit}&client_id={cid}");
+            async move {
+                let raw: ScSearchResp = self.fetch_json(&url).await?;
+                Ok(raw.collection.into_iter().map(sc_to_track).collect())
+            }
+        })
+        .await
+    }
+
+    /// SoundCloud chart rows used by the Aegis-style Explore/Home shelves.
+    /// `genre` is the slug after `soundcloud:genres:` (e.g. `electronic`,
+    /// `all-music`).
+    pub async fn genre_chart(&self, genre: &str, limit: u32) -> ProviderResult<Vec<Track>> {
+        let limit = limit.clamp(1, 50);
+        let genre = url::form_urlencoded::byte_serialize(genre.as_bytes()).collect::<String>();
+        self.with_client_id(|cid| {
+            let url = format!(
+                "{SC_API}/charts?kind=trending&genre=soundcloud%3Agenres%3A{genre}&limit={limit}&client_id={cid}"
+            );
+            async move {
+                let raw: ScChartsResp = self.fetch_json(&url).await?;
+                Ok(raw
+                    .collection
+                    .into_iter()
+                    .filter_map(|item| item.track)
+                    .map(sc_to_track)
+                    .collect())
+            }
+        })
+        .await
+    }
+
+    /// Most-recent uploads for a SoundCloud user/artist. Aegis uses this for
+    /// "New from your artists"; nira also reuses it for artist top tracks.
+    pub async fn user_tracks(&self, uri: &ArtistUri, limit: u32) -> ProviderResult<Vec<Track>> {
+        let id = user_id_from_uri(uri)?;
+        let limit = limit.clamp(1, 50);
+        self.with_client_id(|cid| {
+            let url = format!("{SC_API}/users/{id}/tracks?limit={limit}&client_id={cid}");
             async move {
                 let raw: ScSearchResp = self.fetch_json(&url).await?;
                 Ok(raw.collection.into_iter().map(sc_to_track).collect())
@@ -539,6 +566,17 @@ impl SoundCloudProvider {
 #[derive(Deserialize)]
 struct ScSearchResp {
     collection: Vec<ScTrack>,
+}
+
+#[derive(Deserialize)]
+struct ScChartsResp {
+    collection: Vec<ScChartItem>,
+}
+
+#[derive(Deserialize)]
+struct ScChartItem {
+    #[serde(default)]
+    track: Option<ScTrack>,
 }
 
 #[derive(Deserialize)]
@@ -631,10 +669,13 @@ mod tests {
             https://cf.example/seg/1.ts\n\
             #EXT-X-ENDLIST\n";
         let out = parse_m3u8_segments(m3u8, "https://cf.example/list.m3u8");
-        assert_eq!(out, vec![
-            "https://cf.example/seg/0.ts".to_string(),
-            "https://cf.example/seg/1.ts".to_string(),
-        ]);
+        assert_eq!(
+            out,
+            vec![
+                "https://cf.example/seg/0.ts".to_string(),
+                "https://cf.example/seg/1.ts".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -645,10 +686,13 @@ mod tests {
             #EXTINF:10.0,\n\
             seg-1.ts\n";
         let out = parse_m3u8_segments(m3u8, "https://cf.example/playlist/list.m3u8");
-        assert_eq!(out, vec![
-            "https://cf.example/playlist/seg-0.ts".to_string(),
-            "https://cf.example/playlist/seg-1.ts".to_string(),
-        ]);
+        assert_eq!(
+            out,
+            vec![
+                "https://cf.example/playlist/seg-0.ts".to_string(),
+                "https://cf.example/playlist/seg-1.ts".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -782,4 +826,3 @@ fn upgrade_artwork(url: String) -> String {
     url.replace("-large.jpg", "-t500x500.jpg")
         .replace("-large.png", "-t500x500.png")
 }
-

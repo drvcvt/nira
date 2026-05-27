@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use dioxus::prelude::*;
-use hooks::{use_detail, use_likes, use_player, use_queue};
+use hooks::{RepeatMode, Track, use_ctx_menu, use_detail, use_likes, use_player, use_queue};
 
 #[component]
 pub fn Bottombar() -> Element {
@@ -13,6 +13,7 @@ pub fn Bottombar() -> Element {
     let queue = use_queue();
     let likes = use_likes();
     let detail = use_detail();
+    let mut queue_open = use_signal(|| false);
     // Track corresponding to the current queue index (full Track with
     // URI), needed for the heart toggle in the player-right cluster.
     let current_track = {
@@ -58,7 +59,10 @@ pub fn Bottombar() -> Element {
     };
 
     let now_active = snap.has_source && !snap.is_paused;
-    let cover_url = np.as_ref().and_then(|n| n.cover_url.clone()).unwrap_or_default();
+    let cover_url = np
+        .as_ref()
+        .and_then(|n| n.cover_url.clone())
+        .unwrap_or_default();
     let title_text = np
         .as_ref()
         .map(|n| n.title.clone())
@@ -86,6 +90,15 @@ pub fn Bottombar() -> Element {
 
     let has_prev = queue.has_previous();
     let has_next = queue.has_next();
+    let queue_len = queue.entries.read().len();
+    let queue_is_open = *queue_open.read();
+    let shuffle_on = *queue.shuffle_enabled.read();
+    let repeat_mode = *queue.repeat_mode.read();
+    let repeat_title = match repeat_mode {
+        RepeatMode::Off => "Repeat off",
+        RepeatMode::All => "Repeat all",
+        RepeatMode::One => "Repeat one",
+    };
 
     rsx! {
         footer { class: "player",
@@ -117,7 +130,6 @@ pub fn Bottombar() -> Element {
                                         title: "Go to artist",
                                         onclick: {
                                             let uri = a.uri.clone();
-                                            let detail = detail;
                                             move |e: Event<MouseData>| {
                                                 e.stop_propagation();
                                                 detail.open_artist(uri.clone());
@@ -136,7 +148,6 @@ pub fn Bottombar() -> Element {
                     title: if liked_now { "Remove from Liked" } else { "Save to Liked" },
                     disabled: current_track.is_none(),
                     onclick: {
-                        let likes = likes;
                         let track = current_track.clone();
                         move |_| {
                             if let Some(t) = track.as_ref() {
@@ -154,6 +165,16 @@ pub fn Bottombar() -> Element {
 
             div { class: "player-center",
                 div { class: "player-transport",
+                    button {
+                        class: if shuffle_on { "player-btn active" } else { "player-btn" },
+                        title: if shuffle_on { "Shuffle on" } else { "Shuffle off" },
+                        disabled: queue_len < 2,
+                        onclick: {
+                            let queue = queue.clone();
+                            move |_| queue.toggle_shuffle()
+                        },
+                        i { class: "fa-solid fa-shuffle" }
+                    }
                     button {
                         class: "player-btn",
                         title: "Previous",
@@ -186,6 +207,19 @@ pub fn Bottombar() -> Element {
                             move |_| queue.next()
                         },
                         i { class: "fa-solid fa-forward-step" }
+                    }
+                    button {
+                        class: match repeat_mode {
+                            RepeatMode::Off => "player-btn",
+                            RepeatMode::All => "player-btn active",
+                            RepeatMode::One => "player-btn active repeat-one",
+                        },
+                        title: "{repeat_title}",
+                        onclick: {
+                            let queue = queue.clone();
+                            move |_| queue.cycle_repeat()
+                        },
+                        i { class: "fa-solid fa-repeat" }
                     }
                 }
                 div { class: "player-progress-row",
@@ -236,6 +270,13 @@ pub fn Bottombar() -> Element {
             }
 
             div { class: "player-right",
+                button {
+                    class: if queue_is_open { "player-queue-btn open" } else { "player-queue-btn" },
+                    title: "Queue",
+                    onclick: move |_| queue_open.set(!queue_is_open),
+                    i { class: "fa-solid fa-list" }
+                    span { "{queue_len}" }
+                }
                 div { class: "player-source",
                     span { class: "player-source-dot", "data-provider": "{provider_attr}" }
                     span { "{source_label}" }
@@ -260,6 +301,122 @@ pub fn Bottombar() -> Element {
                     span { class: "vol-pct", "{volume_pct}" }
                 }
             }
+
+            if queue_is_open {
+                QueuePopover {}
+            }
+        }
+    }
+}
+
+#[component]
+fn QueuePopover() -> Element {
+    let queue = use_queue();
+    let entries = queue.entries.read().clone();
+    let current = *queue.current_index.read();
+    let total = entries.len();
+    let shuffle_on = *queue.shuffle_enabled.read();
+    let repeat_mode = *queue.repeat_mode.read();
+    let repeat_label = match repeat_mode {
+        RepeatMode::Off => "repeat off",
+        RepeatMode::All => "repeat all",
+        RepeatMode::One => "repeat one",
+    };
+
+    rsx! {
+        div { class: "queue-popover",
+            div { class: "queue-popover-head",
+                div {
+                    span { class: "queue-eyebrow", "up next" }
+                    h3 { "Queue" }
+                }
+                div { class: "queue-head-actions",
+                    if shuffle_on {
+                        span { class: "queue-chip on", "shuffle" }
+                    }
+                    span { class: if repeat_mode == RepeatMode::Off { "queue-chip" } else { "queue-chip on" }, "{repeat_label}" }
+                    span { class: "queue-total", "{total} tracks" }
+                    button {
+                        class: "queue-clear-btn",
+                        title: "Clear queue",
+                        disabled: entries.is_empty(),
+                        onclick: {
+                            let queue = queue.clone();
+                            move |_| queue.stop()
+                        },
+                        i { class: "fa-solid fa-xmark" }
+                    }
+                }
+            }
+            if entries.is_empty() {
+                div { class: "queue-empty",
+                    i { class: "fa-solid fa-list" }
+                    span { "Nothing queued yet." }
+                }
+            } else {
+                ol { class: "queue-list",
+                    for (idx, track) in entries.iter().enumerate() {
+                        QueueRow {
+                            key: "{track.uri.0}-{idx}",
+                            track: track.clone(),
+                            entries: entries.clone(),
+                            index: idx,
+                            current: current == Some(idx),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn QueueRow(track: Track, entries: Vec<Track>, index: usize, current: bool) -> Element {
+    let queue = use_queue();
+    let ctx = use_ctx_menu();
+    let cover = track.cover_url.clone().unwrap_or_default();
+    let title = track.title.clone();
+    let artist = track
+        .artists
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let duration = fmt_time(track.duration.as_secs());
+    let badge = track.provider.badge();
+    let provider = track.provider.label();
+
+    rsx! {
+        li {
+            class: if current { "queue-row current" } else { "queue-row" },
+            title: "{title} — {artist}",
+            onclick: {
+                let entries = entries.clone();
+                let queue = queue.clone();
+                move |_| queue.play_context(entries.clone(), index)
+            },
+            oncontextmenu: {
+                let track = track.clone();
+                move |e: Event<MouseData>| {
+                    e.prevent_default();
+                    let pos = e.data.client_coordinates();
+                    ctx.open(pos.x, pos.y, track.clone());
+                }
+            },
+            span { class: "queue-row-index", "{index + 1}" }
+            div { class: "queue-row-art",
+                if !cover.is_empty() {
+                    img { src: "{cover}", alt: "", loading: "lazy" }
+                } else {
+                    i { class: "fa-solid fa-music" }
+                }
+            }
+            div { class: "queue-row-copy",
+                span { class: "queue-row-title", "{title}" }
+                span { class: "queue-row-artist", "{artist}" }
+            }
+            span { class: "queue-row-badge", "data-provider": "{provider}", "{badge}" }
+            span { class: "queue-row-duration", "{duration}" }
         }
     }
 }
