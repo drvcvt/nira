@@ -121,6 +121,12 @@ impl AppConfig {
         Self::cache_dir().map(|d| d.join("history.jsonl"))
     }
 
+    /// Persisted For-You shelves/mixes/tiles. Lets Home show the previous
+    /// dashboard on cold start instead of an empty wait state.
+    pub fn recommendations_cache_path() -> Option<PathBuf> {
+        Self::cache_dir().map(|d| d.join("recommendations.json"))
+    }
+
     /// Atomic write helper: serialise → write to `path.tmp` → rename. Used
     /// for every cache file we own so a kill-at-the-wrong-moment can't leave
     /// a half-written JSON that breaks the next launch.

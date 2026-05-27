@@ -7,12 +7,14 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use config::AppConfig;
 use dioxus::prelude::*;
 use discovery::{DiscoveryEngine, SimilarToSeed};
 use player::HistoryEntry;
 use provider_api::{ArtistUri, Provider, Query, Track, TrackUri};
 use provider_soundcloud::SoundCloudProvider;
+use serde::{Deserialize, Serialize};
 
 use crate::UseLibrary;
 use crate::use_likes::LikedTrack;
@@ -39,7 +41,7 @@ const GENRE_SHELVES: &[(&str, &str, &str)] = &[
     ("indie", "Indie", "indie"),
 ];
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecommendationShelf {
     pub id: String,
     pub eyebrow: String,
@@ -47,24 +49,28 @@ pub struct RecommendationShelf {
     pub subtitle: String,
     pub seed_label: String,
     pub tracks: Vec<Track>,
+    #[serde(skip, default)]
     pub is_loading: bool,
+    #[serde(skip, default)]
     pub error: Option<String>,
     pub rerollable: bool,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecommendationMix {
     pub id: String,
     pub title: String,
     pub subtitle: String,
     pub seed_label: String,
     pub tracks: Vec<Track>,
+    #[serde(skip, default)]
     pub is_loading: bool,
+    #[serde(skip, default)]
     pub error: Option<String>,
     pub accent_index: usize,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecommendationTile {
     pub id: String,
     pub label: String,
@@ -74,6 +80,23 @@ pub struct RecommendationTile {
     pub tracks: Vec<Track>,
     pub accent_index: usize,
 }
+
+/// On-disk snapshot of the For-You dashboard. Loaded on Home mount so the
+/// user sees their previous state immediately instead of skeletons while
+/// the SoundCloud round-trips run.
+#[derive(Serialize, Deserialize)]
+struct RecommendationsCache {
+    saved_at: DateTime<Utc>,
+    shelves: Vec<RecommendationShelf>,
+    mixes: Vec<RecommendationMix>,
+    #[serde(default)]
+    tiles: Vec<RecommendationTile>,
+}
+
+/// Cached shelves older than this trigger an auto-refresh on mount; cached
+/// data still shows in the meantime, so the UX is "see prior dashboard +
+/// quietly catch up", not "skeleton wipe".
+const CACHE_TTL_HOURS: i64 = 24;
 
 #[derive(Clone)]
 pub struct UseRecommendations {
@@ -247,9 +270,24 @@ impl UseRecommendations {
             merge_loaded_mixes(&mut mixes_sig, loaded_mixes, only_id.as_deref());
             let shelves_now = shelves_sig.peek().clone();
             let mixes_now = mixes_sig.peek().clone();
-            tiles_sig.set(build_tiles(&shelves_now, &mixes_now));
+            let tiles_now = build_tiles(&shelves_now, &mixes_now);
+            tiles_sig.set(tiles_now.clone());
             error_sig.set(if has_loaded_tracks { None } else { had_error });
             loading_sig.set(false);
+
+            // Persist the dashboard so the next cold-start shows this state
+            // instantly. Best-effort — a cache write failure must not break
+            // playback or surface to the user.
+            if has_loaded_tracks
+                && let Err(e) = save_cache(&RecommendationsCache {
+                    saved_at: Utc::now(),
+                    shelves: shelves_now,
+                    mixes: mixes_now,
+                    tiles: tiles_now,
+                })
+            {
+                tracing::debug!(error = %e, "recommendations: cache save failed");
+            }
         });
     }
 }
@@ -261,13 +299,27 @@ pub fn use_recommendations(
     let engine = use_context::<Arc<DiscoveryEngine>>();
     let sc = use_context::<Arc<SoundCloudProvider>>();
     let local_likes = crate::use_likes::use_likes();
-    let shelves = use_signal(Vec::<RecommendationShelf>::new);
-    let mixes = use_signal(Vec::<RecommendationMix>::new);
-    let tiles = use_signal(Vec::<RecommendationTile>::new);
+    let mut shelves = use_signal(Vec::<RecommendationShelf>::new);
+    let mut mixes = use_signal(Vec::<RecommendationMix>::new);
+    let mut tiles = use_signal(Vec::<RecommendationTile>::new);
     let is_loading = use_signal(|| false);
     let error = use_signal(|| None::<String>);
     let offsets = use_signal(HashMap::<String, usize>::new);
     let generation = use_signal(|| 0u64);
+    let mut cache_fresh = use_signal(|| false);
+
+    // Hydrate from disk once on mount so Home shows the previous dashboard
+    // before the SoundCloud round-trips finish. Stale cache still renders;
+    // the effect below will quietly auto-refresh when older than the TTL.
+    use_hook(move || {
+        if let Some(cache) = load_cache() {
+            let fresh = (Utc::now() - cache.saved_at) < chrono::Duration::hours(CACHE_TTL_HOURS);
+            shelves.set(cache.shelves);
+            mixes.set(cache.mixes);
+            tiles.set(cache.tiles);
+            cache_fresh.set(fresh);
+        }
+    });
 
     let handle = UseRecommendations {
         shelves,
@@ -292,7 +344,12 @@ pub fn use_recommendations(
             let local_len = local_likes.items.read().len();
             let has_content = !handle.shelves.peek().is_empty() || !handle.mixes.peek().is_empty();
             let in_flight = *handle.is_loading.peek();
-            if history_len + spotify_len + local_len == 0 || has_content || in_flight {
+            if history_len + spotify_len + local_len == 0 || in_flight {
+                return;
+            }
+            // Fresh cache already populated the signals — let the user see
+            // their previous dashboard without triggering a network refresh.
+            if has_content && *cache_fresh.peek() {
                 return;
             }
             handle.refresh_all();
@@ -300,6 +357,19 @@ pub fn use_recommendations(
     }
 
     handle
+}
+
+fn load_cache() -> Option<RecommendationsCache> {
+    let path = AppConfig::recommendations_cache_path()?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn save_cache(cache: &RecommendationsCache) -> anyhow::Result<()> {
+    let Some(path) = AppConfig::recommendations_cache_path() else {
+        return Ok(());
+    };
+    AppConfig::atomic_write_json(&path, cache)
 }
 
 async fn load_shelf(
@@ -489,12 +559,15 @@ async fn artist_uploads(
 fn mark_shelves_loading(
     shelves_sig: &mut Signal<Vec<RecommendationShelf>>,
     plans: &[ShelfPlan],
-    only_id: Option<&str>,
+    _only_id: Option<&str>,
 ) {
     let mut shelves = shelves_sig.peek().clone();
-    if shelves.is_empty() || only_id.is_none() {
+    if shelves.is_empty() {
+        // Cold start: render skeletons so the user sees the row scaffold.
         shelves = plans.iter().map(skeleton_shelf).collect();
     } else {
+        // Refresh / reroll with cached content visible: keep the tracks but
+        // mark the rows loading so the UI can show a subtle refresh state.
         for plan in plans {
             if let Some(existing) = shelves.iter_mut().find(|s| s.id == plan.id) {
                 existing.is_loading = true;
@@ -512,10 +585,10 @@ fn mark_shelves_loading(
 fn mark_mixes_loading(
     mixes_sig: &mut Signal<Vec<RecommendationMix>>,
     plans: &[MixPlan],
-    only_id: Option<&str>,
+    _only_id: Option<&str>,
 ) {
     let mut mixes = mixes_sig.peek().clone();
-    if mixes.is_empty() || only_id.is_none() {
+    if mixes.is_empty() {
         mixes = plans.iter().map(skeleton_mix).collect();
     } else {
         for plan in plans {
@@ -1174,6 +1247,44 @@ mod tests {
             seeds.first().map(|s| s.artist.as_str()),
             Some("Recent Artist")
         );
+    }
+
+    #[test]
+    fn recommendations_cache_roundtrips_via_serde() {
+        let cache = RecommendationsCache {
+            saved_at: Utc::now(),
+            shelves: vec![RecommendationShelf {
+                id: "made-for-you".into(),
+                eyebrow: "Personal".into(),
+                title: "Made for you".into(),
+                subtitle: "subtitle".into(),
+                seed_label: "label".into(),
+                tracks: vec![track("soundcloud:track:1", "Artist", "Song")],
+                is_loading: true,
+                error: Some("ignored on serialise".into()),
+                rerollable: true,
+            }],
+            mixes: vec![RecommendationMix {
+                id: "daily-mix-0".into(),
+                title: "Daily Mix 1".into(),
+                subtitle: "subtitle".into(),
+                seed_label: "label".into(),
+                tracks: Vec::new(),
+                is_loading: true,
+                error: None,
+                accent_index: 0,
+            }],
+            tiles: Vec::new(),
+        };
+        let raw = serde_json::to_string(&cache).expect("serialise");
+        let parsed: RecommendationsCache = serde_json::from_str(&raw).expect("deserialise");
+        assert_eq!(parsed.shelves.len(), 1);
+        // Transient fields must default back to clean values.
+        assert!(!parsed.shelves[0].is_loading);
+        assert!(parsed.shelves[0].error.is_none());
+        assert_eq!(parsed.shelves[0].tracks.len(), 1);
+        assert_eq!(parsed.mixes.len(), 1);
+        assert!(!parsed.mixes[0].is_loading);
     }
 
     #[test]
