@@ -13,10 +13,10 @@ use std::sync::Arc;
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
 use hooks::{
-    DiscoveryResult, HistoryEntry, Listen, Provider, Query, RecommendationMix, RecommendationShelf,
-    RecommendationTile, Track, TrackUri, UseFeatured, UseLibrary, UseListenBrainzFeed,
-    UseRecommendations, use_ctx_menu, use_featured, use_history, use_library,
-    use_listenbrainz_feed, use_queue, use_recommendations, use_soundcloud, use_spotify,
+    HistoryEntry, Listen, Provider, Query, RecommendationMix, RecommendationShelf,
+    RecommendationTile, Track, TrackUri, UseLibrary, UseListenBrainzFeed, UseRecommendations,
+    use_ctx_menu, use_history, use_library, use_listenbrainz_feed, use_queue, use_recommendations,
+    use_soundcloud, use_spotify,
 };
 
 use crate::parts::{PlayableButton, provider_badge_class};
@@ -26,7 +26,6 @@ pub fn Home() -> Element {
     let history = use_history();
     let library = use_library();
     let feed = use_listenbrainz_feed();
-    let featured = use_featured(library.clone());
     let recommendations = use_recommendations(library.clone(), history.deep_entries);
 
     rsx! {
@@ -36,186 +35,10 @@ pub fn Home() -> Element {
                 "What you've been doing lately — across providers and devices."
             }
 
-            Featured { featured: featured.clone() }
             ForYouRecommendations { recommendations: recommendations.clone() }
             RecentlyPlayed { entries: history.entries.read().clone() }
             RecentlyLiked { library: library.clone() }
             ListenedLately { feed: feed.clone() }
-        }
-    }
-}
-
-// ─── Featured ("Try this") hero card ──────────────────────────────────────
-
-#[component]
-fn Featured(featured: UseFeatured) -> Element {
-    let suggestion = featured.suggestion.read().clone();
-    let seed = featured.seed.read().clone();
-    let is_loading = *featured.is_loading.read();
-    let error = featured.error.read().clone();
-    let needs_library = *featured.needs_library.read();
-    let queue = use_queue();
-
-    rsx! {
-        section { class: "home-section featured-section",
-            header { class: "home-section-header",
-                h2 { "Try this" }
-                Button {
-                    label: "Surprise me".to_string(),
-                    icon: Some("fa-solid fa-shuffle".to_string()),
-                    variant: ButtonVariant::Ghost,
-                    disabled: needs_library || is_loading,
-                    on_click: {
-                        let featured = featured.clone();
-                        move |_| featured.reroll()
-                    },
-                }
-            }
-
-            if needs_library {
-                div { class: "home-empty",
-                    div { class: "home-empty-glyph",
-                        i { class: "fa-solid fa-wand-magic-sparkles" }
-                    }
-                    p { class: "home-empty-title", "Like a few songs first." }
-                    p { class: "home-empty-body",
-                        "Connect Spotify in Settings and like some tracks — nira picks "
-                        "a random one and surfaces a similar track from across providers."
-                    }
-                }
-            } else if let Some(rec) = suggestion.as_ref() {
-                FeaturedCard {
-                    result: rec.clone(),
-                    seed: seed.clone(),
-                    on_play: {
-                        let queue = queue.clone();
-                        let rec = rec.clone();
-                        move |_| {
-                            if let Some(track) = rec.play_target() {
-                                queue.play_list(vec![track], 0);
-                            }
-                        }
-                    },
-                }
-            } else if let Some(msg) = error.as_ref() {
-                div { class: "home-error", "{msg}" }
-            } else {
-                // Catch-all so the section always has visible content. This
-                // covers the brief initial mount before `use_effect` fires
-                // *and* in-flight reroll where is_loading=true but suggestion
-                // hasn't landed yet.
-                FeaturedSkeleton { seed: seed.clone() }
-            }
-        }
-    }
-}
-
-#[component]
-fn FeaturedCard(
-    result: DiscoveryResult,
-    seed: Option<Track>,
-    on_play: EventHandler<()>,
-) -> Element {
-    let cover = result.cover_url.clone().unwrap_or_default();
-    let title = result.title.clone();
-    let artist = result.artist.clone();
-    let has_spotify = result.spotify.is_some();
-    let has_soundcloud = result.soundcloud.is_some();
-    let rationale = result.rationale.clone();
-    let seed_label = seed.as_ref().map(|t| {
-        let artist = t
-            .artists
-            .iter()
-            .map(|a| a.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("{} — {}", artist, t.title)
-    });
-    let ctx = use_ctx_menu();
-    let ctx_target = result.play_target();
-
-    rsx! {
-        article {
-            class: "featured-card",
-            oncontextmenu: {
-                let ctx_target = ctx_target.clone();
-                move |e: Event<MouseData>| {
-                    e.prevent_default();
-                    let Some(t) = ctx_target.clone() else { return; };
-                    let pos = e.data.client_coordinates();
-                    ctx.open(pos.x, pos.y, t);
-                }
-            },
-            div { class: "featured-art",
-                if !cover.is_empty() {
-                    img { src: "{cover}", alt: "", loading: "lazy" }
-                } else {
-                    div { class: "cover-card-fallback",
-                        i { class: "fa-solid fa-music" }
-                    }
-                }
-            }
-            div { class: "featured-meta",
-                span { class: "featured-eyebrow", "Recommended for you" }
-                h3 { class: "featured-title", "{title}" }
-                p { class: "featured-artist", "{artist}" }
-                if let Some(label) = seed_label.as_ref() {
-                    p { class: "featured-rationale",
-                        title: "{rationale}",
-                        i { class: "fa-solid fa-link" }
-                        " based on "
-                        span { class: "featured-seed", "{label}" }
-                    }
-                }
-                div { class: "featured-actions",
-                    Button {
-                        label: "Play".to_string(),
-                        icon: Some("fa-solid fa-play".to_string()),
-                        variant: ButtonVariant::Primary,
-                        on_click: move |_| on_play.call(()),
-                    }
-                    div { class: "featured-badges",
-                        if has_spotify {
-                            span { class: "track-badge spotify", "S" }
-                        }
-                        if has_soundcloud {
-                            span { class: "track-badge soundcloud", "SC" }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn FeaturedSkeleton(seed: Option<Track>) -> Element {
-    let seed_label = seed.as_ref().map(|t| {
-        format!(
-            "{} — {}",
-            t.artists
-                .iter()
-                .map(|a| a.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
-            t.title
-        )
-    });
-    rsx! {
-        article { class: "featured-card featured-card-skeleton",
-            div { class: "featured-art featured-art-skeleton" }
-            div { class: "featured-meta",
-                span { class: "featured-eyebrow", "Searching neighbours…" }
-                div { class: "featured-skeleton-line wide" }
-                div { class: "featured-skeleton-line" }
-                if let Some(label) = seed_label.as_ref() {
-                    p { class: "featured-rationale",
-                        i { class: "fa-solid fa-link" }
-                        " based on "
-                        span { class: "featured-seed", "{label}" }
-                    }
-                }
-            }
         }
     }
 }

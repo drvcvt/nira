@@ -1713,11 +1713,15 @@ body {
 
 .for-you-loading-row { opacity: 0.72; }
 
-.for-you-skeleton-card .cover-card-art,
-.for-you-skeleton-card .featured-skeleton-line {
+.for-you-skeleton-card .cover-card-art {
   background: linear-gradient(90deg, var(--surface) 0%, var(--surface-strong) 45%, var(--surface) 100%);
   background-size: 220% 100%;
-  animation: featured-skeleton-shimmer 1.6s ease-in-out infinite;
+  animation: for-you-skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes for-you-skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 .shelf-eyebrow {
@@ -2432,195 +2436,6 @@ body {
   border-radius: var(--r-sm);
   color: var(--text);
   font-size: 0.85em;
-}
-
-/* ─── Featured hero card ────────────────────────────────── */
-
-.featured-section .home-section-header h2 {
-  /* The hero leads the page — let its header sit a touch larger than
-     the row headers below it to reinforce the visual hierarchy. */
-  font-size: 1.05rem;
-}
-
-.featured-reroll {
-  background: transparent;
-  /* inset shadow instead of border so the squircle clip-path
-     (assets/squircle.js) doesn't trim the visible outline. */
-  border: none;
-  box-shadow: inset 0 0 0 1px var(--line);
-  border-radius: var(--r-btn);
-  padding: 5px 12px;
-  font: inherit;
-  font-size: 0.78em;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: color 200ms ease, border-color 200ms ease, background 200ms ease;
-}
-
-.featured-reroll:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: color-mix(in oklab, var(--accent) 10%, transparent);
-}
-
-.featured-reroll:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.featured-card {
-  display: grid;
-  grid-template-columns: minmax(180px, 240px) 1fr;
-  gap: 24px;
-  padding: 18px;
-  border-radius: var(--r-xl);
-  background: linear-gradient(
-    135deg,
-    color-mix(in oklab, var(--accent) 10%, var(--bg-soft)) 0%,
-    var(--bg-soft) 70%
-  );
-  border: 1px solid var(--line);
-}
-
-.featured-art {
-  aspect-ratio: 1 / 1;
-  border-radius: var(--r-md);
-  overflow: hidden;
-  background: var(--surface);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
-}
-
-.featured-art img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.featured-meta {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.featured-eyebrow {
-  font-size: 0.65rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.featured-title {
-  margin: 4px 0 0;
-  font-size: 1.4rem;
-  font-weight: 600;
-  color: var(--text);
-  /* Long titles wrap to two lines max before truncating. */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  line-height: 1.2;
-}
-
-.featured-artist {
-  margin: 0;
-  font-size: 1rem;
-  color: var(--text-muted);
-}
-
-.featured-rationale {
-  margin: 8px 0 0;
-  font-size: 0.78em;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.featured-rationale i {
-  opacity: 0.6;
-  font-size: 0.85em;
-}
-
-.featured-seed {
-  color: var(--text);
-  font-style: italic;
-}
-
-.featured-actions {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-top: 14px;
-}
-
-.featured-play {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 18px;
-  background: var(--accent);
-  color: var(--bg);
-  border: none;
-  border-radius: var(--r-btn);
-  font: inherit;
-  font-size: 0.9em;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 120ms ease, box-shadow 200ms ease;
-}
-
-.featured-play:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
-}
-
-.featured-play:active {
-  transform: translateY(0);
-}
-
-.featured-badges {
-  display: flex;
-  gap: 4px;
-}
-
-/* Skeleton state while discovery is fetching. Same shape as the real card
-   so the layout doesn't jump when results arrive. */
-.featured-card-skeleton .featured-art-skeleton {
-  background: linear-gradient(
-    100deg,
-    var(--surface) 30%,
-    color-mix(in oklab, var(--surface) 60%, var(--accent) 6%) 50%,
-    var(--surface) 70%
-  );
-  background-size: 200% 100%;
-  animation: featured-skeleton-shimmer 1.6s linear infinite;
-}
-
-.featured-skeleton-line {
-  height: 12px;
-  border-radius: 4px;
-  margin: 6px 0;
-  background: linear-gradient(
-    100deg,
-    var(--surface) 30%,
-    color-mix(in oklab, var(--surface) 60%, var(--accent) 6%) 50%,
-    var(--surface) 70%
-  );
-  background-size: 200% 100%;
-  animation: featured-skeleton-shimmer 1.6s linear infinite;
-  width: 40%;
-}
-
-.featured-skeleton-line.wide { width: 70%; height: 18px; }
-
-@keyframes featured-skeleton-shimmer {
-  0%   { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
 }
 
 /* ── Discover mode toggle + cross-platform bridge ────────────────────── */
@@ -3438,8 +3253,6 @@ body {
    gracefully to plain rounded rect on engines that don't support it,
    so it's safe to ship unconditionally. */
 .nav-item,
-.featured-play,
-.featured-reroll,
 .discover-seed-reroll,
 .mode-btn,
 .banner-play-btn,
