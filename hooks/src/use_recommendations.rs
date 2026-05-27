@@ -307,6 +307,11 @@ pub fn use_recommendations(
     let offsets = use_signal(HashMap::<String, usize>::new);
     let generation = use_signal(|| 0u64);
     let mut cache_fresh = use_signal(|| false);
+    // One-shot gate so the 30-second history tick (and any other signal
+    // update inside the effect's dep set) can't retrigger a background
+    // refresh after the initial mount decision. Manual Refresh / Reroll
+    // bypass this since they go through methods, not the effect.
+    let mut did_initial_load = use_signal(|| false);
 
     // Hydrate from disk once on mount so Home shows the previous dashboard
     // before the SoundCloud round-trips finish. Stale cache still renders;
@@ -342,13 +347,20 @@ pub fn use_recommendations(
             let history_len = history_entries.read().len();
             let spotify_len = library.liked.read().len();
             let local_len = local_likes.items.read().len();
-            let has_content = !handle.shelves.peek().is_empty() || !handle.mixes.peek().is_empty();
             let in_flight = *handle.is_loading.peek();
-            if history_len + spotify_len + local_len == 0 || in_flight {
+            if *did_initial_load.peek() || in_flight {
                 return;
             }
-            // Fresh cache already populated the signals — let the user see
-            // their previous dashboard without triggering a network refresh.
+            // Wait until at least one user-data source has populated, then
+            // commit to a single mount-time decision and never auto-refresh
+            // again — the user can hit Refresh / Reroll explicitly.
+            if history_len + spotify_len + local_len == 0 {
+                return;
+            }
+            did_initial_load.set(true);
+            let has_content = !handle.shelves.peek().is_empty() || !handle.mixes.peek().is_empty();
+            // Fresh cache already populated the signals — show the previous
+            // dashboard without a network refresh.
             if has_content && *cache_fresh.peek() {
                 return;
             }
