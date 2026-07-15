@@ -2,17 +2,17 @@ use components::SearchBar;
 use dioxus::prelude::*;
 use hooks::{Track, use_queue, use_search};
 
-use crate::parts::{ArtistLinks, PlayableLi, format_duration, provider_badge_class};
+use crate::parts::{ArtistLinks, ArtistResults, PlayableLi, format_duration, provider_badge_class};
 
 #[component]
 pub fn Search() -> Element {
     let mut search = use_search();
     let queue = use_queue();
     let results = search.results.read().clone();
+    let artist_hits = search.artists.read().clone();
     let is_searching = *search.is_searching.read();
     let is_loading_track = *queue.is_loading_track.read();
     let search_error = search.error.read().clone();
-    let queue_error = queue.error.read().clone();
     let query_value = search.query.read().clone();
     let has_query = !query_value.trim().is_empty();
 
@@ -50,13 +50,15 @@ pub fn Search() -> Element {
                 }
             }
 
-            if let Some(err) = search_error.as_ref().or(queue_error.as_ref()) {
+            if let Some(err) = search_error.as_ref() {
                 div { class: "search-error", "{err}" }
             }
 
-            if results.is_empty() && !is_searching && has_query && search_error.is_none() {
+            if results.is_empty() && artist_hits.is_empty() && !is_searching && has_query && search_error.is_none() {
                 div { class: "search-empty", "No results." }
             }
+
+            ArtistResults { artists: artist_hits }
 
             ul { class: "track-list",
                 for (idx, track) in results.iter().enumerate() {
@@ -86,7 +88,7 @@ fn TrackRow(track: Track, tracks: Vec<Track>, index: usize) -> Element {
             class: "track-row".to_string(),
             div { class: "track-cover",
                 if !cover.is_empty() {
-                    img { src: "{cover}", alt: "", loading: "lazy" }
+                    img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }
                 } else {
                     div { class: "track-cover-fallback",
                         i { class: "fa-solid fa-music" }

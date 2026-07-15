@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>nira — settings preview</title>
+<!-- Settings page harness — mirrors pages/src/settings/. Open /preview/settings.html -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+@font-face { font-family: "Geist"; src: url("/nira/assets/fonts/Geist-Variable.ttf") format("truetype"); font-weight: 100 900; font-display: block; }
+@font-face { font-family: "Geist Mono"; src: url("/nira/assets/fonts/GeistMono-Variable.ttf") format("truetype"); font-weight: 100 900; font-display: block; }
+@font-face { font-family: "Charter"; src: url("/nira/assets/fonts/Charter-Regular.ttf") format("truetype"); font-weight: 400; font-display: block; }
+@font-face { font-family: "Charter"; src: url("/nira/assets/fonts/Charter-Bold.ttf") format("truetype"); font-weight: 700; font-display: block; }
+</style>
+<script>
+  const cssFiles = ['base','sidebar','player','search','tracks','settings','home',
+                    'discover','menu','detail','library','buttons','responsive'];
+  const bust = Date.now();
+  for (const f of cssFiles) {
+    document.write(`<link rel="stylesheet" href="/nira/assets/css/${f}.css?t=${bust}">`);
+  }
+</script>
+<script>
+  const saved = new URLSearchParams(location.search).get('theme') || localStorage.getItem('theme');
+  if (saved === 'dark' || saved === 'light') document.documentElement.dataset.theme = saved;
+  function setTheme(t) { document.documentElement.dataset.theme = t; localStorage.setItem('theme', t); }
+</script>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sidebar-brand">nira</div>
+    <div class="sidebar-section-label">Browse</div>
+    <nav class="side-nav">
+      <button class="nav-item"><span class="nav-glyph"><i class="fa-solid fa-house"></i></span>Home</button>
+      <button class="nav-item"><span class="nav-glyph"><i class="fa-solid fa-compass"></i></span>Discover</button>
+      <button class="nav-item"><span class="nav-glyph"><i class="fa-solid fa-record-vinyl"></i></span>Library</button>
+    </nav>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-section-label">App</div>
+    <nav class="side-nav">
+      <button class="nav-item active"><span class="nav-glyph"><i class="fa-solid fa-gear"></i></span>Settings</button>
+    </nav>
+  </aside>
+
+  <main class="content">
+    <section class="page settings-page">
+      <h1>Settings</h1>
+      <p class="hint">Audio, library paths, providers, discovery and local data.</p>
+
+      <section class="settings-group settings-stack">
+        <h2>Appearance</h2>
+        <p class="hint">Theme and UI font apply immediately. System theme follows the desktop colour scheme.</p>
+        <div class="settings-row">
+          <label>Theme</label>
+          <div class="mode-toggle">
+            <button class="mode-btn" onclick="setTheme('light'); this.parentElement.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('active')); this.classList.add('active')">Light</button>
+            <button class="mode-btn active" onclick="setTheme('dark'); this.parentElement.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('active')); this.classList.add('active')">Dark</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>UI font</label>
+          <div class="field-dropdown" id="fontdd">
+            <button class="field-dropdown-trigger" style="font-family:'Geist',sans-serif" onclick="document.getElementById('fontdd').classList.toggle('show'); this.classList.toggle('open')">
+              <span class="field-dropdown-value">Geist</span>
+              <i class="fa-solid fa-chevron-down field-dropdown-chevron"></i>
+            </button>
+            <div class="field-dropdown-panel" style="display:none">
+              <button class="field-dropdown-option active" style="font-family:'Geist',sans-serif"><span class="field-dropdown-option-name">Geist</span><span class="field-dropdown-option-sample">Aa Gg 0123</span><i class="fa-solid fa-check field-dropdown-option-check"></i></button>
+              <button class="field-dropdown-option" style="font-family:'Inter',sans-serif"><span class="field-dropdown-option-name">Inter</span><span class="field-dropdown-option-sample">Aa Gg 0123</span></button>
+              <button class="field-dropdown-option" style="font-family:'Adwaita Sans',sans-serif"><span class="field-dropdown-option-name">Adwaita Sans</span><span class="field-dropdown-option-sample">Aa Gg 0123</span></button>
+              <button class="field-dropdown-option" style="font-family:'Noto Sans',sans-serif"><span class="field-dropdown-option-name">Noto Sans</span><span class="field-dropdown-option-sample">Aa Gg 0123</span></button>
+              <button class="field-dropdown-option" style="font-family:system-ui,sans-serif"><span class="field-dropdown-option-name">System</span><span class="field-dropdown-option-sample">Aa Gg 0123</span></button>
+            </div>
+          </div>
+        </div>
+        <div class="font-specimen">
+          <p class="font-specimen-title">Semantics: The Benzo Chronicles</p>
+          <p class="font-specimen-body">Goreshit — Burn This Moment Into the Retina of My Eye. Pack my box with five dozen liquor jugs.</p>
+          <p class="font-specimen-nums">0123456789 · 3:42 / 61:08 · 44.1 kHz FLAC</p>
+        </div>
+      </section>
+
+      <section class="settings-group settings-stack">
+        <h2>Connections</h2>
+        <p class="hint">Provider credentials and service status.</p>
+        <article class="settings-card">
+          <header class="settings-card-head">
+            <div class="settings-titleline"><i class="fa-solid fa-compact-disc"></i><h3>the hi-res provider</h3></div>
+            <span class="settings-pill ok"><span class="settings-dot"></span>Logged in</span>
+          </header>
+          <div class="settings-card-body">
+            <p class="settings-card-copy">Log in with your the hi-res provider Studio subscription to download hi-res FLAC into your library. Right-click any the hi-res provider track or album in search and pick Download. Non-lossless tracks fall back to MP3 so albums stay complete.</p>
+            <div class="settings-row two-col">
+              <label>Email</label>
+              <input class="settings-input" placeholder="you@example.com" value="you@example.com">
+            </div>
+            <div class="settings-row">
+              <label>Password</label>
+              <input class="settings-input" type="password" value="hunter2">
+            </div>
+            <div class="settings-row compact">
+              <label>Quality</label>
+              <select class="settings-input">
+                <option>Hi-Res (up to 24/192)</option>
+                <option>Hi-Res (up to 24/96)</option>
+                <option>CD (16/44.1)</option>
+              </select>
+            </div>
+            <div class="settings-actions">
+              <button class="settings-btn">Log out</button>
+            </div>
+          </div>
+        </article>
+        <article class="settings-card">
+          <header class="settings-card-head">
+            <div class="settings-titleline"><i class="fa-brands fa-spotify"></i><h3>Spotify</h3></div>
+            <span class="settings-pill ok"><span class="settings-dot"></span>Connected</span>
+          </header>
+          <div class="settings-card-body">
+            <p class="settings-card-copy">Bring your own Spotify Developer Client ID. Premium is required for playback via librespot.</p>
+            <div class="settings-row">
+              <label>Client ID</label>
+              <input class="settings-input" placeholder="32-char hex from your Spotify app">
+              <button class="settings-btn">Save</button>
+              <button class="settings-btn primary">Connect</button>
+            </div>
+            <div class="settings-row compact">
+              <label>Redirect URI</label>
+              <code class="settings-mono">http://127.0.0.1:7777/callback</code>
+            </div>
+          </div>
+        </article>
+      </section>
+    </section>
+  </main>
+</div>
+</body>
+</html>

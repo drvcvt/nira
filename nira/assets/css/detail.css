@@ -1,0 +1,471 @@
+/* ── Artist & Album detail pages ─────────────────────────────────────── */
+
+.artist-page, .album-page { padding: 0; }
+
+.artist-nav {
+  padding: 12px 24px 0;
+}
+
+.settings-btn.ghost {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 6px 12px;
+  border-radius: var(--rs);
+  cursor: pointer;
+  font: inherit;
+  transition: background 150ms ease, color 150ms ease;
+}
+.settings-btn.ghost:hover {
+  color: var(--text);
+  background: var(--raise2);
+}
+
+.artist-banner, .album-banner {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 24px;
+  align-items: end;
+  padding: 32px 24px 24px;
+}
+
+.banner-cover {
+  width: 220px;
+  height: 220px;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.banner-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.banner-cover-fallback {
+  font-size: 64px;
+  color: var(--text-faint);
+}
+
+.banner-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.banner-eyebrow {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.banner-name {
+  margin: 0;
+  font-family: "Charter", "Liberation Serif", Georgia, serif;
+  font-size: 44px;
+  line-height: 1.05;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.banner-genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.banner-genre-chip {
+  background: var(--raise1);
+  color: var(--text-muted);
+  padding: 3px 10px;
+  border-radius: var(--rs);
+  font-size: 11px;
+}
+
+.banner-stats {
+  display: flex;
+  gap: 28px;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.banner-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.banner-stat dt {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.banner-stat-num, .banner-stat-mix {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.banner-stat-mix {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.banner-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  align-items: center;
+}
+
+.banner-play-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--chip-on);
+  color: var(--chip-on-fg);
+  border: none;
+  padding: 10px 18px;
+  border-radius: var(--rs);
+  font-weight: 600;
+  cursor: pointer;
+  font: inherit;
+}
+
+.banner-play-btn:hover {
+  background: color-mix(in srgb, var(--chip-on) 85%, var(--bg));
+}
+
+.banner-play-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.banner-link {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.banner-link:hover {
+  color: var(--text);
+}
+
+/* Tabs */
+.artist-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 24px;
+}
+
+.artist-tab {
+  background: transparent;
+  border: none;
+  border-radius: var(--rs);
+  color: var(--text-muted);
+  padding: 9px 14px;
+  cursor: pointer;
+  font: inherit;
+  /* After the `font` shorthand reset: labels rendered thin and cramped —
+     give them real weight and a hint of tracking. */
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.artist-tab:hover {
+  color: var(--text);
+  background: var(--raise1);
+}
+
+.artist-tab.active {
+  color: var(--text);
+  background: var(--raise2);
+  font-weight: 680;
+}
+
+.artist-tab-count {
+  background: var(--surface-strong);
+  color: var(--text-muted);
+  padding: 1px 7px;
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Top-tracks list refinements */
+.top-track-row {
+  display: grid;
+  grid-template-columns: 28px 48px 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Album tracklist — no cover column, so the title gets the full width. */
+.album-track-row {
+  grid-template-columns: 28px 1fr auto;
+}
+
+.album-page .track-list {
+  padding: 8px 24px 32px;
+}
+
+/* "Already in your library" indicators (album header chip + row check). */
+.album-owned-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+  padding: 3px 10px;
+  border-radius: var(--rs);
+  background: var(--raise1);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.album-track-row .track-duration {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.album-track-row .track-owned {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* Per-track download — appears on row hover; once the file lands the
+   rescan swaps it for the owned check. */
+.album-track-row .track-dl {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.album-track-row:hover .track-dl,
+.album-track-row:focus-within .track-dl {
+  opacity: 1;
+}
+
+.album-track-row .track-dl:hover {
+  background: var(--raise2);
+  color: var(--text);
+}
+
+.track-index {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+/* Album grids */
+.album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 18px;
+  padding: 20px 24px;
+}
+
+.album-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.album-cover {
+  position: relative;
+  aspect-ratio: 1;
+  width: 100%;
+  background: var(--surface);
+  border-radius: var(--r-btn);
+  overflow: hidden;
+}
+
+.album-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.album-cover-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  color: var(--text-faint);
+}
+
+.provider-badge {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.album-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.album-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.album-sub {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: lowercase;
+}
+
+/* Related grid */
+.related-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 18px;
+  padding: 20px 24px;
+}
+
+.related-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+}
+
+.related-avatar {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.related-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.related-fallback {
+  font-size: 36px;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+.related-name {
+  font-weight: 500;
+  text-align: center;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.related-sub {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Album page additions */
+.album-byline {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.artist-link-inline {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--faint);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.artist-link-inline:hover {
+  color: var(--accent);
+}
+
+.album-byline-sep { color: var(--text-faint); }
+
+.track-duration {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+/* Skeleton */
+.artist-banner.skeleton .skeleton-block {
+  width: 220px;
+  height: 220px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.skeleton-line {
+  background: var(--surface);
+  border-radius: 4px;
+  height: 14px;
+  margin: 4px 0;
+}
+
+.skeleton-line.wide { width: 60%; height: 28px; }
+.skeleton-line.short { width: 30%; }
+
+

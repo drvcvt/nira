@@ -1,0 +1,293 @@
+/* ─── SearchBar component (components/src/searchbar.rs) ────────── */
+
+.searchbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  max-width: 720px;
+  padding: 0 14px 0 16px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-btn);
+  transition: border-color 160ms ease, background 160ms ease,
+              box-shadow 220ms ease;
+}
+
+.searchbar:focus-within {
+  background: var(--surface-strong);
+}
+
+.searchbar-icon {
+  color: var(--text-faint);
+  font-size: 0.86rem;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  transition: color 160ms ease;
+}
+
+.searchbar:focus-within .searchbar-icon { color: var(--text); }
+
+.searchbar-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-family: inherit;
+  font-size: 0.88rem;
+  letter-spacing: 0.005em;
+}
+
+.searchbar-input::placeholder { color: var(--text-faint); }
+
+/* Layout helper: SearchBar + sibling controls (e.g. discover's "Find
+   similar" Button) on one row. */
+.searchbar-row {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  margin: 0 0 8px;
+  max-width: 720px;
+}
+
+.searchbar-row > .searchbar { flex: 1; }
+
+.hotkey-bridge {
+  position: fixed;
+  left: -9999px;
+  top: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ─── artist search hits (page + overlay) ─────────────────────── */
+
+.artist-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 6px;
+}
+
+.artist-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 12px 4px 4px;
+  max-width: 240px;
+  background: var(--raise1);
+  border: none;
+  border-radius: var(--r-full);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition: background 130ms ease;
+}
+
+.artist-result:hover { background: var(--raise2); }
+
+.artist-result-avatar {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--raise3);
+  color: var(--text-faint);
+  font-size: 0.7rem;
+}
+
+.artist-result-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.artist-result-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.artist-result-badge {
+  color: var(--text-faint);
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+}
+
+/* Inside the overlay the results panel already sits on raise1 — step the
+   pills one level up so they still read as raised. */
+.search-overlay-results .artist-results {
+  margin: 0;
+  padding: 10px 10px 2px;
+}
+
+.search-overlay-results .artist-result { background: var(--raise2); }
+.search-overlay-results .artist-result:hover { background: var(--raise3); }
+
+/* ─── global search overlay ───────────────────────────────────── */
+
+.search-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.search-overlay.open {
+  visibility: visible;
+}
+
+.search-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  appearance: none;
+  border: 0;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.46);
+  transition: opacity 150ms ease;
+}
+
+.search-overlay.open .search-overlay-backdrop {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.search-overlay-panel {
+  position: fixed;
+  top: 58px;
+  left: 50%;
+  width: min(780px, calc(100vw - 48px));
+  opacity: 0;
+  transform: translate(-50%, -10px) scale(0.985);
+  pointer-events: none;
+  will-change: transform, opacity;
+  transition: opacity 180ms ease, transform 210ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.search-overlay.open .search-overlay-panel {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+  pointer-events: auto;
+}
+
+.search-overlay-bar .searchbar {
+  width: 100%;
+  max-width: none;
+  height: 56px;
+  padding: 0 16px 0 18px;
+  border-radius: var(--r-lg);
+  background: var(--raise1);
+}
+
+.search-overlay-bar .searchbar:focus-within {
+  background: var(--raise2);
+}
+
+.search-overlay-bar .searchbar-input {
+  font-size: 0.94rem;
+}
+
+.overlay-search-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.overlay-search-hint kbd {
+  min-width: 28px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  background: var(--raise2);
+  color: var(--text-muted);
+  font: inherit;
+  text-align: center;
+}
+
+.search-overlay-results {
+  margin-top: 12px;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  background: var(--raise1);
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 180ms ease 40ms, transform 200ms ease 40ms;
+}
+
+.search-overlay.open .search-overlay-results {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.search-overlay-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  max-height: min(62vh, 560px);
+  overflow-y: auto;
+}
+
+.search-overlay-row {
+  display: grid;
+  grid-template-columns: 44px 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border-radius: var(--r-btn);
+  cursor: pointer;
+  transition: background 130ms ease, transform 130ms ease;
+}
+
+.search-overlay-row:hover {
+  background: var(--raise2);
+  transform: translateY(-1px);
+}
+
+.search-overlay-empty {
+  padding: 24px 26px 26px;
+  color: var(--text-muted);
+}
+
+.search-overlay-empty-title {
+  color: var(--text);
+  font-weight: 650;
+  margin-bottom: 6px;
+}
+
+.search-overlay-empty-copy {
+  color: var(--text-faint);
+  font-size: 0.86rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-overlay-backdrop,
+  .search-overlay-panel,
+  .search-overlay-results,
+  .sidebar,
+  .content,
+  .player {
+    transition: none;
+  }
+}
+

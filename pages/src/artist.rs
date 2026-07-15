@@ -33,6 +33,24 @@ pub fn ArtistPage(uri: ArtistUri) -> Element {
     let error = artist.error.read().clone();
     let active_tab = use_signal(|| ArtistTab::Top);
 
+    // Fetch Related whenever the tab is (or becomes) active for a view that
+    // doesn't have it yet. Reactive instead of tab-click-triggered so it
+    // also fires after navigating to another artist while Related was
+    // already selected — the tab survives, the fresh view arrives with
+    // `related: None`, and a click-only trigger would leave the spinner
+    // spinning forever.
+    use_effect(move || {
+        let wants_related = *active_tab.read() == ArtistTab::Related;
+        let missing = artist
+            .view
+            .read()
+            .as_ref()
+            .is_some_and(|v| v.related.is_none());
+        if wants_related && missing && !*artist.is_loading_related.peek() {
+            artist.load_related();
+        }
+    });
+
     rsx! {
         section { class: "page artist-page",
             div { class: "artist-nav",
@@ -41,7 +59,7 @@ pub fn ArtistPage(uri: ArtistUri) -> Element {
                     icon: Some("fa-solid fa-arrow-left".to_string()),
                     variant: ButtonVariant::Ghost,
                     size: ButtonSize::Sm,
-                    on_click: move |_| detail.close(),
+                    on_click: move |_| detail.back(),
                 }
             }
 
@@ -65,15 +83,6 @@ pub fn ArtistPage(uri: ArtistUri) -> Element {
                 ArtistTabs {
                     view: v.clone(),
                     active: active_tab,
-                    on_tab_change: {
-                        let v = v.clone();
-                        move |t: ArtistTab| {
-                            // Lazy-load Related the first time the tab is opened.
-                            if t == ArtistTab::Related && v.related.is_none() {
-                                artist.load_related();
-                            }
-                        }
-                    }
                 }
                 ArtistTabBody {
                     view: v.clone(),
@@ -127,12 +136,18 @@ fn ArtistBanner(view: hooks::ArtistView, on_play_all: EventHandler<()>) -> Eleme
     let release_count = view.albums.len();
     let genres: Vec<String> = artist.genres.iter().take(5).cloned().collect();
     let permalink = artist.permalink_url.clone();
+    // Honest source label — augmented views carry Spotify's catalogue.
+    let source_label = if view.via_spotify.is_some() {
+        format!("{} + spotify", provider.to_lowercase())
+    } else {
+        provider.to_lowercase()
+    };
 
     rsx! {
         header { class: "artist-banner",
             div { class: "banner-cover",
                 if !cover.is_empty() {
-                    img { src: "{cover}", alt: "", loading: "lazy" }
+                    img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }
                 } else {
                     span { class: "banner-cover-fallback",
                         i { class: "fa-solid fa-user" }
@@ -160,7 +175,7 @@ fn ArtistBanner(view: hooks::ArtistView, on_play_all: EventHandler<()>) -> Eleme
                     }
                     div { class: "banner-stat",
                         dt { "source" }
-                        dd { class: "banner-stat-mix", "{provider.to_lowercase()}" }
+                        dd { class: "banner-stat-mix", "{source_label}" }
                     }
                 }
                 div { class: "banner-actions",
@@ -187,11 +202,7 @@ fn ArtistBanner(view: hooks::ArtistView, on_play_all: EventHandler<()>) -> Eleme
 }
 
 #[component]
-fn ArtistTabs(
-    view: hooks::ArtistView,
-    active: Signal<ArtistTab>,
-    on_tab_change: EventHandler<ArtistTab>,
-) -> Element {
+fn ArtistTabs(view: hooks::ArtistView, active: Signal<ArtistTab>) -> Element {
     let mut active = active;
     let tabs = [
         (ArtistTab::Top, view.top_tracks.len()),
@@ -212,10 +223,7 @@ fn ArtistTabs(
                 button {
                     class: if *active.read() == tab { "artist-tab active" } else { "artist-tab" },
                     role: "tab",
-                    onclick: move |_| {
-                        active.set(tab);
-                        on_tab_change.call(tab);
-                    },
+                    onclick: move |_| active.set(tab),
                     span { class: "artist-tab-label", "{tab.label()}" }
                     if count > 0 && tab != ArtistTab::Related {
                         span { class: "artist-tab-count", "{count}" }
@@ -283,7 +291,7 @@ fn TopTracksList(tracks: Vec<Track>) -> Element {
                     span { class: "track-index", "{i + 1:02}" }
                     div { class: "track-cover",
                         if let Some(c) = t.cover_url.as_ref() {
-                            img { src: "{c}", alt: "", loading: "lazy" }
+                            img { src: "{c}", alt: "", loading: "lazy", decoding: "async" }
                         } else {
                             div { class: "track-cover-fallback",
                                 i { class: "fa-solid fa-music" }
@@ -360,7 +368,7 @@ fn AlbumCard(album: AlbumBrief, on_open: EventHandler<()>) -> Element {
             onclick: move |_| on_open.call(()),
             div { class: "album-cover",
                 if !cover.is_empty() {
-                    img { src: "{cover}", alt: "", loading: "lazy" }
+                    img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }
                 } else {
                     span { class: "album-cover-fallback",
                         i { class: "fa-solid fa-compact-disc" }
@@ -410,7 +418,7 @@ fn RelatedGrid(related: Vec<RelatedArtist>, is_loading: bool, already_loaded: bo
                     },
                     div { class: "related-avatar",
                         if let Some(img) = ra.image_url.as_ref() {
-                            img { src: "{img}", alt: "", loading: "lazy" }
+                            img { src: "{img}", alt: "", loading: "lazy", decoding: "async" }
                         } else {
                             span { class: "related-fallback",
                                 "{ra.name.chars().next().unwrap_or('?')}"

@@ -36,6 +36,7 @@ pub type ProviderResult<T> = Result<T, ProviderError>;
 pub enum ProviderId {
     Spotify,
     SoundCloud,
+    the hi-res provider,
     Local,
 }
 
@@ -44,6 +45,7 @@ impl ProviderId {
         match self {
             ProviderId::Spotify => "Spotify",
             ProviderId::SoundCloud => "SoundCloud",
+            ProviderId::the hi-res provider => "the hi-res provider",
             ProviderId::Local => "Local",
         }
     }
@@ -53,6 +55,7 @@ impl ProviderId {
         match self {
             ProviderId::Spotify => "S",
             ProviderId::SoundCloud => "SC",
+            ProviderId::the hi-res provider => "Q",
             ProviderId::Local => "L",
         }
     }

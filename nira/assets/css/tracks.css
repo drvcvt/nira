@@ -1,0 +1,210 @@
+/* ─── search page — shared track-row styling ───────────────────── */
+
+.search-spinner {
+  color: var(--text-faint);
+  font-size: 0.85em;
+}
+
+.search-error {
+  background: var(--raise1);
+  border-radius: var(--rs);
+  padding: 10px 14px;
+  color: var(--text);
+  font-weight: 550;
+  margin-bottom: 10px;
+  max-width: 60ch;
+  font-size: 0.88em;
+}
+
+.search-empty {
+  color: var(--text-faint);
+  padding: 24px 0;
+  font-size: 0.9em;
+}
+
+.track-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.track-row {
+  /* Flex, not grid: rows carry a variable trailing-child count (saved-at
+     chip, quality badge, unlike heart) and the old fixed 4-column template
+     wrapped the extras onto a broken second line in Library → Saved. */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.track-row:hover { background: var(--surface); }
+
+.track-row:focus-visible {
+  outline: none;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 45%, transparent);
+}
+
+.track-cover {
+  width: 44px;
+  height: 44px;
+  border-radius: 4px;
+  background: var(--surface);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.track-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.track-cover-fallback {
+  color: var(--faint);
+  font-size: 1em;
+}
+
+.track-meta { overflow: hidden; flex: 1 1 auto; min-width: 0; }
+
+.track-title {
+  font-size: 0.86em;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-artist {
+  color: var(--text-muted);
+  font-size: 0.78em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-duration {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78em;
+}
+
+.track-badge {
+  font-size: 0.62em;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--surface-strong);
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+}
+
+/* Provider badges stay neutral — the label text is the identity. */
+
+/* ─── Search page — hint chip rendered inside SearchBar children ── */
+
+.search-page > h1 + .hint {
+  margin-bottom: 16px;
+}
+
+/* Hint chip on the right: spinner during work, kbd-hint when idle.
+   Passed in as SearchBar's trailing slot (children). */
+.search-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: lowercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+  margin-left: 2px;
+}
+
+.search-hint.searching,
+.search-hint.loading {
+  color: var(--text-muted);
+}
+
+.search-hint .kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--raise2);
+  border-radius: 4px;
+  font-size: 0.66rem;
+  color: var(--text-muted);
+}
+
+/* ─── inline artist / album links (used in track rows + bottombar) ─ */
+
+.artist-link {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: color 120ms ease, text-decoration-color 120ms ease;
+  text-decoration: underline transparent;
+  text-underline-offset: 2px;
+}
+
+.artist-link:hover {
+  color: var(--accent-soft);
+  text-decoration-color: var(--accent-soft);
+}
+
+.artist-link:focus-visible {
+  outline: none;
+  color: var(--accent-soft);
+  text-decoration-color: var(--accent-soft);
+}
+
+.artist-link.album-link { font-style: italic; opacity: 0.9; }
+
+.artist-link-sep {
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+/* ─── discovery page extras ────────────────────────────── */
+
+.discovery-row {
+  grid-template-columns: 44px 1fr auto auto;
+}
+
+.discovery-score {
+  font-size: 0.7em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-soft);
+  width: 28px;
+  text-align: center;
+  cursor: help;
+}
+
+.discovery-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+

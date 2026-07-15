@@ -13,7 +13,7 @@ playback and Jellyfin are the next big gaps.
 
 A native, local-first music player for Linux/macOS/Windows that
 prioritises a snappy UI even with tens of thousands of tracks indexed.
-The streaming providers (SoundCloud, Spotify, later Jellyfin) live in
+The streaming providers (SoundCloud, Spotify, the hi-res provider, later Jellyfin) live in
 isolated provider crates behind a common trait, so the UI doesn't grow
 per-provider branches and a provider going down doesn't take the app
 with it.
@@ -38,6 +38,7 @@ picked.
 | Audio engine      | rodio for SC progressive streams + librespot 0.8 for Spotify. One canonical volume curve (60 dB log) so backend switches don't jolt the levels. |
 | SoundCloud        | Public `client_id` auto-detected from the web player. Search, track resolve, related-tracks feed. No login. |
 | Spotify           | OAuth PKCE (user brings their own Developer Client ID). Search, liked songs, artist/album detail. Playback via librespot — **requires Spotify Premium**. |
+| the hi-res provider             | Hi-res FLAC search + **download-to-library**: whole albums, single tracks, and any SC/Spotify track via strict the hi-res provider match. Delta downloads — re-running an album only fetches the missing tracks; album pages track how much is already on disk. Tags + cover art are embedded at download time (the CDN streams arrive untagged; the API payload is the metadata source). Token auth: paste your `auth token` from the logged-in the provider web player session (the hi-res provider disabled 3rd-party email/password login). FLAC-first, MP3 only as a last resort; Library → Local badges + filters lossless vs lossy. **Requires a the hi-res provider Studio subscription.** Details: [docs/hires-provider.md](docs/hires-provider.md). |
 | Discovery         | Cross-provider candidate merge from SoundCloud's `/related` and ListenBrainz's similarity graph, optional Last.fm third source. Dedup by (artist, title), provider badges per row. |
 | Queue             | Auto-advance watcher (polls `has_source` falling-edge). Manual next/prev/stop. |
 | Pages             | Home (activity feed), Discover, Search, Library, Settings, Album detail, Artist detail with tabs. |

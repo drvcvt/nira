@@ -262,7 +262,12 @@ impl EnrichmentClient {
         }
         let limit = limit.clamp(1, 100);
         let key = format!("lb:listens:{username}:{limit}");
-        if let Some(cached) = self.cache().get(&key)
+        // Short freshness window: this is the user's own listen feed — the
+        // cache-wide 24 h TTL made Home's "Listened lately" look frozen
+        // (tracks nira itself scrobbled never showed up).
+        if let Some(cached) = self
+            .cache()
+            .get_fresher_than(&key, std::time::Duration::from_secs(5 * 60))
             && let Ok(parsed) = serde_json::from_str::<Vec<Listen>>(&cached)
         {
             return Ok(parsed);

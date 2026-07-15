@@ -1,0 +1,191 @@
+/* ── Right-click context menu ────────────────────────────────────────── */
+
+.ctx-overlay {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  border: none;
+  cursor: default;
+  z-index: 10000;
+}
+
+.ctx-menu {
+  position: fixed;
+  z-index: 10001;
+  min-width: 240px;
+  max-width: 300px;
+  /* Insurance for tiny windows — the anchor-flip in ctx_menu.rs keeps the
+     menu on-screen; this keeps it scrollable if it's taller than the view. */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  /* Floating menu — two brightness steps above the canvas. */
+  background: var(--raise2);
+  border-radius: var(--r);
+  padding: 5px;
+  font-size: 13px;
+  color: var(--text);
+  /* --line is transparent by design (no borders anywhere), but a menu
+     needs visible group separation — a faint fg wash reads as a
+     brightness step on raise2, not as a border. */
+  --ctx-line: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+
+.ctx-header {
+  padding: 8px 10px 9px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--ctx-line);
+}
+
+.ctx-title {
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+
+.ctx-sub {
+  margin-top: 3px;
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+
+.ctx-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 7px 10px;
+  border-radius: var(--rs);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 110ms ease, color 110ms ease;
+}
+
+.ctx-item:hover {
+  background: var(--raise3);
+}
+
+.ctx-item:hover .ctx-item-sub {
+  color: var(--text-muted);
+}
+
+.ctx-item:hover .ctx-icon {
+  color: var(--text);
+}
+
+.ctx-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  color: var(--text-muted);
+  font-size: 13px;
+  transition: color 110ms ease;
+}
+
+.ctx-icon.accented { color: var(--like); }
+.ctx-item:hover .ctx-icon.accented { color: var(--like-soft); }
+
+.ctx-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ctx-item-label {
+  line-height: 1.2;
+  font-weight: 550;
+}
+
+.ctx-item-sub {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.2;
+  transition: color 110ms ease;
+}
+
+.ctx-sep {
+  height: 1px;
+  background: var(--ctx-line);
+  margin: 4px 6px;
+}
+
+/* Old glyph class — kept so previously rendered states don't go blank
+   if any caller still uses it. */
+.ctx-glyph {
+  display: inline-block;
+  width: 14px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+
+/* ── Download toast (bottom-left, above the player bar) and
+      playback-error toast (bottom-right, same look) ─────────── */
+
+.download-toast,
+.playback-toast {
+  position: fixed;
+  bottom: calc(var(--player-h) + var(--player-margin) * 2 + 8px);
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(440px, calc(100vw - var(--sidebar-w) - 40px));
+  padding: 10px 12px 10px 14px;
+  border-radius: var(--r);
+  background: var(--raise2);
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.download-toast { left: calc(var(--sidebar-w) + var(--player-margin)); }
+.playback-toast { right: var(--player-margin); }
+
+.download-toast-glyph,
+.playback-toast-glyph { color: var(--sub); font-size: 0.85rem; }
+
+.download-toast-msg,
+.playback-toast-msg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-toast-close {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--rs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.download-toast-close:hover { color: var(--text); background: var(--raise3); }

@@ -1,0 +1,17 @@
+/* Narrow-window degradation for the player bar: shed the right cluster
+   piece by piece so the title and transport never get crushed (tiled
+   half-screen windows). Lives at the end of the file so it wins the
+   cascade against the base rules above. */
+@media (max-width: 1250px) {
+  .player-source { display: none; }
+}
+@media (max-width: 1100px) {
+  .vol-pct { display: none; }
+  .vol-slider { width: 70px; }
+  .player-center { min-width: 240px; }
+  .player { gap: 12px; }
+}
+@media (max-width: 950px) {
+  .volume { display: none; }
+  .player-like-btn { display: none; }
+}

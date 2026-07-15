@@ -118,6 +118,15 @@ impl SpotifyBackend {
 
     pub fn stop(&self) {
         self.player.stop();
+        // Mirror the state synchronously instead of waiting for librespot's
+        // `Stopped` event — the queue watcher polls `has_track` and a stale
+        // `true` during a track switch reads as "the new load committed".
+        if let Ok(mut s) = self.state.write() {
+            s.has_track = false;
+            s.is_paused = false;
+            s.position_ms = 0;
+            s.last_position_at = None;
+        }
     }
 
     /// Jump to a millisecond offset inside the current track. Triggers a

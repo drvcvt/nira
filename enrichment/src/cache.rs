@@ -57,10 +57,19 @@ impl TtlCache {
     }
 
     pub fn get(&self, key: &str) -> Option<String> {
+        self.get_fresher_than(key, self.ttl)
+    }
+
+    /// Like `get`, but with a caller-supplied maximum age (never longer than
+    /// the cache-wide TTL). For data that must go stale faster than the
+    /// default — e.g. the user's own listen feed, which otherwise looks
+    /// frozen for a day.
+    pub fn get_fresher_than(&self, key: &str, max_age: Duration) -> Option<String> {
         let map = self.inner.lock().ok()?;
         let entry = map.get(key)?;
         let now = now_unix();
-        if now.saturating_sub(entry.inserted_at_unix) > self.ttl.as_secs() {
+        let max_secs = max_age.as_secs().min(self.ttl.as_secs());
+        if now.saturating_sub(entry.inserted_at_unix) > max_secs {
             None
         } else {
             Some(entry.value.clone())

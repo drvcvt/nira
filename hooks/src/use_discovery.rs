@@ -30,6 +30,9 @@ pub struct UseDiscovery {
     pub bridge: Signal<Option<CrossPlatformMatch>>,
     pub is_searching: Signal<bool>,
     pub error: Signal<Option<String>>,
+    /// Bumped per run/bridge so an older, slower lookup can never overwrite
+    /// the results of a newer one — last request wins.
+    generation: Signal<u64>,
     engine: Arc<DiscoveryEngine>,
 }
 
@@ -64,12 +67,19 @@ impl UseDiscovery {
         let mut bridge = self.bridge;
         let mut is_searching = self.is_searching;
         let mut error = self.error;
+        let mut generation = self.generation;
+        let generation_at_start = generation.peek().wrapping_add(1);
+        generation.set(generation_at_start);
         spawn(async move {
             is_searching.set(true);
             error.set(None);
             results.set(Vec::new());
             bridge.set(None);
-            match engine.similar_to(seed).await {
+            let outcome = engine.similar_to(seed).await;
+            if *generation.peek() != generation_at_start {
+                return; // superseded by a newer lookup
+            }
+            match outcome {
                 Ok(rs) => {
                     if rs.is_empty() {
                         error.set(Some(
@@ -102,10 +112,16 @@ impl UseDiscovery {
         let mut bridge = self.bridge;
         let mut is_searching = self.is_searching;
         let mut error = self.error;
+        let mut generation = self.generation;
+        let generation_at_start = generation.peek().wrapping_add(1);
+        generation.set(generation_at_start);
         spawn(async move {
             is_searching.set(true);
             error.set(None);
             let m = engine.cross_platform_bridge(source).await;
+            if *generation.peek() != generation_at_start {
+                return; // superseded by a newer lookup
+            }
             if !m.has_other_provider() {
                 error.set(Some(
                     "No match on another provider — try a more popular track.".into(),
@@ -128,6 +144,7 @@ pub fn use_discovery() -> UseDiscovery {
     let bridge = use_signal(|| None::<CrossPlatformMatch>);
     let is_searching = use_signal(|| false);
     let error = use_signal(|| None::<String>);
+    let generation = use_signal(|| 0u64);
 
     UseDiscovery {
         mode,
@@ -136,6 +153,7 @@ pub fn use_discovery() -> UseDiscovery {
         bridge,
         is_searching,
         error,
+        generation,
         engine,
     }
 }

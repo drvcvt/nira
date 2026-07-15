@@ -7,10 +7,12 @@
 pub mod bottombar;
 pub mod button;
 pub mod ctx_menu;
+pub mod download_toast;
 pub mod searchbar;
 pub mod sidebar;
 
 pub use button::{Button, ButtonSize, ButtonVariant};
+pub use download_toast::DownloadToast;
 pub use searchbar::SearchBar;
 
 /// Which top-level view is currently active.

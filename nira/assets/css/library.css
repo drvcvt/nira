@@ -1,0 +1,181 @@
+/* ─── liked-songs UI ──────────────────────────────────────── */
+
+.player-like-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 140ms ease, transform 80ms ease, background 140ms ease;
+  font-size: 1rem;
+}
+
+.player-like-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--raise2);
+}
+
+.player-like-btn:active:not(:disabled) { transform: scale(0.92); }
+
+.player-like-btn:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+.player-like-btn.liked {
+  color: var(--text);
+}
+
+.player-like-btn.liked:hover:not(:disabled) {
+  background: var(--raise2);
+}
+
+/* Library tabs */
+.lib-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 12px 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.lib-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-radius: var(--rs);
+  color: var(--text-muted);
+  padding: 9px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.86rem;
+  letter-spacing: 0.01em;
+  transition: color 150ms ease, background 150ms ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lib-tab:hover { color: var(--text); background: var(--raise1); }
+
+.lib-tab.active {
+  color: var(--text);
+  background: var(--raise2);
+}
+
+.lib-tab-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.74rem;
+  color: var(--text-faint);
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  background: var(--raise2);
+}
+
+.lib-tab.active .lib-tab-count {
+  color: var(--text);
+  background: var(--raise3);
+}
+
+/* Local-tab header: intro copy left, Rescan action right. */
+.lib-local-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.lib-local-head .hint { margin: 0; }
+
+/* Local tab album grid — reuses the detail-page .album-card look; the
+   page provides its own horizontal padding, so drop the grid's. */
+.album-grid.local-album-grid {
+  padding: 4px 0 14px;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+}
+
+/* Inline saved-at chip in liked rows */
+.track-saved-at {
+  font-family: inherit;
+  font-size: 0.7rem;
+  color: var(--text-faint);
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+  margin-right: 6px;
+}
+
+/* Unlike heart button on liked rows */
+.track-row-unlike {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--like);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  margin-left: 4px;
+  opacity: 0.65;
+  transition: opacity 140ms ease, background 140ms ease;
+}
+
+.track-row-unlike:hover {
+  opacity: 1;
+  background: var(--raise2);
+}
+
+/* Ctx-menu heart glyph when already liked */
+.ctx-glyph.liked { color: var(--like); }
+
+
+/* ── Local tab: album groups ────────────────────────────── */
+
+.lib-album { margin-bottom: 10px; }
+
+.lib-album-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 20px 0 6px;
+  min-width: 0;
+}
+
+.lib-album-title {
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lib-album-meta {
+  font-size: 0.68rem;
+  color: var(--faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Local tab: actions cluster + lossy-format badge */
+.lib-local-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.track-badge-lossy {
+  color: var(--faint);
+  opacity: 0.8;
+}

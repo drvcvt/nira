@@ -80,10 +80,6 @@ impl UsePlayer {
         self.snapshot.read().clone()
     }
 
-    pub fn play_test_tone(&self) {
-        self.player.play_test_tone();
-    }
-
     /// Hand an in-memory audio buffer to the engine. Callers (typically the
     /// search page after downloading the SC stream URL) own the bytes and
     /// surrender them here.
@@ -131,17 +127,22 @@ impl UsePlayer {
         self.player.clear_history()
     }
 
-    /// Convenience for the transport-bar play button. Test-tone when nothing
-    /// is loaded; pause/resume otherwise.
-    pub fn toggle(&self) {
-        let snap = self.snapshot();
+    /// Convenience for the transport-bar play button. Reads the *live*
+    /// engine snapshot, not the polled signal — that one can lag by up to
+    /// 500 ms, long enough to pause a paused player or treat a just-committed
+    /// track as "nothing loaded". Returns `false` when no source is loaded
+    /// so the caller can start the queue instead.
+    pub fn toggle(&self) -> bool {
+        let snap = self.player.snapshot();
         if !snap.has_source {
-            self.play_test_tone();
-        } else if snap.is_paused {
+            return false;
+        }
+        if snap.is_paused {
             self.resume();
         } else {
             self.pause();
         }
+        true
     }
 }
 

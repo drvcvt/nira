@@ -1,0 +1,615 @@
+/* ─── floating player bar (aegis-style) ────────────────── */
+
+.player {
+  position: absolute;
+  left: calc(var(--sidebar-w) + var(--player-margin));
+  right: var(--player-margin);
+  bottom: var(--player-margin);
+  height: var(--player-h);
+  z-index: 10;
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2.4fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 20px;
+  /* 14px horizontal matches the vertical gap that .player-art
+     leaves around itself ((player-h - art-h) / 2), so the cover has
+     equal breathing room on the left, top and bottom. */
+  padding: 0 14px;
+
+  /* Floating card — one brightness step above the canvas, nothing else. */
+  background: var(--raise1);
+  border-radius: var(--r-xl);
+}
+
+/* ─── left: art + title + meta ──────────────────────────── */
+
+.player-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.player-art {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--rs);
+  background: var(--raise2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: 1.2rem;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.player-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.player-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.player-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.player-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.player-meta {
+  margin-top: 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── center: transport + progress ──────────────────────── */
+
+.player-center {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: stretch;
+  /* center, not stretch — with the max-width in play, stretch pins the
+     whole transport block to the left of the grid track on wide windows. */
+  justify-self: center;
+  min-width: 320px;
+  max-width: 760px;
+  width: 100%;
+}
+
+.player-transport {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+}
+
+.player-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  /* Integer px — em cascades give fractional sizes that rasterize the
+     glyph off the pixel grid and read as "slightly off-center". */
+  font-size: 14px;
+  transition: color 150ms ease, background 150ms ease, transform 80ms ease;
+}
+
+.player-btn:hover:not(:disabled) { color: var(--text); }
+.player-btn:active:not(:disabled) { transform: scale(0.94); }
+.player-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.player-btn.active {
+  color: var(--text);
+  background: var(--raise2);
+}
+
+.player-btn.repeat-one { position: relative; }
+
+.player-btn.repeat-one::after {
+  content: "1";
+  position: absolute;
+  right: 5px;
+  bottom: 4px;
+  color: var(--text);
+  font-size: 0.52rem;
+  font-weight: 800;
+}
+
+/* Primary play button — the ONE inverted chip-on state in the player. */
+.player-btn.play {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: var(--chip-on-fg);
+  background: var(--chip-on);
+  margin: 0 6px;
+  font-size: 15px;
+  font-weight: 700;
+  transition: background 150ms ease, transform 140ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* The play triangle is optically left-heavy — nudge it onto the visual
+   center of the disc. The pause glyph is symmetric and needs nothing. */
+.player-btn.play .fa-play { transform: translateX(1px); }
+
+.player-btn.play:hover:not(:disabled) {
+  color: var(--chip-on-fg);
+  background: color-mix(in srgb, var(--chip-on) 85%, var(--bg));
+  transform: scale(1.05);
+}
+
+.player-btn.play:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.player-btn.play:disabled {
+  color: var(--text-faint);
+  background: var(--surface);
+}
+
+/* Progress row — plain tabular times bracketing a thin track. Both labels
+   get the SAME fixed width so the slider sits optically centered under the
+   transport cluster instead of drifting with label length. */
+.player-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.player-time {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  min-width: 44px;
+  transition: color 160ms ease;
+}
+
+.player-time.now { text-align: right; }
+.player-time.total { text-align: left; }
+
+.player-time.now.active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Progress slider — a real <input type=range> sits on top of a styled
+   track. We hide the native chrome and paint the fill via
+   --progress (set per-render on the wrapper). Bigger hit area than the
+   old div-track so scrubbing is actually grabbable. */
+.player-progress {
+  flex: 1;
+  position: relative;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  --progress: 0%;
+}
+
+.player-progress::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 5px;
+  border-radius: var(--r-full);
+  background: var(--raise3);
+  pointer-events: none;
+  transition: height 140ms ease;
+}
+
+.player-progress::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: var(--progress);
+  height: 5px;
+  border-radius: var(--r-full);
+  background: var(--fg);
+  pointer-events: none;
+  /* No width transition — the snapshot ticks every 100-500ms, so
+     interpolating in between forced webkit to repaint the bar at vsync
+     for no audible/visible benefit. The hover height bump is fine to
+     animate (one-shot). */
+  transition: height 140ms ease;
+}
+
+.player-progress:hover::before,
+.player-progress:hover::after { height: 7px; }
+
+.player-progress-input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.player-progress-input:disabled { cursor: default; }
+
+.player-progress-input::-webkit-slider-runnable-track {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  height: 18px;
+  border: none;
+}
+
+.player-progress-input::-moz-range-track {
+  background: transparent;
+  height: 18px;
+  border: none;
+}
+
+.player-progress-input::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  border: none;
+  margin-top: 0;
+  opacity: 0;
+  transition: opacity 140ms ease, transform 140ms ease;
+  cursor: grab;
+}
+
+.player-progress-input::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  border: none;
+  opacity: 0;
+  transition: opacity 140ms ease, transform 140ms ease;
+  cursor: grab;
+}
+
+.player-progress:hover .player-progress-input::-webkit-slider-thumb,
+.player-progress-input:focus-visible::-webkit-slider-thumb,
+.player-progress-input:active::-webkit-slider-thumb { opacity: 1; transform: scale(1.05); }
+
+.player-progress:hover .player-progress-input::-moz-range-thumb,
+.player-progress-input:focus-visible::-moz-range-thumb,
+.player-progress-input:active::-moz-range-thumb { opacity: 1; transform: scale(1.05); }
+
+.player-progress-input:disabled::-webkit-slider-thumb { display: none; }
+.player-progress-input:disabled::-moz-range-thumb { display: none; }
+.player-progress-input:focus-visible { outline: none; }
+
+/* ─── right: source tag + volume ───────────────────────── */
+
+.player-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  min-width: 0;
+}
+
+.player-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: lowercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.player-source-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  display: inline-block;
+}
+
+/* Source identity comes from the label text — dots stay neutral. */
+.player-source-dot[data-provider="Spotify"],
+.player-source-dot[data-provider="SoundCloud"],
+.player-source-dot[data-provider="Local"]      { background: var(--text-faint); }
+
+.player-queue-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--rs);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease, transform 80ms ease;
+}
+
+.player-queue-btn:hover,
+.player-queue-btn.open {
+  color: var(--text);
+  background: var(--raise2);
+}
+
+.player-queue-btn:active { transform: scale(0.96); }
+
+.queue-popover {
+  position: absolute;
+  right: 14px;
+  bottom: calc(100% + 10px);
+  width: min(460px, calc(100vw - var(--sidebar-w) - 42px));
+  max-height: min(430px, calc(100vh - var(--player-h) - 90px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  /* Two steps above the canvas — floats above the raise1 player bar. */
+  background: var(--raise2);
+}
+
+.queue-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.queue-popover-head h3 {
+  margin: 1px 0 0;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.queue-eyebrow,
+.queue-total {
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.queue-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.queue-chip {
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.queue-chip.on {
+  color: var(--chip-on-fg);
+  background: var(--chip-on);
+}
+
+.queue-clear-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.queue-clear-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--raise3);
+}
+
+.queue-clear-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.queue-row {
+  display: grid;
+  grid-template-columns: 28px 38px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 6px 8px;
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.queue-row:hover,
+.queue-row.current {
+  background: var(--raise3);
+  color: var(--text);
+}
+
+.queue-row.current .queue-row-index { color: var(--text); }
+
+.queue-row-index,
+.queue-row-duration {
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-row-art {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  background: var(--raise3);
+  color: var(--text-faint);
+}
+
+.queue-row-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.queue-row-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.queue-row-title,
+.queue-row-artist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-row-title {
+  color: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.queue-row-artist { font-size: 0.72rem; color: var(--text-muted); }
+
+.queue-row-badge {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  background: var(--raise3);
+  color: var(--text-faint);
+  font-size: 0.66rem;
+  text-align: center;
+}
+
+
+.queue-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 120px;
+  color: var(--text-faint);
+}
+
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.vol-icon {
+  width: 18px;
+  text-align: center;
+  font-size: 0.85em;
+  color: var(--text-faint);
+}
+
+.vol-slider {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 96px;
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--raise2);
+  outline: none;
+  cursor: pointer;
+  border: none;
+}
+
+.vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--text);
+  cursor: pointer;
+  border: none;
+}
+
+.vol-slider::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--text);
+  cursor: pointer;
+  border: none;
+}
+
+.vol-pct {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+  text-align: right;
+}
+

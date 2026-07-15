@@ -23,7 +23,6 @@ pub fn Discover() -> Element {
     let is_searching = *disc.is_searching.read();
     let is_loading_track = *queue.is_loading_track.read();
     let disc_error = disc.error.read().clone();
-    let queue_error = queue.error.read().clone();
     let has_input = !input_value.trim().is_empty();
     let has_results = !results.is_empty();
     let bridge_match = disc.bridge.read().clone();
@@ -114,7 +113,7 @@ pub fn Discover() -> Element {
                 }
             }
 
-            if let Some(err) = disc_error.as_ref().or(queue_error.as_ref()) {
+            if let Some(err) = disc_error.as_ref() {
                 div { class: "search-error", "{err}" }
             }
 
@@ -378,7 +377,7 @@ fn DiscoveryRow(result: DiscoveryResult, on_play: EventHandler<()>) -> Element {
             },
             div { class: "track-cover",
                 if !cover.is_empty() {
-                    img { src: "{cover}", alt: "", loading: "lazy" }
+                    img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }
                 } else {
                     div { class: "track-cover-fallback",
                         i { class: "fa-solid fa-music" }
@@ -455,7 +454,7 @@ fn BridgeResult(bridge: CrossPlatformMatch) -> Element {
                 div { class: "bridge-track-card",
                     div { class: "track-cover",
                         if !source_cover.is_empty() {
-                            img { src: "{source_cover}", alt: "", loading: "lazy" }
+                            img { src: "{source_cover}", alt: "", loading: "lazy", decoding: "async" }
                         } else {
                             div { class: "track-cover-fallback",
                                 i { class: "fa-solid fa-music" }
@@ -518,7 +517,7 @@ fn BridgeTargetCard(track: Track, badge_class: String, badge_label: String) -> E
             div { class: "bridge-track-card",
                 div { class: "track-cover",
                     if !cover.is_empty() {
-                        img { src: "{cover}", alt: "", loading: "lazy" }
+                        img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }
                     } else {
                         div { class: "track-cover-fallback",
                             i { class: "fa-solid fa-music" }

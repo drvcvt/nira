@@ -10,6 +10,8 @@ members = [
     "provider-api",
     "provider-soundcloud",
     "provider-spotify",
+    "provider-hires-provider",
+    "provider-local",
     "enrichment",
     "discovery",
 ]
@@ -33,12 +35,15 @@ async-trait = "0.1"
 url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2 = "0.10"
+md-5 = "0.10"
+hex = "0.4"
 base64 = "0.22"
 rand = "0.9"
 webbrowser = "1"
 mpris-server = "0.9"
 librespot = { version = "0.8", default-features = false, features = ["rodio-backend", "rustls-tls-webpki-roots"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+lofty = "0.22"
 
 # Local crate dependencies — keep these in sync with workspace members.
 components = { path = "./components" }
@@ -49,6 +54,8 @@ config = { path = "./config" }
 provider-api = { path = "./provider-api" }
 provider-soundcloud = { path = "./provider-soundcloud" }
 provider-spotify = { path = "./provider-spotify" }
+provider-hires-provider = { path = "./provider-hires-provider" }
+provider-local = { path = "./provider-local" }
 enrichment = { path = "./enrichment" }
 discovery = { path = "./discovery" }
 

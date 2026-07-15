@@ -8,7 +8,7 @@ use components::SearchBar;
 use dioxus::prelude::*;
 use hooks::{Track, use_queue, use_search};
 
-use crate::parts::{ArtistLinks, PlayableLi, format_duration, provider_badge_class};
+use crate::parts::{ArtistLinks, ArtistResults, PlayableLi, format_duration, provider_badge_class};
 
 #[component]
 pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
@@ -17,6 +17,7 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
     let is_open = *open.read();
     let query = search.query.read().clone();
     let results = search.results.read().clone();
+    let artist_hits = search.artists.read().clone();
     let is_searching = *search.is_searching.read();
     let error = search.error.read().clone();
     let has_query = !query.trim().is_empty();
@@ -53,10 +54,19 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
                         on_input: move |v: String| search.query.set(v),
                         on_submit: {
                             let queue = queue.clone();
-                            let results = results.clone();
+                            let search = search.clone();
                             move |_| {
-                                if !results.is_empty() {
-                                    queue.play_list(results.clone(), 0);
+                                // Only act on results that belong to what's
+                                // typed right now — during the debounce/fetch
+                                // window the visible list is still the
+                                // previous query's, and Enter must not play
+                                // a track the user didn't search for.
+                                if *search.results_for.peek() != *search.query.peek() {
+                                    return;
+                                }
+                                let list = search.results.peek().clone();
+                                if !list.is_empty() {
+                                    queue.play_list(list, 0);
                                     open.set(false);
                                 }
                             }
@@ -79,14 +89,18 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
                     } else if !has_query {
                         div { class: "search-overlay-empty",
                             div { class: "search-overlay-empty-title", "Start typing" }
-                            div { class: "search-overlay-empty-copy", "SoundCloud first, Spotify when connected. Enter plays the first result." }
+                            div { class: "search-overlay-empty-copy", "the hi-res provider results lead when connected, then Spotify and SoundCloud. Enter plays the first result." }
                         }
-                    } else if results.is_empty() && !is_searching {
+                    } else if results.is_empty() && artist_hits.is_empty() && !is_searching {
                         div { class: "search-overlay-empty",
                             div { class: "search-overlay-empty-title", "No results" }
                             div { class: "search-overlay-empty-copy", "Try artist + title or a shorter query." }
                         }
                     } else {
+                        ArtistResults {
+                            artists: artist_hits,
+                            on_open: move |_| open.set(false),
+                        }
                         ul { class: "search-overlay-list",
                             for (idx, track) in results.iter().enumerate() {
                                 OverlayTrackRow {
@@ -125,7 +139,7 @@ fn OverlayTrackRow(
             on_played,
             div { class: "track-cover",
                 if !cover.is_empty() {
-                    img { src: "{cover}", alt: "", loading: "lazy" }
+                    img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }
                 } else {
                     div { class: "track-cover-fallback",
                         i { class: "fa-solid fa-music" }

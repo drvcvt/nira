@@ -61,6 +61,10 @@ pub struct SpotifyProvider {
     client_id: Arc<StdRwLock<String>>,
     tokens_path: Option<PathBuf>,
     token: Arc<RwLock<Option<TokenSet>>>,
+    /// Serializes token refreshes. Spotify rotates PKCE refresh tokens, so
+    /// two concurrent refreshes invalidate each other — the loser would
+    /// then delete the freshly-stored token and log the user out.
+    refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +100,7 @@ impl SpotifyProvider {
             client_id: Arc::new(StdRwLock::new(client_id)),
             tokens_path,
             token: Arc::new(RwLock::new(token)),
+            refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -270,6 +275,25 @@ impl SpotifyProvider {
         if now < token.expires_at_unix.saturating_sub(60) {
             return Ok(token.access_token);
         }
+
+        // Refresh path — one task at a time. Concurrent API calls at expiry
+        // are routine (artist page fires two fetches via join!), and Spotify
+        // rotates the refresh token on use.
+        let _refreshing = self.refresh_lock.lock().await;
+        // Re-check under the lock: whoever held it before us likely already
+        // refreshed, and the new token must not be refreshed again with the
+        // now-consumed old refresh_token.
+        let now = now_unix();
+        let token = self
+            .token
+            .read()
+            .await
+            .clone()
+            .ok_or(ProviderError::AuthRequired)?;
+        if now < token.expires_at_unix.saturating_sub(60) {
+            return Ok(token.access_token);
+        }
+
         let refresh = token
             .refresh_token
             .clone()
@@ -290,9 +314,16 @@ impl SpotifyProvider {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             tracing::warn!(%status, body = %body, "Spotify refresh failed");
-            // Token rotation failure: drop credentials so UI can re-prompt.
-            self.disconnect().await.ok();
-            return Err(ProviderError::AuthRequired);
+            // Only a definitive rejection invalidates the stored credentials.
+            // A transient 5xx/429/network blip must NOT delete the token file
+            // and force the user back through the OAuth browser flow.
+            if status == StatusCode::BAD_REQUEST || status == StatusCode::UNAUTHORIZED {
+                self.disconnect().await.ok();
+                return Err(ProviderError::AuthRequired);
+            }
+            return Err(ProviderError::Network(format!(
+                "Spotify token refresh failed ({status})"
+            )));
         }
         let tr: TokenResponseRaw = resp
             .json()
@@ -369,11 +400,14 @@ impl Provider for SpotifyProvider {
     async fn search(&self, q: &Query) -> ProviderResult<SearchResults> {
         let limit = q.limit.unwrap_or(20).clamp(1, 50);
         let encoded = url::form_urlencoded::byte_serialize(q.text.as_bytes()).collect::<String>();
-        let url = format!("{SP_API}/search?q={encoded}&type=track&limit={limit}");
+        let url = format!("{SP_API}/search?q={encoded}&type=track,artist&limit={limit}");
         let raw: SpSearchResp = self.fetch_json(&url).await?;
         Ok(SearchResults {
             tracks: raw.tracks.items.into_iter().map(sp_to_track).collect(),
-            artists: Vec::new(),
+            artists: raw
+                .artists
+                .map(|p| p.items.into_iter().map(sp_to_artist).collect())
+                .unwrap_or_default(),
         })
     }
 
@@ -413,12 +447,12 @@ impl Provider for SpotifyProvider {
 
     async fn artist_albums(&self, uri: &ArtistUri, limit: u32) -> ProviderResult<Vec<AlbumBrief>> {
         let id = id_from_uri(&uri.0, "artist")?;
-        // include_groups picks up everything Spotify lets us show. We pass
-        // `appears_on` so collabs show up too; the UI sorts them into the
-        // singles tab via the heuristic in AlbumBrief::album_type.
+        // Own releases only — `appears_on` used to be included and flooded
+        // the single 50-item page with various-artists compilations, pushing
+        // the artist's actual discography out entirely.
         let limit = limit.clamp(1, 50);
         let url = format!(
-            "{SP_API}/artists/{id}/albums?include_groups=album,single,compilation,appears_on&limit={limit}&market=from_token"
+            "{SP_API}/artists/{id}/albums?include_groups=album,single,compilation&limit={limit}&market=from_token"
         );
         let raw: SpAlbumsPage = self.fetch_json(&url).await?;
         Ok(raw.items.into_iter().map(sp_album_to_brief).collect())
@@ -427,7 +461,22 @@ impl Provider for SpotifyProvider {
     async fn album(&self, uri: &AlbumUri) -> ProviderResult<AlbumDetail> {
         let id = id_from_uri(&uri.0, "album")?;
         let url = format!("{SP_API}/albums/{id}?market=from_token");
-        let raw: SpAlbumFull = self.fetch_json(&url).await?;
+        let mut raw: SpAlbumFull = self.fetch_json(&url).await?;
+        // The embedded tracks paging object caps at 50 — follow `next` so
+        // long albums/compilations show their full tracklist. The page cap
+        // is a runaway guard (~450 tracks total).
+        let mut next = raw.tracks.next.take();
+        let mut pages = 0;
+        while let Some(page_url) = next {
+            if pages >= 8 {
+                tracing::warn!(album = %id, "album tracklist truncated at page cap");
+                break;
+            }
+            pages += 1;
+            let page: SpAlbumTracksPage = self.fetch_json(&page_url).await?;
+            raw.tracks.items.extend(page.items);
+            next = page.next;
+        }
         Ok(sp_album_to_detail(raw))
     }
 
@@ -447,7 +496,7 @@ impl Provider for SpotifyProvider {
                 uri: ArtistUri(format!("spotify:artist:{}", a.id)),
                 provider: ProviderId::Spotify,
                 name: a.name,
-                image_url: a.images.into_iter().next().map(|i| i.url),
+                image_url: sp_mid_image(a.images),
             })
             .collect())
     }
@@ -651,6 +700,13 @@ fn id_from_uri(uri: &str, kind: &str) -> ProviderResult<String> {
 #[derive(Deserialize)]
 struct SpSearchResp {
     tracks: SpTrackPage,
+    #[serde(default)]
+    artists: Option<SpArtistPage>,
+}
+
+#[derive(Deserialize)]
+struct SpArtistPage {
+    items: Vec<SpArtist>,
 }
 
 #[derive(Deserialize)]
@@ -722,10 +778,20 @@ fn sp_to_track(sp: SpTrack) -> Track {
             title: sp.album.name,
         }),
         duration: Duration::from_millis(sp.duration_ms),
-        cover_url: sp.album.images.into_iter().next().map(|i| i.url),
+        cover_url: sp_mid_image(sp.album.images),
         mbid: None,
         added_at: None,
     }
+}
+
+/// Spotify orders `images` largest-first (typically 640/300/64). Cards and
+/// rows render covers at ~170 px, so the middle size decodes ~4× cheaper
+/// than the 640 px original with no visible loss. Detail heroes keep the
+/// full-size first entry.
+fn sp_mid_image(images: Vec<SpImage>) -> Option<String> {
+    let mut it = images.into_iter();
+    let first = it.next();
+    it.next().or(first).map(|i| i.url)
 }
 
 fn sp_to_artist(raw: SpArtist) -> Artist {
@@ -733,7 +799,7 @@ fn sp_to_artist(raw: SpArtist) -> Artist {
         uri: ArtistUri(format!("spotify:artist:{}", raw.id)),
         provider: ProviderId::Spotify,
         name: raw.name,
-        image_url: raw.images.into_iter().next().map(|i| i.url),
+        image_url: sp_mid_image(raw.images),
         genres: raw.genres,
         permalink_url: raw.external_urls.spotify,
     }
@@ -767,7 +833,7 @@ fn sp_album_to_brief(a: SpAlbumBrief) -> AlbumBrief {
             .map(|x| x.name)
             .collect::<Vec<_>>()
             .join(", "),
-        cover_url: a.images.into_iter().next().map(|i| i.url),
+        cover_url: sp_mid_image(a.images),
         release_year: a.release_date.as_deref().and_then(year_from_release),
         total_tracks: a.total_tracks,
         album_type: a
@@ -887,6 +953,9 @@ struct SpAlbumFull {
 struct SpAlbumTracksPage {
     #[serde(default)]
     items: Vec<SpAlbumTrack>,
+    /// Absolute URL of the next 50-track page, when the album has more.
+    #[serde(default)]
+    next: Option<String>,
 }
 
 #[derive(Deserialize)]

@@ -1,0 +1,17 @@
+# Kiorg project metadata
+# This file overrides the auto-detector when Kiorg cannot infer your build system.
+# Paths are relative to this file unless absolute.
+
+name = "nira"
+kind = "custom"
+cwd = "."
+
+# Build command shown by right-click "Build project" and Ctrl+Alt+B.
+build = "cargo build --release -j 1"
+
+# Run command shown by right-click "Run project" and Ctrl+Alt+R.
+# You can replace this with any executable/script/command line.
+run = "target/release/nira"
+
+[env]
+CARGO_BUILD_JOBS = "1"

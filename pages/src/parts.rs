@@ -6,7 +6,8 @@
 
 use dioxus::prelude::*;
 use hooks::{
-    AlbumRef, ArtistRef, ProviderId, Track, UseCtxMenu, use_ctx_menu, use_detail, use_queue,
+    AlbumRef, Artist, ArtistRef, ProviderId, Track, UseCtxMenu, uri_has_detail_page, use_ctx_menu,
+    use_detail, use_queue,
 };
 
 pub fn format_duration(d: std::time::Duration) -> String {
@@ -20,7 +21,52 @@ pub fn provider_badge_class(provider: ProviderId) -> &'static str {
     match provider {
         ProviderId::Spotify => "track-badge spotify",
         ProviderId::SoundCloud => "track-badge soundcloud",
+        ProviderId::the hi-res provider => "track-badge hires-provider",
         ProviderId::Local => "track-badge",
+    }
+}
+
+/// Artist search hits — avatar-pill row shared by the Search page and the
+/// global search overlay. Click opens the artist detail view; `on_open`
+/// lets the overlay close itself after navigating.
+#[component]
+pub fn ArtistResults(
+    artists: Vec<Artist>,
+    #[props(default)] on_open: Option<EventHandler<()>>,
+) -> Element {
+    let detail = use_detail();
+    if artists.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        div { class: "artist-results",
+            for a in artists.iter() {
+                button {
+                    key: "{a.uri.0}",
+                    class: "artist-result",
+                    r#type: "button",
+                    title: "{a.name} · {a.provider.label()}",
+                    onclick: {
+                        let uri = a.uri.clone();
+                        move |_| {
+                            detail.open_artist(uri.clone());
+                            if let Some(cb) = on_open.as_ref() {
+                                cb.call(());
+                            }
+                        }
+                    },
+                    span { class: "artist-result-avatar",
+                        if let Some(img) = a.image_url.as_ref() {
+                            img { src: "{img}", alt: "", loading: "lazy", decoding: "async" }
+                        } else {
+                            i { class: "fa-solid fa-user" }
+                        }
+                    }
+                    span { class: "artist-result-name", "{a.name}" }
+                    span { class: "artist-result-badge", "{a.provider.badge()}" }
+                }
+            }
+        }
     }
 }
 
@@ -43,16 +89,30 @@ pub fn PlayableLi(
     let queue = use_queue();
     let ctx = use_ctx_menu();
     let play_tracks = tracks.clone();
+    let key_tracks = tracks.clone();
+    let key_queue = queue.clone();
     let ctx_track = track.clone();
 
     rsx! {
         li {
             class: "{class}",
             title: "{title}",
+            // Keyboard path: rows are plain <li>s, so opt them into the tab
+            // order and mirror the click action on Enter.
+            tabindex: "0",
+            role: "button",
             onclick: move |_| {
                 queue.play_context(play_tracks.clone(), index);
                 if let Some(cb) = on_played.as_ref() {
                     cb.call(());
+                }
+            },
+            onkeydown: move |e: KeyboardEvent| {
+                if e.key() == Key::Enter {
+                    key_queue.play_context(key_tracks.clone(), index);
+                    if let Some(cb) = on_played.as_ref() {
+                        cb.call(());
+                    }
                 }
             },
             oncontextmenu: move |e: Event<MouseData>| open_track_context(ctx, e, ctx_track.clone()),
@@ -105,7 +165,7 @@ pub fn ArtistLinks(artists: Vec<ArtistRef>) -> Element {
             if idx > 0 {
                 span { class: "artist-link-sep", ", " }
             }
-            if artist.uri.0.is_empty() {
+            if !uri_has_detail_page(&artist.uri.0) {
                 span { "{artist.name}" }
             } else {
                 button {
@@ -115,6 +175,14 @@ pub fn ArtistLinks(artists: Vec<ArtistRef>) -> Element {
                         move |e: Event<MouseData>| {
                             e.stop_propagation();
                             detail.open_artist(uri.clone());
+                        }
+                    },
+                    // Keyboard Enter activates the button's click natively;
+                    // without this stop the keydown ALSO bubbles to the
+                    // surrounding PlayableLi and starts playback.
+                    onkeydown: |e: KeyboardEvent| {
+                        if e.key() == Key::Enter {
+                            e.stop_propagation();
                         }
                     },
                     "{artist.name}"
@@ -130,7 +198,7 @@ pub fn ArtistLinks(artists: Vec<ArtistRef>) -> Element {
 pub fn AlbumLink(album: AlbumRef) -> Element {
     let detail = use_detail();
     let title = album.title.clone();
-    if album.uri.0.is_empty() {
+    if !uri_has_detail_page(&album.uri.0) {
         rsx! { span { "{title}" } }
     } else {
         rsx! {
@@ -141,6 +209,12 @@ pub fn AlbumLink(album: AlbumRef) -> Element {
                     move |e: Event<MouseData>| {
                         e.stop_propagation();
                         detail.open_album(uri.clone());
+                    }
+                },
+                // Same Enter-bubbling guard as ArtistLinks.
+                onkeydown: |e: KeyboardEvent| {
+                    if e.key() == Key::Enter {
+                        e.stop_propagation();
                     }
                 },
                 "{title}"

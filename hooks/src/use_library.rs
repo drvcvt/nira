@@ -85,7 +85,15 @@ fn spotify_refresh_allowed(now: u64) -> bool {
     true
 }
 
-pub fn use_library() -> UseLibrary {
+/// Install the liked-songs store as a root context singleton and kick the
+/// boot-time sync. Called once from `AppContext::install`.
+///
+/// Singleton on purpose: `use_library()` used to build per-component state,
+/// so Home and Library each ran their own paginated Spotify walk, and
+/// switching pages unmounted the component mid-walk — cancelling the fetch
+/// and restarting it from page 1 on the next mount, forever if the user
+/// never sat still long enough for a full pass.
+pub fn install_library() -> UseLibrary {
     let sp = use_context::<Arc<SpotifyProvider>>();
 
     let liked = use_signal(Vec::<Track>::new);
@@ -180,11 +188,20 @@ pub fn use_library() -> UseLibrary {
         sorted
     });
 
-    UseLibrary {
+    let library = UseLibrary {
         liked,
         recently_liked,
         is_loading,
         progress,
         error,
-    }
+    };
+    use_context_provider({
+        let library = library.clone();
+        move || library
+    });
+    library
+}
+
+pub fn use_library() -> UseLibrary {
+    use_context::<UseLibrary>()
 }

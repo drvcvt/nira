@@ -223,9 +223,16 @@ impl UseRecommendations {
 
         let load_generation = {
             let mut generation = self.generation;
-            let next = generation.peek().wrapping_add(1);
-            generation.set(next);
-            next
+            // Only a FULL refresh supersedes other loads. Selective rerolls
+            // merge nothing but their own shelf, so overlapping rerolls of
+            // different shelves are independent — sharing one generation
+            // used to strand the first reroll in a permanent loading state
+            // and throw its results away.
+            if only.is_none() {
+                let next = generation.peek().wrapping_add(1);
+                generation.set(next);
+            }
+            *generation.peek()
         };
 
         let mut shelves_sig = self.shelves;
@@ -240,6 +247,9 @@ impl UseRecommendations {
 
         mark_shelves_loading(&mut shelves_sig, &selected_shelves, only_id.as_deref());
         mark_mixes_loading(&mut mixes_sig, &selected_mixes, only_id.as_deref());
+        let marked_shelf_ids: Vec<String> =
+            selected_shelves.iter().map(|p| p.id.clone()).collect();
+        let marked_mix_ids: Vec<String> = selected_mixes.iter().map(|p| p.id.clone()).collect();
 
         spawn(async move {
             loading_sig.set(true);
@@ -257,6 +267,11 @@ impl UseRecommendations {
             dedupe_across_mixes(&mut loaded_mixes);
 
             if *generation_sig.peek() != load_generation {
+                // A full refresh superseded this load. Drop the results, but
+                // don't strand the rows we marked as loading — the refresh
+                // repaints them, and a stuck flag disables their buttons.
+                clear_shelf_loading_flags(&mut shelves_sig, &marked_shelf_ids);
+                clear_mix_loading_flags(&mut mixes_sig, &marked_mix_ids);
                 return;
             }
 
@@ -622,12 +637,28 @@ fn merge_loaded_shelves(
     loaded: Vec<RecommendationShelf>,
     only_id: Option<&str>,
 ) {
+    // Failed load with cached content on screen: keep showing the previous
+    // good tracks instead of blanking the row — the error still lands in
+    // `shelf.error` so the UI can surface it. Without this, hitting Refresh
+    // while offline wiped the whole visible dashboard into error rows.
+    let prev = shelves_sig.peek().clone();
+    let keep_prev_tracks = |mut shelf: RecommendationShelf| {
+        if shelf.tracks.is_empty()
+            && shelf.error.is_some()
+            && let Some(old) = prev.iter().find(|s| s.id == shelf.id)
+            && !old.tracks.is_empty()
+        {
+            shelf.tracks = old.tracks.clone();
+        }
+        shelf
+    };
     if only_id.is_none() {
-        shelves_sig.set(loaded);
+        shelves_sig.set(loaded.into_iter().map(keep_prev_tracks).collect());
         return;
     }
     let mut shelves = shelves_sig.peek().clone();
     for shelf in loaded {
+        let shelf = keep_prev_tracks(shelf);
         if let Some(existing) = shelves.iter_mut().find(|s| s.id == shelf.id) {
             *existing = shelf;
         } else {
@@ -642,12 +673,25 @@ fn merge_loaded_mixes(
     loaded: Vec<RecommendationMix>,
     only_id: Option<&str>,
 ) {
+    // Same failed-refresh guard as merge_loaded_shelves.
+    let prev = mixes_sig.peek().clone();
+    let keep_prev_tracks = |mut mix: RecommendationMix| {
+        if mix.tracks.is_empty()
+            && mix.error.is_some()
+            && let Some(old) = prev.iter().find(|m| m.id == mix.id)
+            && !old.tracks.is_empty()
+        {
+            mix.tracks = old.tracks.clone();
+        }
+        mix
+    };
     if only_id.is_none() {
-        mixes_sig.set(loaded);
+        mixes_sig.set(loaded.into_iter().map(keep_prev_tracks).collect());
         return;
     }
     let mut mixes = mixes_sig.peek().clone();
     for mix in loaded {
+        let mix = keep_prev_tracks(mix);
         if let Some(existing) = mixes.iter_mut().find(|m| m.id == mix.id) {
             *existing = mix;
         } else {
@@ -655,6 +699,36 @@ fn merge_loaded_mixes(
         }
     }
     mixes_sig.set(mixes);
+}
+
+/// Reset `is_loading` on the given shelf ids — used when a superseded load
+/// bails out so its rows don't stay stuck in a loading state.
+fn clear_shelf_loading_flags(sig: &mut Signal<Vec<RecommendationShelf>>, ids: &[String]) {
+    let mut shelves = sig.peek().clone();
+    let mut changed = false;
+    for shelf in shelves.iter_mut() {
+        if shelf.is_loading && ids.contains(&shelf.id) {
+            shelf.is_loading = false;
+            changed = true;
+        }
+    }
+    if changed {
+        sig.set(shelves);
+    }
+}
+
+fn clear_mix_loading_flags(sig: &mut Signal<Vec<RecommendationMix>>, ids: &[String]) {
+    let mut mixes = sig.peek().clone();
+    let mut changed = false;
+    for mix in mixes.iter_mut() {
+        if mix.is_loading && ids.contains(&mix.id) {
+            mix.is_loading = false;
+            changed = true;
+        }
+    }
+    if changed {
+        sig.set(mixes);
+    }
 }
 
 fn skeleton_shelf(plan: &ShelfPlan) -> RecommendationShelf {

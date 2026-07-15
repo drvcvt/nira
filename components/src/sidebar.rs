@@ -1,5 +1,6 @@
 use crate::Section;
 use dioxus::prelude::*;
+use hooks::use_detail;
 
 /// A `(section, label, font-awesome icon)` triple. Grouped into kopuz-style
 /// uppercase section headers so the sidebar visually distinguishes
@@ -56,6 +57,7 @@ pub fn Sidebar(section: Signal<Section>) -> Element {
 
 #[component]
 fn NavList(items: &'static [NavItem], section: Signal<Section>) -> Element {
+    let detail = use_detail();
     rsx! {
         nav { class: "side-nav",
             for item in items {
@@ -64,7 +66,13 @@ fn NavList(items: &'static [NavItem], section: Signal<Section>) -> Element {
                     onclick: {
                         let mut section = section;
                         let s = item.section;
-                        move |_| section.set(s)
+                        // Also drop any open artist/album detail — the detail
+                        // overlay otherwise shadows the section switch and
+                        // "click Home" appears to do nothing.
+                        move |_| {
+                            detail.close();
+                            section.set(s);
+                        }
                     },
                     span { class: "nav-glyph",
                         i { class: "{item.icon}" }

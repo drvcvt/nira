@@ -1,0 +1,744 @@
+/* ── Discover mode toggle + cross-platform bridge ────────────────────── */
+
+.mode-toggle {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 14px;
+}
+
+.mode-btn {
+  background: var(--raise1);
+  border: none;
+  color: var(--text-muted);
+  padding: 6px 14px;
+  border-radius: var(--rs);
+  cursor: pointer;
+  font: inherit;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.mode-btn:hover {
+  color: var(--text);
+  background: var(--raise2);
+}
+
+.mode-btn.active {
+  background: var(--chip-on);
+  color: var(--chip-on-fg);
+}
+
+.bridge-result {
+  margin-top: 18px;
+  padding: 14px;
+  background: var(--raise1);
+  border-radius: var(--r);
+}
+
+.bridge-seed {
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+}
+
+.bridge-matches {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bridge-match-btn {
+  background: var(--raise2);
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--rs);
+  cursor: pointer;
+  font: inherit;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: background 150ms ease;
+}
+
+.bridge-match-btn:hover {
+  background: var(--raise3);
+}
+
+
+/* ─────────────────────────────────────────────────────────── */
+/* ── Discover — orbital revamp ─────────────────────────────── */
+/* ─────────────────────────────────────────────────────────── */
+
+/* Per-source colours — used by the orbit dots, legend, and per-row
+   source pills. SC keeps its brand orange; LB borrows nira's accent
+   indigo because LB's own orange is too close to SC's; LF stays
+   on-brand red. Three perceptually distinct hues. */
+/* Per-source cues — grayscale brightness steps instead of brand hues.
+   The legend text carries the actual source names. */
+:root {
+  --src-sc: var(--fg);
+  --src-lb: var(--sub);
+  --src-lf: var(--faint);
+}
+
+/* Make the page fill the content area so the canvas can flex to the
+   floor. height:100% inherits from .content (which is grid 1fr ⇒ 100vh
+   minus chrome). When results land, the page just flows normally —
+   nothing inside fights flex:1. */
+.discover-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.discover-page > h1 { margin-bottom: 14px; }
+
+/* ── Mode toggle: underlined tabs, terminal-aligned ─────────── */
+
+.discover-modes {
+  display: flex;
+  gap: 0;
+  margin: 4px 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.discover-mode-tab {
+  background: transparent;
+  border: none;
+  border-radius: var(--rs);
+  color: var(--text-faint);
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.discover-mode-tab:hover { color: var(--text); background: var(--raise1); }
+
+.discover-mode-tab.active {
+  color: var(--text);
+  background: var(--raise2);
+  font-weight: 600;
+}
+
+/* ── Seed input row: monospace input + accent-glow button ──── */
+
+/* Discover seedbar uses the shared `.searchbar` singleton inside a
+   `.searchbar-row` container. The legacy `.discover-seedbar` /
+   `.discover-seed-input` / `.discover-seed-go` rules were removed when the
+   page migrated to the SearchBar component. */
+
+.discover-hint {
+  margin: 14px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+  max-width: 64ch;
+  line-height: 1.5;
+}
+
+/* ── Orbital canvas (empty + searching states) ──────────────── */
+
+.discover-canvas {
+  position: relative;
+  /* Bleed past .content's 32px horizontal padding and run flush with
+     the input above. No top margin = no gap; the atmosphere itself
+     fades in from the controls above via the masked ::after layer. */
+  margin: 0 -32px;
+  flex: 1;
+  min-height: 360px;
+  border: none;
+  border-radius: 0;
+  overflow: hidden;
+  /* container-type lets the rings size in cqh, so they breathe with
+     window resize without us recomputing pixels. */
+  container-type: size;
+  /* No background here — the glow lives on ::after with its own mask
+     so the canvas top can fade into the page without taking the rings
+     and dots with it. */
+  background: transparent;
+}
+
+/* Accent glow + bottom-anchored ellipse, masked to fade in from the top
+   so there's no perceptible canvas border against the controls above.
+   The ellipse sits in the lower 60% of the canvas — visually anchors
+   the scene toward the legend area rather than competing with the top
+   edge for attention. */
+.discover-canvas::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: none;
+  /* Long, soft fade-in from the top + matching tail at the bottom so
+     the atmosphere dissolves smoothly into the page in both directions.
+     30% top fade is deliberately generous — anything tighter shows a
+     visible glow boundary against the controls. */
+  mask-image: linear-gradient(to bottom,
+    transparent 0%, #000 30%, #000 95%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom,
+    transparent 0%, #000 30%, #000 95%, transparent 100%);
+}
+
+/* The starfield ::before also gets the same fade so its tiny dots
+   don't betray the rectangle. */
+.discover-canvas::before {
+  z-index: 0;
+  mask-image: linear-gradient(to bottom,
+    transparent 0%, #000 18%, #000 95%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom,
+    transparent 0%, #000 18%, #000 95%, transparent 100%);
+}
+
+/* Lift the orbital elements above the masked bg layers so the fade
+   only touches atmosphere, never the rings/core/legend/status. */
+.discover-canvas > .orbit,
+.discover-canvas > .orbit-core,
+.discover-canvas > .orbit-legend,
+.discover-canvas > .orbit-status { z-index: 1; }
+
+/* Starfield removed — the quiet canvas carries the scene on its own. */
+.discover-canvas::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: none;
+}
+
+/* A single grain overlay using SVG-as-data-URL would be lovely here but
+   browsers can balloon CPU on huge blur surfaces — keep it static. */
+
+/* Concentric rings sit centred. Each has a child .orbit-spinner that
+   rotates carrying the dot — the ring itself doesn't rotate, so any
+   label can ride along statically. */
+.orbit {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-radius: 50%;
+  border: 1px solid var(--raise2);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.orbit-sc { width: 46cqh; height: 46cqh; }
+.orbit-lb { width: 70cqh; height: 70cqh; }
+.orbit-lf { width: 94cqh; height: 94cqh; }
+
+.orbit-spinner {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  animation: orbit-rotate 32s linear infinite;
+  /* Hint the compositor to keep each spinner on its own GPU layer.
+     Don't combine with a static `transform: translateZ(0)` — that
+     mismatches the function list of the rotate() animation and webkit
+     stops animating entirely. will-change alone is enough. */
+  will-change: transform;
+}
+
+.orbit-lb .orbit-spinner { animation-duration: 56s; animation-direction: reverse; }
+.orbit-lf .orbit-spinner { animation-duration: 84s; }
+
+.discover-canvas.searching .orbit-sc .orbit-spinner { animation-duration: 6s; }
+.discover-canvas.searching .orbit-lb .orbit-spinner { animation-duration: 9s; }
+.discover-canvas.searching .orbit-lf .orbit-spinner { animation-duration: 12s; }
+
+.orbit-dot {
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transform: translateX(-50%);
+}
+
+/* Single-blur shadow per dot — the previous double-shadow setup added
+   a second blur pass per dot per frame. With three constantly-rotating
+   dots, halving the shadow work meaningfully drops paint cost. */
+.orbit-sc .orbit-dot { background: var(--src-sc); box-shadow: 0 0 10px var(--src-sc); }
+.orbit-lb .orbit-dot { background: var(--src-lb); box-shadow: 0 0 10px var(--src-lb); }
+.orbit-lf .orbit-dot { background: var(--src-lf); box-shadow: 0 0 10px var(--src-lf); }
+
+/* Centre: the void where the seed will land. Pulses gently when idle,
+   harder when searching. */
+.orbit-core {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 156px;
+  height: 156px;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 6px;
+  background: none;
+  pointer-events: none;
+}
+
+.orbit-core::after {
+  content: "";
+  position: absolute;
+  inset: 24px;
+  border: 1px solid var(--raise3);
+  border-radius: 50%;
+  animation: orbit-core-pulse 3.6s ease-in-out infinite;
+}
+
+.discover-canvas.searching .orbit-core::after {
+  animation-duration: 1.2s;
+  border-color: var(--faint);
+}
+
+.orbit-core-glyph {
+  font-size: 22px;
+  color: var(--text);
+}
+
+.orbit-core-label {
+  font-family: inherit;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.orbit-core-hint {
+  font-family: inherit;
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  max-width: 130px;
+  line-height: 1.4;
+}
+
+/* Three-line legend bottom-left of the canvas. Colour cues let users
+   read the same dots when they appear next to result rows. */
+.orbit-legend {
+  position: absolute;
+  bottom: 18px;
+  left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-family: inherit;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.orbit-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.orbit-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.orbit-legend-row[data-src="sc"] .orbit-legend-dot { background: var(--src-sc); color: var(--src-sc); }
+.orbit-legend-row[data-src="lb"] .orbit-legend-dot { background: var(--src-lb); color: var(--src-lb); }
+.orbit-legend-row[data-src="lf"] .orbit-legend-dot { background: var(--src-lf); color: var(--src-lf); }
+
+.orbit-legend-name {
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.orbit-legend-tail {
+  color: var(--text-faint);
+}
+
+/* Top-right status indicator — flips between "STANDBY" and the live
+   query progress, lets the empty state feel like a real instrument. */
+.orbit-status {
+  position: absolute;
+  top: 18px;
+  right: 22px;
+  font-family: inherit;
+  font-size: 0.66rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.orbit-status-led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  box-shadow: 0 0 0 0 transparent;
+}
+
+.discover-canvas.searching .orbit-status { color: var(--accent); }
+.discover-canvas.searching .orbit-status-led {
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+  animation: orbit-led-blink 0.9s steps(2, end) infinite;
+}
+
+@keyframes orbit-rotate {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes orbit-core-pulse {
+  0%, 100% { transform: scale(1);   opacity: 0.7; }
+  50%      { transform: scale(1.12); opacity: 1; }
+}
+
+@keyframes orbit-led-blink {
+  0%, 50%  { opacity: 1; }
+  51%, 100% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit-spinner,
+  .orbit-core::after,
+  .orbit-status-led { animation: none !important; }
+}
+
+/* ── Seed banner shown above results ────────────────────────── */
+
+.discover-seed-banner {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  align-items: center;
+  gap: 16px;
+  margin: 22px 0 14px;
+  padding: 14px 18px;
+  border-radius: var(--r);
+  background: var(--raise1);
+}
+
+/* Mini-orbit ornament for the banner — same vibe, tiny. */
+.discover-seed-mini {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+}
+
+.discover-seed-mini::before,
+.discover-seed-mini::after,
+.discover-seed-mini > span {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.discover-seed-mini::before { width: 24px; height: 24px; border: 1px solid var(--raise3); }
+.discover-seed-mini::after  { width: 40px; height: 40px; border: 1px solid var(--raise2); }
+.discover-seed-mini > span {
+  width: 12px;
+  height: 12px;
+  background: var(--fg);
+}
+
+.discover-seed-eyebrow {
+  font-size: 0.66rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--faint);
+  font-weight: 600;
+}
+
+.discover-seed-text {
+  margin-top: 2px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.discover-seed-stats {
+  margin-top: 4px;
+  font-family: inherit;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.discover-seed-stats .stats-src {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.discover-seed-stats .stats-src-sc  { color: var(--src-sc); }
+.discover-seed-stats .stats-src-lb  { color: var(--src-lb); }
+.discover-seed-stats .stats-src-lf  { color: var(--src-lf); }
+.discover-seed-stats .stats-src-off {
+  color: var(--text-faint);
+  text-decoration: underline;
+  text-decoration-color: var(--faint);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
+.discover-seed-stats .stats-sep { color: var(--text-faint); }
+
+.discover-seed-reroll {
+  background: var(--raise2);
+  border: none;
+  color: var(--text-muted);
+  padding: 6px 14px;
+  border-radius: var(--rs);
+  font: inherit;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.discover-seed-reroll:hover {
+  color: var(--text);
+  background: var(--raise3);
+}
+
+/* ── Discovery list rows ────────────────────────────────────── */
+
+.discovery-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.discovery-list .discovery-row-v2 {
+  display: grid;
+  grid-template-columns: 48px 1fr auto auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px 8px 10px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+  /* Reveal animation when results land */
+  animation: discover-row-in 360ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.discovery-list .discovery-row-v2:hover {
+  background: var(--raise1);
+}
+
+.discovery-list .discovery-row-v2:active { transform: scale(0.997); }
+
+/* Per-row stagger up to ~20 rows. After that everything reveals together;
+   the eye stops perceiving the cascade past that point anyway. */
+.discovery-list .discovery-row-v2:nth-child(1)  { animation-delay:  20ms; }
+.discovery-list .discovery-row-v2:nth-child(2)  { animation-delay:  50ms; }
+.discovery-list .discovery-row-v2:nth-child(3)  { animation-delay:  80ms; }
+.discovery-list .discovery-row-v2:nth-child(4)  { animation-delay: 110ms; }
+.discovery-list .discovery-row-v2:nth-child(5)  { animation-delay: 140ms; }
+.discovery-list .discovery-row-v2:nth-child(6)  { animation-delay: 170ms; }
+.discovery-list .discovery-row-v2:nth-child(7)  { animation-delay: 200ms; }
+.discovery-list .discovery-row-v2:nth-child(8)  { animation-delay: 230ms; }
+.discovery-list .discovery-row-v2:nth-child(9)  { animation-delay: 260ms; }
+.discovery-list .discovery-row-v2:nth-child(10) { animation-delay: 290ms; }
+
+@keyframes discover-row-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .discovery-list .discovery-row-v2 { animation: none !important; }
+}
+
+.discovery-row-v2 .track-cover {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--r-sm);
+}
+
+.discovery-row-v2 .track-title  { font-size: 0.9rem; }
+.discovery-row-v2 .track-artist { font-size: 0.76rem; }
+
+/* The three source dots — filled if that source contributed, faint
+   placeholder if not. Hover gives the active dots a tooltip via title. */
+.discovery-sources {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.discovery-source {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--raise2);
+  transition: transform 140ms ease;
+}
+
+.discovery-source.on { box-shadow: 0 0 10px currentColor; }
+.discovery-source.sc.on { background: var(--src-sc); color: var(--src-sc); }
+.discovery-source.lb.on { background: var(--src-lb); color: var(--src-lb); }
+.discovery-source.lf.on { background: var(--src-lf); color: var(--src-lf); }
+
+.discovery-row-v2:hover .discovery-source.on { transform: scale(1.18); }
+
+/* Score: smaller, mono, faint — secondary info. */
+.discovery-score-v2 {
+  font-family: inherit;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+  min-width: 28px;
+  text-align: right;
+}
+
+.discovery-row-v2:hover .discovery-score-v2 { color: var(--accent-soft); }
+
+/* Provider availability pills on the right keep the existing badge
+   tokens for cross-page consistency. */
+.discovery-providers {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── Bridge layout: two facing cards with a connector ───────── */
+
+.discover-bridge {
+  margin: 22px 0 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  gap: 0;
+  background: var(--raise1);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.bridge-side {
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.bridge-side-eyebrow {
+  font-family: inherit;
+  font-size: 0.66rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.bridge-side .bridge-side-eyebrow .bridge-provider-mark {
+  margin-left: 6px;
+  font-weight: 700;
+}
+
+.bridge-side .bridge-provider-mark { color: var(--text-muted); }
+
+.bridge-track-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: var(--r);
+  background: var(--raise2);
+}
+
+.bridge-track-card .track-cover {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--r-sm);
+}
+
+.bridge-track-card .track-title  { font-size: 0.92rem; }
+.bridge-track-card .track-artist { font-size: 0.76rem; }
+
+.bridge-target-btn {
+  text-align: left;
+  background: var(--raise2);
+  border: none;
+  border-radius: var(--r);
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+  padding: 0;
+  width: 100%;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.bridge-target-btn:hover {
+  background: var(--raise3);
+  transform: translateY(-1px);
+}
+
+.bridge-target-btn .bridge-track-card { background: transparent; border: none; padding: 10px 12px; }
+
+.bridge-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  position: relative;
+}
+
+.bridge-connector-glyph {
+  position: relative;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--raise3);
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bridge-empty {
+  padding: 14px;
+  background: var(--raise1);
+  border-radius: var(--r);
+  color: var(--text-faint);
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .discover-bridge {
+    grid-template-columns: 1fr;
+  }
+  .bridge-connector {
+    flex-direction: row;
+    padding: 8px 0;
+  }
+}
+

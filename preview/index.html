@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>nira — design preview</title>
+<!-- Static styling harness: real app CSS + bundled fonts, mock DOM.
+     Serve the repo root (python -m http.server) and open /preview/. -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+@font-face { font-family: "Geist"; src: url("/nira/assets/fonts/Geist-Variable.ttf") format("truetype"); font-weight: 100 900; font-display: block; }
+@font-face { font-family: "Geist Mono"; src: url("/nira/assets/fonts/GeistMono-Variable.ttf") format("truetype"); font-weight: 100 900; font-display: block; }
+@font-face { font-family: "Charter"; src: url("/nira/assets/fonts/Charter-Regular.ttf") format("truetype"); font-weight: 400; font-display: block; }
+@font-face { font-family: "Charter"; src: url("/nira/assets/fonts/Charter-Bold.ttf") format("truetype"); font-weight: 700; font-display: block; }
+</style>
+<script>
+  // Design harness: always load the real app CSS fresh (cache-busted),
+  // in the exact cascade order main.rs uses.
+  const cssFiles = ['base','sidebar','player','search','tracks','settings','home',
+                    'discover','menu','detail','library','buttons','responsive'];
+  const bust = Date.now();
+  for (const f of cssFiles) {
+    document.write(`<link rel="stylesheet" href="/nira/assets/css/${f}.css?t=${bust}">`);
+  }
+</script>
+<style>
+/* harness-only helpers */
+.mock-art { display: flex; align-items: center; justify-content: center;
+  width: 100%; height: 100%; background: var(--raise2); color: var(--faint); }
+</style>
+<script>
+  // Theme comes from ?theme=dark|light (or prefers-color-scheme) — no
+  // floating chrome; in the real app this lives in Settings → Appearance.
+  const saved = new URLSearchParams(location.search).get('theme') || localStorage.getItem('theme');
+  if (saved === 'dark' || saved === 'light') document.documentElement.dataset.theme = saved;
+  function setTheme(t) { document.documentElement.dataset.theme = t; localStorage.setItem('theme', t); }
+</script>
+</head>
+<body>
+
+<div class="shell">
+  <!-- ── sidebar ─────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">nira</div>
+    <div class="sidebar-section-label">Browse</div>
+    <nav class="side-nav">
+      <button class="nav-item active"><span class="nav-glyph"><i class="fa-solid fa-house"></i></span>Home</button>
+      <button class="nav-item"><span class="nav-glyph"><i class="fa-solid fa-compass"></i></span>Discover</button>
+      <button class="nav-item"><span class="nav-glyph"><i class="fa-solid fa-record-vinyl"></i></span>Library</button>
+    </nav>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-section-label">App</div>
+    <nav class="side-nav">
+      <button class="nav-item"><span class="nav-glyph"><i class="fa-solid fa-gear"></i></span>Settings</button>
+    </nav>
+  </aside>
+
+  <!-- ── content ─────────────────────────────────────── -->
+  <main class="content">
+    <section class="page home-page">
+      <h1>Home</h1>
+
+      <!-- stage -->
+      <section class="home-stage">
+        <div class="home-stage-art">
+          <div class="cover-card">
+            <div class="cover-card-art"><div class="mock-art"><i class="fa-solid fa-music fa-2x"></i></div></div>
+            <div class="cover-card-title">Deep Focus Mix</div>
+          </div>
+        </div>
+        <div class="home-stage-body">
+          <h2 class="home-stage-title">Made for you</h2>
+          <p class="home-stage-seed">based on <span>Bonobo, Tycho &amp; 3 more</span></p>
+          <p class="home-stage-sub">48 tracks across mixes, related picks and scenes.</p>
+          <div class="home-stage-actions">
+            <button class="sq-btn sq-md sq-btn-primary"><i class="fa-solid fa-play"></i> Play</button>
+            <button class="sq-btn sq-md sq-btn-ghost"><i class="fa-solid fa-shuffle"></i> Shuffle</button>
+            <button class="sq-btn sq-md sq-btn-ghost"><i class="fa-solid fa-dice"></i> Surprise</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- rail -->
+      <section class="home-rail">
+        <header class="home-rail-head">
+          <div class="home-rail-titles">
+            <span class="rail-eyebrow">Activity</span>
+            <h3 class="home-rail-title">Recently played</h3>
+            <p class="home-rail-sub">Your local play log, newest first.</p>
+          </div>
+        </header>
+        <div class="home-rail-row">
+          <button class="cover-card clickable">
+            <div class="cover-card-art"><div class="mock-art"><i class="fa-solid fa-music"></i></div><span class="track-badge">LOCAL</span></div>
+            <div class="cover-card-title">Kiara</div>
+            <div class="cover-card-sub">Bonobo</div>
+            <div class="cover-card-time">2 h ago</div>
+          </button>
+          <button class="cover-card clickable">
+            <div class="cover-card-art"><div class="mock-art"><i class="fa-solid fa-music"></i></div><span class="track-badge">SC</span></div>
+            <div class="cover-card-title">A Walk</div>
+            <div class="cover-card-sub">Tycho</div>
+            <div class="cover-card-time">5 h ago</div>
+          </button>
+          <button class="cover-card clickable">
+            <div class="cover-card-art"><div class="mock-art"><i class="fa-solid fa-music"></i></div><span class="track-badge">S</span></div>
+            <div class="cover-card-title">Cirrus</div>
+            <div class="cover-card-sub">Bonobo</div>
+            <div class="cover-card-time">1 d ago</div>
+          </button>
+          <button class="cover-card clickable">
+            <div class="cover-card-art"><div class="mock-art"><i class="fa-solid fa-music"></i></div></div>
+            <div class="cover-card-title">Open Eye Signal</div>
+            <div class="cover-card-sub">Jon Hopkins</div>
+            <div class="cover-card-time">2 d ago</div>
+          </button>
+          <button class="cover-card clickable">
+            <div class="cover-card-art"><div class="mock-art"><i class="fa-solid fa-music"></i></div></div>
+            <div class="cover-card-title">Gravity</div>
+            <div class="cover-card-sub">Nils Frahm</div>
+            <div class="cover-card-time">3 d ago</div>
+          </button>
+        </div>
+      </section>
+
+      <!-- track list (search/library rows) -->
+      <section class="home-rail">
+        <header class="home-rail-head">
+          <div class="home-rail-titles">
+            <span class="rail-eyebrow">Rows</span>
+            <h3 class="home-rail-title">Track rows</h3>
+          </div>
+        </header>
+        <ul class="track-list">
+          <li class="track-row">
+            <div class="track-cover"><div class="mock-art"><i class="fa-solid fa-music"></i></div></div>
+            <div class="track-meta">
+              <div class="track-title">Ketto</div>
+              <div class="track-artist">Bonobo — Days to Come</div>
+            </div>
+            <span class="track-duration">4:31</span>
+            <span class="track-badge">LOCAL</span>
+          </li>
+          <li class="track-row">
+            <div class="track-cover"><div class="mock-art"><i class="fa-solid fa-music"></i></div></div>
+            <div class="track-meta">
+              <div class="track-title">Montparnasse</div>
+              <div class="track-artist">Kiasmos</div>
+            </div>
+            <span class="track-duration">6:22</span>
+            <span class="track-badge">SC</span>
+          </li>
+        </ul>
+      </section>
+
+      <!-- feed -->
+      <section class="home-rail home-feed">
+        <header class="home-rail-head">
+          <div class="home-rail-titles">
+            <span class="rail-eyebrow">Across players</span>
+            <h3 class="home-rail-title">Listened lately</h3>
+          </div>
+          <span class="home-rail-meta">3 latest</span>
+        </header>
+        <ul class="feed-list">
+          <li class="feed-line">
+            <span class="track-badge feed-line-dot">S</span>
+            <div class="feed-line-meta"><span class="feed-line-title">Avril 14th</span><span class="feed-line-artist"> — Aphex Twin</span></div>
+            <span class="feed-line-source">spotify</span>
+            <span class="feed-line-time">12 min ago</span>
+          </li>
+          <li class="feed-line">
+            <span class="track-badge feed-line-dot">·</span>
+            <div class="feed-line-meta"><span class="feed-line-title">Saman</span><span class="feed-line-artist"> — Ólafur Arnalds</span></div>
+            <span class="feed-line-source">elsewhere</span>
+            <span class="feed-line-time">1 h ago</span>
+          </li>
+        </ul>
+      </section>
+
+    </section>
+  </main>
+
+  <!-- ── player bar ──────────────────────────────────── -->
+  <footer class="player">
+    <div class="player-left">
+      <div class="player-art"><i class="fa-solid fa-music"></i></div>
+      <div class="player-copy">
+        <div class="player-title-row"><span class="player-title">Kerala</span></div>
+        <div class="player-meta">Bonobo — Migration</div>
+      </div>
+    </div>
+    <div class="player-center">
+      <div class="player-transport">
+        <button class="player-btn"><i class="fa-solid fa-shuffle"></i></button>
+        <button class="player-btn"><i class="fa-solid fa-backward-step"></i></button>
+        <button class="player-btn play"><i class="fa-solid fa-pause"></i></button>
+        <button class="player-btn"><i class="fa-solid fa-forward-step"></i></button>
+        <button class="player-btn active"><i class="fa-solid fa-repeat"></i></button>
+      </div>
+      <div class="player-progress-row">
+        <span class="player-time now active">1:42</span>
+        <div class="player-progress" style="--progress: 38%;">
+          <input class="player-progress-input" type="range" min="0" max="100" value="38">
+        </div>
+        <span class="player-time total">4:28</span>
+      </div>
+    </div>
+    <div class="player-right">
+      <span class="player-source"><span class="player-source-dot" data-provider="Local"></span>local</span>
+      <button class="player-queue-btn"><i class="fa-solid fa-list"></i> Queue</button>
+      <div class="volume">
+        <span class="vol-icon"><i class="fa-solid fa-volume-high"></i></span>
+        <input class="vol-slider" type="range" min="0" max="100" value="72">
+        <span class="vol-pct">72</span>
+      </div>
+    </div>
+  </footer>
+</div>
+</body>
+</html>

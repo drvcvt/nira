@@ -7,10 +7,42 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// UI theme preference. `System` defers to the OS/portal colour scheme via
+/// CSS `prefers-color-scheme`; the explicit variants pin `data-theme` on the
+/// document root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemePref {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Where the user's local music collection lives. Empty until set.
     pub library_root: Option<PathBuf>,
+
+    /// Light/dark/system theme choice for the shell.
+    #[serde(default)]
+    pub theme: ThemePref,
+
+    /// UI font key (see [`ui_font_stack`]). None/unknown = bundled Geist.
+    #[serde(default)]
+    pub ui_font: Option<String>,
+
+    /// the hi-res provider `user_auth_token` from the logged-in the provider web player session.
+    /// the hi-res provider disabled email/password login server-side (April 2026), so token
+    /// auth is the only working path — the user pastes their token from the
+    /// browser. Stored plaintext like the other provider secrets. Empty =
+    /// the hi-res provider disabled.
+    #[serde(default)]
+    pub hires-provider_token: Option<String>,
+    /// Download/stream quality as a the hi-res provider `format_id`: 5=MP3, 6=CD FLAC,
+    /// 7=24/≤96, 27=24/≤192. None = best (27).
+    #[serde(default)]
+    pub hires-provider_format_id: Option<u32>,
 
     /// 0.0 – 1.0 linear gain. The audio engine applies a square-law taper
     /// before feeding the output stream so the slider feels even.
@@ -55,6 +87,10 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             library_root: None,
+            theme: ThemePref::default(),
+            ui_font: None,
+            hires-provider_token: None,
+            hires-provider_format_id: None,
             volume: default_volume(),
             spotify_client_id: None,
             listenbrainz_token: None,
@@ -66,6 +102,28 @@ impl Default for AppConfig {
         }
     }
 }
+
+/// Map a stored UI-font key to its CSS font-family stack. Single source of
+/// truth for the shell (applies the `--font-ui` variable) and the Settings
+/// font picker. Unknown/None falls back to the bundled Geist.
+pub fn ui_font_stack(key: Option<&str>) -> &'static str {
+    match key {
+        Some("inter") => r#""Inter", system-ui, sans-serif"#,
+        Some("adwaita") => r#""Adwaita Sans", "Inter", system-ui, sans-serif"#,
+        Some("noto") => r#""Noto Sans", system-ui, sans-serif"#,
+        Some("system") => "system-ui, sans-serif",
+        _ => r#""Geist", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif"#,
+    }
+}
+
+/// The pickable UI fonts: (key, display label). Order = display order.
+pub const UI_FONTS: &[(&str, &str)] = &[
+    ("geist", "Geist"),
+    ("inter", "Inter"),
+    ("adwaita", "Adwaita Sans"),
+    ("noto", "Noto Sans"),
+    ("system", "System"),
+];
 
 fn default_volume() -> f32 {
     0.8
@@ -112,8 +170,21 @@ impl AppConfig {
         Self::cache_dir().map(|d| d.join("enrichment-cache.json"))
     }
 
+    /// Directory for album art extracted from local files' tags. The scanner
+    /// writes images here; the desktop shell serves them to the webview via
+    /// the "/covers/…" asset handler.
+    pub fn covers_cache_dir() -> Option<PathBuf> {
+        Self::cache_dir().map(|d| d.join("covers"))
+    }
+
     pub fn soundcloud_client_id_cache_path() -> Option<PathBuf> {
         Self::cache_dir().map(|d| d.join("soundcloud-client-id.json"))
+    }
+
+    /// Cached the hi-res provider app credentials + user auth token. Rebuildable: on a cache
+    /// wipe we re-scrape and re-login from the config email/password.
+    pub fn hires-provider_auth_cache_path() -> Option<PathBuf> {
+        Self::cache_dir().map(|d| d.join("hires-provider-auth.json"))
     }
 
     /// Local play-log consumed by the Home page's "Recently played" row.

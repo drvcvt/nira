@@ -261,6 +261,24 @@ struct ScUserFull {
     permalink_url: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct ScUserSearchResp {
+    collection: Vec<ScUserFull>,
+}
+
+fn sc_user_to_artist(raw: ScUserFull) -> Artist {
+    Artist {
+        uri: ArtistUri(format!("soundcloud:user:{}", raw.id)),
+        provider: ProviderId::SoundCloud,
+        name: raw.username,
+        image_url: raw.avatar_url.map(upgrade_artwork),
+        // SC has no concept of "genres" per artist — leave empty
+        // so the UI's genre-chip row collapses cleanly.
+        genres: Vec::new(),
+        permalink_url: raw.permalink_url,
+    }
+}
+
 #[async_trait]
 impl Provider for SoundCloudProvider {
     fn id(&self) -> ProviderId {
@@ -281,14 +299,22 @@ impl Provider for SoundCloudProvider {
         let limit = q.limit.unwrap_or(20).clamp(1, 50);
         let encoded = url::form_urlencoded::byte_serialize(q.text.as_bytes()).collect::<String>();
         self.with_client_id(|cid| {
-            let url = format!("{SC_API}/search/tracks?q={encoded}&limit={limit}&client_id={cid}");
+            let tracks_url =
+                format!("{SC_API}/search/tracks?q={encoded}&limit={limit}&client_id={cid}");
+            let users_url = format!("{SC_API}/search/users?q={encoded}&limit=6&client_id={cid}");
             async move {
-                let raw: ScSearchResp = self.fetch_json(&url).await?;
+                // Users search is best-effort — a failure there must never
+                // blank the track results.
+                let (tracks_res, users_res) = tokio::join!(
+                    self.fetch_json::<ScSearchResp>(&tracks_url),
+                    self.fetch_json::<ScUserSearchResp>(&users_url),
+                );
+                let raw = tracks_res?;
                 let tracks = raw.collection.into_iter().map(sc_to_track).collect();
-                Ok(SearchResults {
-                    tracks,
-                    artists: Vec::new(),
-                })
+                let artists = users_res
+                    .map(|r| r.collection.into_iter().map(sc_user_to_artist).collect())
+                    .unwrap_or_default();
+                Ok(SearchResults { tracks, artists })
             }
         })
         .await
@@ -312,16 +338,7 @@ impl Provider for SoundCloudProvider {
             let url = format!("{SC_API}/users/{id}?client_id={cid}");
             async move {
                 let raw: ScUserFull = self.fetch_json(&url).await?;
-                Ok(Artist {
-                    uri: ArtistUri(format!("soundcloud:user:{}", raw.id)),
-                    provider: ProviderId::SoundCloud,
-                    name: raw.username,
-                    image_url: raw.avatar_url.map(upgrade_artwork),
-                    // SC has no concept of "genres" per artist — leave empty
-                    // so the UI's genre-chip row collapses cleanly.
-                    genres: Vec::new(),
-                    permalink_url: raw.permalink_url,
-                })
+                Ok(sc_user_to_artist(raw))
             }
         })
         .await

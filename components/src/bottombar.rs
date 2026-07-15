@@ -2,10 +2,10 @@
 //! the index, stop clears it); play/pause stays on the player handle since
 //! it's transport-only.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use dioxus::prelude::*;
-use hooks::{RepeatMode, Track, use_ctx_menu, use_detail, use_likes, use_player, use_queue};
+use hooks::{RadioStatus, RepeatMode, Track, use_ctx_menu, use_detail, use_likes, use_player, use_queue};
 
 #[component]
 pub fn Bottombar() -> Element {
@@ -27,17 +27,74 @@ pub fn Bottombar() -> Element {
         .unwrap_or(false);
     // Local scrub state — while the user is actively dragging the thumb,
     // we paint the bar from this value instead of the live snapshot so
-    // the slider doesn't fight backwards drags. Cleared on pointerup
-    // (and as a safety net by a final `onchange`).
-    let mut scrub: Signal<Option<f64>> = use_signal(|| None);
+    // the slider doesn't fight backwards drags. Tagged with the track URI
+    // it was made for: a skip changes the URI, so a stale drag value can
+    // never paint the bar for the next track. After release it holds the
+    // drop point until the janitor effect below clears it — it must NOT
+    // linger past that: an uncleaned scrub used to re-win the paint as
+    // soon as playback drifted >1.5% past the drop point, freezing the
+    // fill there for the rest of the track (labels kept counting).
+    let mut scrub: Signal<Option<(String, f64)>> = use_signal(|| None);
+    // True between pointerdown and pointerup on the slider. While set, the
+    // bar paints from `scrub` unconditionally and the seek is deferred to
+    // release — seeking live per input tick made backwards drags fight the
+    // still-advancing snapshot.
+    let mut scrub_dragging = use_signal(|| false);
+    // When the release actually dispatched a seek. Drives the janitor's
+    // failed-seek backstop: no convergence within 3 s → drop the hold and
+    // show the honest live position again.
+    let mut scrub_committed: Signal<Option<Instant>> = use_signal(|| None);
+    // Hold-release janitor: runs on every engine tick. Once the engine's
+    // position lands within 1.5% of the held drop point — or the backstop
+    // expires — clear the hold so live progress owns the bar again.
+    {
+        let player = player.clone();
+        use_effect(move || {
+            let snap = player.snapshot(); // subscribes this effect to engine ticks
+            if *scrub_dragging.peek() {
+                return;
+            }
+            let Some((_, target)) = scrub.peek().clone() else {
+                return;
+            };
+            let live = snap
+                .duration
+                .filter(|d| d.as_secs() > 0)
+                .map(|d| (snap.position.as_secs_f64() / d.as_secs_f64()) * 100.0)
+                .unwrap_or(0.0);
+            // No commit timestamp while not dragging = the release never
+            // seeked (cancelled drag, missing duration) — stale, clear now.
+            let expired = (*scrub_committed.peek())
+                .map(|t0| t0.elapsed() > Duration::from_secs(3))
+                .unwrap_or(true);
+            if (target - live).abs() <= 1.5 || expired {
+                scrub.set(None);
+                scrub_committed.set(None);
+            }
+        });
+    }
     let snap = player.snapshot();
     let volume_pct = (snap.volume * 100.0).round() as i32;
 
     let np = snap.now_playing.clone();
+    // While the next queue entry is being fetched (SC download, librespot
+    // connect) the engine still reports the *old* track's position/duration.
+    // Blank the bar instead of showing stale progress under the new title.
+    let track_loading = *queue.is_loading_track.read();
     let position = snap.position;
-    let duration = snap.duration;
+    let duration = if track_loading { None } else { snap.duration };
+    // Identity of what the bar currently represents; scrub values are only
+    // honoured while this stays the same.
+    let track_key = np
+        .as_ref()
+        .and_then(|n| n.track_uri.clone())
+        .unwrap_or_default();
 
-    let position_str = fmt_time(position.as_secs());
+    let position_str = if track_loading {
+        "0:00".to_string()
+    } else {
+        fmt_time(position.as_secs())
+    };
     let duration_str = duration
         .map(|d| fmt_time(d.as_secs()))
         .unwrap_or_else(|| "--:--".to_string());
@@ -47,18 +104,19 @@ pub fn Bottombar() -> Element {
         }
         _ => 0.0,
     };
-    // Effective progress for rendering. We let `scrub` override `live_pct`
-    // until the snapshot catches up to within ~1.5% of where the user
-    // dropped the thumb — that's our auto-converge. No explicit cleanup
-    // on release; the next render where snapshot agrees naturally falls
-    // back to live_pct. The next drag just overwrites `scrub` again.
-    let scrub_val: Option<f64> = *scrub.read();
-    let progress_pct = match scrub_val {
-        Some(t) if (t - live_pct).abs() > 1.5 => t,
-        _ => live_pct,
-    };
+    // Effective progress for rendering: `scrub` wins while it exists —
+    // during a drag it follows the pointer, after release it holds the
+    // drop point until the janitor effect clears it (seek landed or
+    // backstop expired). Track changes invalidate it via the key.
+    let scrub_val: Option<f64> = scrub
+        .read()
+        .as_ref()
+        .filter(|(key, _)| *key == track_key)
+        .map(|(_, v)| *v);
+    let progress_pct = scrub_val.unwrap_or(live_pct);
 
     let now_active = snap.has_source && !snap.is_paused;
+    let queue_len = queue.entries.read().len();
     let cover_url = np
         .as_ref()
         .and_then(|n| n.cover_url.clone())
@@ -73,10 +131,10 @@ pub fn Bottombar() -> Element {
         .map(|n| n.artist.clone())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| {
-            if snap.has_source {
-                "—".to_string()
+            if !snap.has_source && queue_len > 0 {
+                "press play to start the queue".to_string()
             } else {
-                "press play for a 440 Hz test tone".to_string()
+                "—".to_string()
             }
         });
     let source_label = np
@@ -90,7 +148,8 @@ pub fn Bottombar() -> Element {
 
     let has_prev = queue.has_previous();
     let has_next = queue.has_next();
-    let queue_len = queue.entries.read().len();
+    let track_error = queue.error.read().clone();
+    let radio_status = queue.radio_status.read().clone();
     let queue_is_open = *queue_open.read();
     let shuffle_on = *queue.shuffle_enabled.read();
     let repeat_mode = *queue.repeat_mode.read();
@@ -105,7 +164,7 @@ pub fn Bottombar() -> Element {
             div { class: "player-left",
                 div { class: "player-art",
                     if !cover_url.is_empty() {
-                        img { src: "{cover_url}", alt: "", loading: "lazy" }
+                        img { src: "{cover_url}", alt: "", loading: "lazy", decoding: "async" }
                     } else {
                         i { class: "fa-solid fa-music" }
                     }
@@ -121,7 +180,7 @@ pub fn Bottombar() -> Element {
                     {
                         let first_artist = current_track.as_ref()
                             .and_then(|t| t.artists.first().cloned())
-                            .filter(|a| !a.uri.0.is_empty());
+                            .filter(|a| hooks::uri_has_detail_page(&a.uri.0));
                         match first_artist {
                             Some(a) => rsx! {
                                 div { class: "player-meta",
@@ -187,10 +246,20 @@ pub fn Bottombar() -> Element {
                     }
                     button {
                         class: "player-btn play",
-                        title: if snap.is_paused { "Resume / play test tone" } else { "Pause" },
+                        title: if now_active { "Pause" } else { "Play" },
                         onclick: {
                             let player = player.clone();
-                            move |_| player.toggle()
+                            let queue = queue.clone();
+                            move |_| {
+                                if player.toggle() {
+                                    return;
+                                }
+                                // Nothing loaded — start the queue if it has
+                                // entries ("Add to queue" while idle, retry
+                                // after a failed load). No-op on empty queue.
+                                let idx = (*queue.current_index.peek()).unwrap_or(0);
+                                queue.play_index(idx);
+                            }
                         },
                         if now_active {
                             i { class: "fa-solid fa-pause" }
@@ -244,23 +313,60 @@ pub fn Bottombar() -> Element {
                             disabled: duration.is_none() || duration.map(|d| d.as_secs() == 0).unwrap_or(true),
                             "aria-label": "Seek",
                             // wry's webview doesn't fire `change` reliably
-                            // for <input type=range>, so we hook `input`
-                            // (fires per mousemove tick) and seek live.
-                            // The `scrub` signal keeps the bar painted at
-                            // the user's drag position until the snapshot
-                            // catches up — that's our auto-converge so the
-                            // thumb doesn't fight backward drags.
+                            // for <input type=range>, so drag commits are
+                            // driven by pointer events instead: `input`
+                            // only records the drag position (and seeks
+                            // directly for keyboard arrows, which have no
+                            // pointer session), the actual seek happens
+                            // once on pointerup.
+                            onpointerdown: move |_| {
+                                // Fresh pointer session — drop any stale
+                                // scrub value so a clean click on the thumb
+                                // (which fires no `input`) can't commit an
+                                // old drag position on release.
+                                scrub.set(None);
+                                scrub_dragging.set(true);
+                            },
+                            onpointerup: {
+                                let player = player.clone();
+                                let dur = duration;
+                                let track_key = track_key.clone();
+                                move |_| {
+                                    scrub_dragging.set(false);
+                                    let Some(d) = dur else { return; };
+                                    if let Some((key, pct)) = scrub.peek().clone()
+                                        && key == track_key
+                                    {
+                                        let target =
+                                            Duration::from_secs_f64(d.as_secs_f64() * pct / 100.0);
+                                        player.seek(target);
+                                        scrub_committed.set(Some(Instant::now()));
+                                    }
+                                }
+                            },
+                            onpointercancel: move |_| {
+                                // Aborted drag — drop the hold outright, no
+                                // seek was dispatched.
+                                scrub_dragging.set(false);
+                                scrub.set(None);
+                            },
                             oninput: {
                                 let player = player.clone();
                                 let dur = duration;
+                                let track_key = track_key.clone();
                                 move |evt: FormEvent| {
                                     let Ok(v) = evt.value().parse::<f64>() else { return; };
                                     let Some(d) = dur else { return; };
                                     let pct = (v / 10.0).clamp(0.0, 100.0);
-                                    scrub.set(Some(pct));
-                                    let ratio = pct / 100.0;
-                                    let target = Duration::from_secs_f64(d.as_secs_f64() * ratio);
-                                    player.seek(target);
+                                    scrub.set(Some((track_key.clone(), pct)));
+                                    if !*scrub_dragging.peek() {
+                                        // Keyboard arrows: no pointer session,
+                                        // seek immediately and start the hold.
+                                        let target =
+                                            Duration::from_secs_f64(d.as_secs_f64() * pct / 100.0);
+                                        player.seek(target);
+                                        scrub_committed.set(Some(Instant::now()));
+                                    }
                                 }
                             },
                         }
@@ -305,6 +411,45 @@ pub fn Bottombar() -> Element {
             if queue_is_open {
                 QueuePopover {}
             }
+
+            // Track-load / radio status, rendered globally: the bar is the
+            // one surface that exists on every page, so a failed load is
+            // never invisible just because the user browsed somewhere else.
+            // One toast at a time; load errors outrank radio chatter.
+            if let Some(err) = track_error.as_ref() {
+                div { class: "playback-toast",
+                    i { class: "fa-solid fa-circle-exclamation playback-toast-glyph" }
+                    span { class: "playback-toast-msg", "{err}" }
+                    button {
+                        class: "download-toast-close",
+                        title: "Dismiss",
+                        onclick: {
+                            let mut error = queue.error;
+                            move |_| error.set(None)
+                        },
+                        i { class: "fa-solid fa-xmark" }
+                    }
+                }
+            } else if radio_status == RadioStatus::Loading {
+                div { class: "playback-toast",
+                    i { class: "fa-solid fa-circle-notch fa-spin playback-toast-glyph" }
+                    span { class: "playback-toast-msg", "Song Radio — finding similar tracks…" }
+                }
+            } else if let RadioStatus::Error(msg) = &radio_status {
+                div { class: "playback-toast",
+                    i { class: "fa-solid fa-circle-exclamation playback-toast-glyph" }
+                    span { class: "playback-toast-msg", "Song Radio failed ({msg}) — playing the seed only." }
+                    button {
+                        class: "download-toast-close",
+                        title: "Dismiss",
+                        onclick: {
+                            let mut status = queue.radio_status;
+                            move |_| status.set(RadioStatus::Idle)
+                        },
+                        i { class: "fa-solid fa-xmark" }
+                    }
+                }
+            }
         }
     }
 }
@@ -338,11 +483,11 @@ fn QueuePopover() -> Element {
                     span { class: "queue-total", "{total} tracks" }
                     button {
                         class: "queue-clear-btn",
-                        title: "Clear queue",
+                        title: "Clear upcoming (keeps the playing track)",
                         disabled: entries.is_empty(),
                         onclick: {
                             let queue = queue.clone();
-                            move |_| queue.stop()
+                            move |_| queue.clear_upcoming()
                         },
                         i { class: "fa-solid fa-xmark" }
                     }
@@ -359,7 +504,6 @@ fn QueuePopover() -> Element {
                         QueueRow {
                             key: "{track.uri.0}-{idx}",
                             track: track.clone(),
-                            entries: entries.clone(),
                             index: idx,
                             current: current == Some(idx),
                         }
@@ -371,7 +515,7 @@ fn QueuePopover() -> Element {
 }
 
 #[component]
-fn QueueRow(track: Track, entries: Vec<Track>, index: usize, current: bool) -> Element {
+fn QueueRow(track: Track, index: usize, current: bool) -> Element {
     let queue = use_queue();
     let ctx = use_ctx_menu();
     let cover = track.cover_url.clone().unwrap_or_default();
@@ -390,10 +534,11 @@ fn QueueRow(track: Track, entries: Vec<Track>, index: usize, current: bool) -> E
         li {
             class: if current { "queue-row current" } else { "queue-row" },
             title: "{title} — {artist}",
+            // Jump within the existing queue — play_list would re-seed and,
+            // with shuffle on, scramble the whole visible order per click.
             onclick: {
-                let entries = entries.clone();
                 let queue = queue.clone();
-                move |_| queue.play_context(entries.clone(), index)
+                move |_| queue.play_index(index)
             },
             oncontextmenu: {
                 let track = track.clone();
@@ -406,7 +551,7 @@ fn QueueRow(track: Track, entries: Vec<Track>, index: usize, current: bool) -> E
             span { class: "queue-row-index", "{index + 1}" }
             div { class: "queue-row-art",
                 if !cover.is_empty() {
-                    img { src: "{cover}", alt: "", loading: "lazy" }
+                    img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }
                 } else {
                     i { class: "fa-solid fa-music" }
                 }

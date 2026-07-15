@@ -1,0 +1,246 @@
+/* nira shell — mt-ui-style: refined grayscale minimalism.
+ *
+ * Design language: depth ONLY via brightness (bg < raise1 < raise2 < raise3),
+ * no borders / shadows / glows, squircle radii 14/9, strictly neutral
+ * grayscale with exactly ONE inverted chip-on state for active/primary.
+ * Light + dark are both first-class: light is the stylesheet default,
+ * dark comes from the system scheme unless data-theme overrides it.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* — palette (light) — every value R==G==B, no hue anywhere */
+  --bg:         #FAFAFA;
+  --raise1:     #F1F1F1;
+  --raise2:     #E9E9E9;
+  --raise3:     #E0E0E0;
+  --fg:         #1A1A1A;
+  --sub:        #6E6E6E;
+  --faint:      #A6A6A6;
+  --chip-on:    #1A1A1A;
+  --chip-on-fg: #FAFAFA;
+
+  /* Legacy role aliases — the rest of the file speaks this vocabulary.
+     Keeping them lets every existing rule resolve into the new palette
+     without touching 3000 lines. --line/--line-strong are transparent on
+     purpose: borders are not part of the language, and the 1px widths
+     they leave behind keep box sizes stable. */
+  --text:           var(--fg);
+  --text-muted:     var(--sub);
+  --text-faint:     var(--faint);
+  --text-dim:       var(--faint);
+  --raised:         var(--raise1);
+  --surface:        var(--raise1);
+  --surface-strong: var(--raise2);
+  --bg-soft:        var(--bg);
+  --bg-glassy:      var(--raise1);
+  --accent:         var(--fg);
+  --accent-soft:    var(--sub);
+  --accent-deep:    var(--raise3);
+  --danger:         var(--fg);
+  --progress:       var(--fg);
+  --like:           var(--fg);
+  --like-soft:      var(--sub);
+  --line:           transparent;
+  --line-strong:    transparent;
+
+  --sidebar-w:        220px;
+  --player-h:         84px;
+  --player-margin:    14px;
+
+  /* Squircle radii: 14 for cards/rows/panels, 9 for chips/inputs/small
+     controls. --r-sm stays 6px for tiny badges (< ~24px tall) where 9px
+     would merge the corners into a pill. */
+  --r:                14px;
+  --rs:               9px;
+  --r-sm:             6px;
+  --r-btn:            var(--rs);
+  --r-md:             var(--r);
+  --r-lg:             var(--r);
+  --r-xl:             var(--r);
+  --r-full:           var(--rs);
+
+  /* UI font is a variable so Settings → Appearance can swap it live.
+     Default: bundled Geist. */
+  --font-ui: "Geist", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  font-family: var(--font-ui);
+  font-feature-settings: "calt" 0;
+  /* Slightly-above-regular base (variable axis): plain 400 Geist read too
+     thin at UI sizes. Emphasis still comes from explicit 550–700 on titles,
+     buttons and headings. */
+  font-weight: 450;
+  /* Never let the engine fake bold/italic on top of the variable fonts —
+     synthesized faces are exactly the "something looks off" smell. */
+  font-synthesis: none;
+}
+
+/* Dark palette — same roles, flipped brightness ladder. Applied either
+   explicitly (data-theme) or via the system scheme when no override. */
+:root[data-theme="dark"] {
+  --bg:         #121212;
+  --raise1:     #1A1A1A;
+  --raise2:     #222222;
+  --raise3:     #2B2B2B;
+  --fg:         #ECECEC;
+  --sub:        #969696;
+  --faint:      #5C5C5C;
+  --chip-on:    #ECECEC;
+  --chip-on-fg: #121212;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:         #121212;
+    --raise1:     #1A1A1A;
+    --raise2:     #222222;
+    --raise3:     #2B2B2B;
+    --fg:         #ECECEC;
+    --sub:        #969696;
+    --faint:      #5C5C5C;
+    --chip-on:    #ECECEC;
+    --chip-on-fg: #121212;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+html { font-size: 15px; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* mt-ui-style hard rule — depth comes from brightness steps, never from
+   shadow or glow. Blanket kill so no stray rule can reintroduce one. */
+* { box-shadow: none !important; text-shadow: none !important; }
+
+/* Keyboard focus — keep an indicator (a11y), but neutral gray instead of
+   the engine's blue ring. Mouse clicks never show it (focus-visible). */
+:focus { outline: none; }
+:focus-visible { outline: 1px solid var(--faint); outline-offset: 2px; }
+
+/* Thin themed scrollbar. Two passes:
+   • Standard CSS (scrollbar-width / scrollbar-color) is what WebKitGTK 2.x
+     actually respects on Linux — the webkit-scrollbar pseudo-elements get
+     ignored on some builds.
+   • WebKit pseudo-elements as a fallback for environments that honour them. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-faint) transparent;
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--text-faint); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* Floating search trigger — top-right corner, mirrors Ctrl+F. */
+.corner-search {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 70;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 999px;
+  background: var(--raise2);
+  color: var(--sub);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: color 140ms ease, background 140ms ease;
+}
+
+.corner-search:hover { color: var(--text); background: var(--raise3); }
+
+/* ─── shell layout ────────────────────────────────────── */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: 1fr;
+  grid-template-areas: "sidebar content";
+  height: 100vh;
+  position: relative;
+}
+
+.content {
+  grid-area: content;
+  /* min-width: 0 lets the grid track shrink past its content's intrinsic
+     min-content size — without it a wide child (e.g. a fixed-width hero
+     or a min-width row) would push the whole page out and force the
+     viewport to scroll horizontally. */
+  min-width: 0;
+  padding: 24px 32px;
+  padding-bottom: calc(var(--player-h) + var(--player-margin) * 2 + 12px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  contain: layout paint;
+}
+
+.page,
+.home-page { min-width: 0; }
+
+/* Calm centered content column — the reading measure, not a card. */
+.page {
+  max-width: 1020px;
+  margin-inline: auto;
+}
+
+.sidebar,
+.content,
+.player {
+  transition: transform 150ms ease, opacity 150ms ease;
+  will-change: transform, opacity;
+}
+
+.shell.search-open .sidebar,
+.shell.search-open .content,
+.shell.search-open .player {
+  transform: scale(0.998);
+  opacity: 0.72;
+}
+
+/* The one serif moment: big page headings set in Charter. Everything
+   else stays on Geist. */
+.page h1 {
+  margin: 0 0 6px;
+  font-family: "Charter", "Liberation Serif", Georgia, serif;
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  line-height: 1.15;
+  color: var(--text);
+}
+
+.hint {
+  color: var(--text-muted);
+  margin: 0 0 10px;
+  max-width: 65ch;
+  line-height: 1.55;
+  font-size: 0.92em;
+}
+
+.discover-empty {
+  margin-top: 40px;
+  padding: 56px 24px;
+  border-radius: var(--r);
+  text-align: center;
+  color: var(--text-muted);
+  background: var(--raise1);
+}
+
+.discover-empty-glyph {
+  font-size: 2.6rem;
+  color: var(--faint);
+  margin-bottom: 10px;
+}
+

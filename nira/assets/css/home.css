@@ -1,0 +1,459 @@
+/* ─── home page — editorial flow ────────────────────────── */
+
+.home-page {
+  display: grid;
+  gap: 30px;
+  min-width: 0;
+}
+
+.home-page > h1 { margin: 0; }
+
+/* Shared eyebrow — the one small uppercase label every section uses. */
+.rail-eyebrow {
+  display: inline-flex;
+  margin-bottom: 6px;
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+/* ── Stage: the single expressive "Made for you" moment ── */
+
+.home-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+  gap: 28px;
+  align-items: center;
+  min-width: 0;
+}
+
+.home-stage-art { min-width: 0; }
+
+/* The lead card is a <button> (PlayableButton); form controls shrink-to-fit
+   as grid items instead of stretching, so force it to fill the column. */
+.home-stage-art .cover-card { width: 100%; }
+
+.home-stage-art .cover-card-art {
+  border-radius: var(--r-lg);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+
+.home-stage-art .cover-card-title {
+  margin-top: 10px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.home-stage-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.home-stage-title {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(1.7rem, 2.6vw, 2.4rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.home-stage-seed {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.home-stage-seed span { color: var(--text); font-weight: 600; }
+
+.home-stage-sub {
+  margin: 8px 0 0;
+  max-width: 54ch;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.home-stage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.home-stage-picks {
+  display: grid;
+  /* Cap picks at rail-card size — the 300px lead cover must stay the
+     largest thing on the stage, not these. */
+  grid-template-columns: repeat(4, minmax(0, 150px));
+  gap: 16px;
+  margin-top: 22px;
+}
+
+@media (max-width: 900px) {
+  .home-stage {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+  }
+  .home-stage-art { max-width: 240px; }
+}
+
+/* ── Rail: every horizontal row shares this shell ── */
+
+.home-rail {
+  min-width: 0;
+  /* Skip layout/paint of rails far outside the viewport while scrolling. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
+}
+
+.home-rail-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  min-width: 0;
+}
+
+.home-rail-titles { min-width: 0; flex: 1 1 auto; }
+
+.home-rail-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-rail-sub {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-rail-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.home-rail-meta {
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+/* Horizontal scroll row of uniform cover-cards. The scrollbar is hidden —
+   the arrow buttons in the rail header (plus trackpad/wheel) do the
+   scrolling. */
+.home-rail-row {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 2px 10px;
+  scroll-snap-type: x proximity;
+  min-width: 0;
+  scrollbar-width: none;
+}
+
+.home-rail-row::-webkit-scrollbar { display: none; }
+
+/* Rail header scroll arrows — small bold rounded chevrons. */
+.rail-scroll-btn {
+  appearance: none;
+  border: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--raise2);
+  color: var(--sub);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.72rem;
+  flex-shrink: 0;
+  transition: color 140ms ease, background 140ms ease;
+}
+
+.rail-scroll-btn:hover { color: var(--text); background: var(--raise3); }
+
+.home-rail-row > .cover-card {
+  flex: 0 0 150px;
+  width: 150px;
+  scroll-snap-align: start;
+  min-width: 0;
+}
+
+/* ── Daily Mix cards: same shape as a cover-card, 2×2 mosaic art ── */
+
+.mix-mosaic {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+}
+
+.mix-mosaic-cell {
+  width: 100%;
+  height: 100%;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* ── Listened lately: the one dense timeline ── */
+
+.home-feed .home-rail-head {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+/* ── Loading skeletons ── */
+
+.for-you-loading-row { opacity: 0.72; }
+
+.for-you-skeleton-card .cover-card-art,
+.for-you-skeleton-line {
+  background: linear-gradient(90deg, var(--surface) 0%, var(--surface-strong) 45%, var(--surface) 100%);
+  background-size: 220% 100%;
+  animation: for-you-skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+.for-you-skeleton-card { flex: 0 0 150px; width: 150px; }
+
+.for-you-skeleton-line {
+  height: 10px;
+  width: 40%;
+  border-radius: 4px;
+  margin-top: 6px;
+}
+.for-you-skeleton-line.wide { width: 70%; height: 14px; }
+
+@keyframes for-you-skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.shelf-empty {
+  padding: 14px;
+  background: var(--raise1);
+  border-radius: var(--rs);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.cover-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
+.cover-card.clickable {
+  cursor: pointer;
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cover-card.clickable:hover {
+  transform: translateY(-2px);
+}
+
+.cover-card.clickable:hover .cover-card-art {
+  filter: brightness(1.05);
+}
+
+.cover-card-art {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--r-btn);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  transition: border-color 200ms ease;
+}
+
+.cover-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cover-card-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+  font-size: 2rem;
+}
+
+.cover-card-art .track-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-size: 0.6rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  /* No backdrop-filter here: one blur region per card forces WebKitGTK
+     into per-badge backdrop layers — measurable scroll jank on Home. */
+}
+
+.cover-card-title {
+  font-size: 0.85em;
+  color: var(--text);
+  font-weight: 500;
+  margin-top: 6px;
+  /* Truncate at one line; tooltip on the card carries the full text. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cover-card-sub,
+.cover-card-time {
+  font-size: 0.75em;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cover-card-time {
+  font-size: 0.7em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-top: 2px;
+}
+
+/* Vertical scrobble feed — denser than the cover rows, single line per item. */
+.feed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.feed-line {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px;
+  border-bottom: none;
+  font-size: 0.85em;
+}
+
+.feed-line:last-child { border-bottom: none; }
+
+.feed-line-dot {
+  font-size: 0.6em;
+  padding: 2px 6px;
+  min-width: 22px;
+  text-align: center;
+}
+
+.feed-line-meta {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.feed-line-title {
+  color: var(--text);
+}
+
+.feed-line-artist {
+  color: var(--text-muted);
+}
+
+.feed-line-source {
+  font-size: 0.72em;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.feed-line-time {
+  font-size: 0.7em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  opacity: 0.6;
+  min-width: 70px;
+  text-align: right;
+}
+
+/* Per-section empty states. Less dramatic than the page-level
+   .discover-empty so three of them stacked still feel like one page. */
+.home-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 24px 16px;
+  border-radius: var(--r);
+  background: var(--raise1);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.home-empty-glyph {
+  font-size: 1.4rem;
+  color: var(--faint);
+  margin-bottom: 4px;
+}
+
+.home-empty-title {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.home-empty-body {
+  margin: 0;
+  max-width: 56ch;
+  font-size: 0.82em;
+  line-height: 1.5;
+}
+
+.home-error {
+  margin: 0;
+  padding: 10px 14px;
+  background: var(--raise1);
+  border-radius: var(--rs);
+  color: var(--text);
+  font-weight: 550;
+  font-size: 0.85em;
+}
+

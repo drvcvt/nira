@@ -20,7 +20,7 @@ pub use history::{History, HistoryEntry};
 pub use spotify_backend::{SpotifyBackend, SpotifyBackendError};
 
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -29,7 +29,16 @@ use chrono::Utc;
 use rodio::source::Source;
 use rodio::stream::DeviceSinkBuilder;
 use rodio::{Decoder, Player as RodioPlayer};
+use stream_download::http::HttpStream;
+use stream_download::http::reqwest::Client as HttpClient;
+use stream_download::source::SourceStream;
+use stream_download::storage::temp::TempStorageProvider;
+use stream_download::{Settings as StreamSettings, StreamDownload};
 use tokio::sync::mpsc as tokio_mpsc;
+
+/// Progressive HTTP reader rodio decodes from while the download continues
+/// in the background (temp-file backed, range-request seeks).
+type HttpReader = StreamDownload<TempStorageProvider>;
 
 /// Out-of-band transport requests routed through the audio engine.
 ///
@@ -77,9 +86,35 @@ pub enum Active {
     Spotify,
 }
 
+/// What rodio is currently playing, kept so `seek` can rebuild the decoder.
+/// Symphonia refuses backward seeks on some formats (notably MP3 from
+/// in-memory bytes); when `try_seek` errors we re-decode from the retained
+/// source and seek forward from zero, which every format supports.
+#[derive(Clone)]
+enum RodioSource {
+    Bytes(Arc<[u8]>),
+    File(PathBuf),
+    /// Progressive stream — rebuild re-opens the (signed, still-valid) URL.
+    Http {
+        url: String,
+    },
+}
+
+/// A progressive HTTP stream opened and decoder-wrapped, but not yet handed
+/// to the audio engine. Splitting prepare (async, network) from play (sync,
+/// engine state) lets the queue re-check that a load is still current after
+/// the await, so a stale prepare can never clobber a newer track.
+pub struct PreparedHttp {
+    decoder: Decoder<HttpReader>,
+    duration: Option<Duration>,
+    url: String,
+}
+
 #[derive(Clone)]
 pub struct Player {
     rodio: Arc<RodioPlayer>,
+    /// Retained copy of rodio's current source for the seek fallback.
+    rodio_source: Arc<RwLock<Option<RodioSource>>>,
     spotify: Arc<Mutex<Option<Arc<SpotifyBackend>>>>,
     active: Arc<RwLock<Active>>,
     duration: Arc<RwLock<Option<Duration>>>,
@@ -149,6 +184,7 @@ impl Player {
         let (transport_tx, transport_rx) = tokio_mpsc::unbounded_channel();
         Ok(Player {
             rodio,
+            rodio_source: Arc::new(RwLock::new(None)),
             spotify: Arc::new(Mutex::new(None)),
             active: Arc::new(RwLock::new(Active::None)),
             duration: Arc::new(RwLock::new(None)),
@@ -220,6 +256,7 @@ impl Player {
     /// Test tone via rodio. Stops Spotify first.
     pub fn play_test_tone(&self) {
         self.silence_spotify();
+        self.set_rodio_source(None);
         self.rodio.clear();
         // 0.2 headroom keeps the sine from clipping even at user-volume 1.0.
         // rodio's controls.volume layers on top.
@@ -249,9 +286,10 @@ impl Player {
     pub fn play_bytes(&self, bytes: Vec<u8>) -> Result<(), PlayerError> {
         self.silence_spotify();
         let gain = Self::slider_to_gain(self.current_volume());
-        let cursor = Cursor::new(bytes);
-        let decoder = Decoder::try_from(cursor).map_err(|e| PlayerError::Decode(e.to_string()))?;
+        let bytes: Arc<[u8]> = bytes.into();
+        let decoder = Self::decoder_from_bytes(&bytes)?;
         let dur = decoder.total_duration();
+        self.set_rodio_source(Some(RodioSource::Bytes(bytes)));
         self.rodio.clear();
         // Re-assert log-curved gain *before* append so the very first 5 ms
         // of the new source can't leak through at unity gain — rodio's
@@ -266,6 +304,112 @@ impl Player {
         self.set_active(Active::Rodio);
         self.record_now_playing();
         Ok(())
+    }
+
+    /// Play a local file via rodio (FLAC/MP3/M4A/OGG/WAV). Decodes straight
+    /// from disk through a `BufReader<File>` instead of slurping the whole
+    /// file into a `Vec` — a FLAC album track is tens of MB, and rodio's
+    /// `TryFrom<File>` also records the byte length so seeking lands
+    /// accurately. Stops Spotify first if it was active.
+    ///
+    /// `fallback_duration` is the tag-derived duration from the library scan;
+    /// used when the decoder can't report one (e.g. VBR MP3 without a Xing
+    /// header) so the seek bar stays usable.
+    pub fn play_file(
+        &self,
+        path: &Path,
+        fallback_duration: Option<Duration>,
+    ) -> Result<(), PlayerError> {
+        self.silence_spotify();
+        let gain = Self::slider_to_gain(self.current_volume());
+        let file = std::fs::File::open(path)
+            .map_err(|e| PlayerError::Decode(format!("open {}: {e}", path.display())))?;
+        let decoder = Decoder::try_from(file).map_err(|e| PlayerError::Decode(e.to_string()))?;
+        let dur = decoder.total_duration().or(fallback_duration);
+        self.set_rodio_source(Some(RodioSource::File(path.to_path_buf())));
+        self.rodio.clear();
+        // Re-assert log-curved gain before append — same first-5ms unity-gain
+        // leak guard as play_bytes.
+        self.rodio.set_volume(gain);
+        self.rodio.append(decoder);
+        self.rodio.play();
+        if let Ok(mut d) = self.duration.write() {
+            *d = dur;
+        }
+        self.set_active(Active::Rodio);
+        self.record_now_playing();
+        Ok(())
+    }
+
+    /// Open a progressive HTTP stream: request the URL, prefetch ~256 KiB,
+    /// wrap it in a decoder. Pure network/decode setup — no player state is
+    /// touched, so callers can await this, re-check that the load is still
+    /// wanted, then commit via [`Self::play_prepared`]. Playback starts as
+    /// soon as the prefetch lands instead of after the whole file.
+    pub async fn prepare_http(
+        url: &str,
+        fallback_duration: Option<Duration>,
+    ) -> Result<PreparedHttp, PlayerError> {
+        let (decoder, _len) = Self::http_decoder(url).await?;
+        let duration = decoder.total_duration().or(fallback_duration);
+        Ok(PreparedHttp {
+            decoder,
+            duration,
+            url: url.to_string(),
+        })
+    }
+
+    /// Hand a prepared progressive stream to the audio engine. Stops Spotify
+    /// first, same as the other rodio entry points.
+    pub fn play_prepared(&self, prepared: PreparedHttp) {
+        self.silence_spotify();
+        let PreparedHttp {
+            decoder,
+            duration,
+            url,
+        } = prepared;
+        let gain = Self::slider_to_gain(self.current_volume());
+        self.set_rodio_source(Some(RodioSource::Http { url }));
+        self.rodio.clear();
+        // Same first-5ms unity-gain leak guard as play_bytes.
+        self.rodio.set_volume(gain);
+        self.rodio.append(decoder);
+        self.rodio.play();
+        if let Ok(mut d) = self.duration.write() {
+            *d = duration;
+        }
+        self.set_active(Active::Rodio);
+        self.record_now_playing();
+    }
+
+    /// Progressive reader + decoder over an HTTP resource. Temp-file backed;
+    /// explicit byte_len (from Content-Length) + seekable gives Symphonia
+    /// full bidirectional seeking over the growing file.
+    async fn http_decoder(url: &str) -> Result<(Decoder<HttpReader>, Option<u64>), PlayerError> {
+        let parsed = url
+            .parse()
+            .map_err(|e| PlayerError::Decode(format!("bad stream url: {e}")))?;
+        let stream = HttpStream::new(HttpClient::new(), parsed)
+            .await
+            .map_err(|e| PlayerError::Decode(format!("open stream: {e}")))?;
+        let byte_len = stream.content_length();
+        let reader = StreamDownload::from_stream(
+            stream,
+            TempStorageProvider::new(),
+            StreamSettings::default(),
+        )
+        .await
+        .map_err(|e| PlayerError::Decode(format!("start stream: {e}")))?;
+        let mut builder = rodio::decoder::DecoderBuilder::new()
+            .with_data(reader)
+            .with_seekable(true);
+        if let Some(len) = byte_len {
+            builder = builder.with_byte_len(len);
+        }
+        builder
+            .build()
+            .map(|d| (d, byte_len))
+            .map_err(|e| PlayerError::Decode(e.to_string()))
     }
 
     /// Ensure a Spotify session exists. Idempotent — once a session is up we
@@ -364,13 +508,24 @@ impl Player {
     }
 
     pub fn stop(&self) {
+        self.stop_for_load();
+        self.set_now_playing(None);
+    }
+
+    /// Stop audio output ahead of loading a new track. Leaves `now_playing`
+    /// untouched — the incoming load overwrites it right away, and wiping it
+    /// here would flash "Nothing loaded" between click and load-commit.
+    /// Clearing the old source at load-begin is what keeps the queue watcher
+    /// honest: the next `has_source=true` it sees can only belong to the
+    /// newly committed track, never to the one being replaced.
+    pub fn stop_for_load(&self) {
         self.silence_spotify();
+        self.set_rodio_source(None);
         self.rodio.clear();
         if let Ok(mut d) = self.duration.write() {
             *d = None;
         }
         self.set_active(Active::None);
-        self.set_now_playing(None);
     }
 
     /// Jump to `target` inside the currently playing source.
@@ -392,10 +547,111 @@ impl Player {
             }
             Active::Rodio => {
                 if let Err(e) = self.rodio.try_seek(target) {
-                    tracing::warn!("rodio seek failed: {e}");
+                    // Symphonia can't seek backward on some formats (MP3 from
+                    // bytes in particular). Rebuild the decoder from the
+                    // retained source and seek forward from zero instead.
+                    tracing::info!("rodio seek failed ({e}); rebuilding decoder");
+                    self.rodio_rebuild_seek(target);
                 }
             }
             Active::None => {}
+        }
+    }
+
+    /// Seek fallback: re-decode the retained source and forward-seek into the
+    /// fresh decoder. Worst case (the forward seek fails too) the track
+    /// restarts from zero — still better than a seek that silently no-ops.
+    fn rodio_rebuild_seek(&self, target: Duration) {
+        let source = self
+            .rodio_source
+            .read()
+            .ok()
+            .and_then(|s| s.as_ref().cloned());
+        let Some(source) = source else { return };
+        // Progressive streams rebuild asynchronously — respawn the stream
+        // (the signed URL stays valid for the session), then forward-seek.
+        if let RodioSource::Http { url } = &source {
+            let Ok(handle) = tokio::runtime::Handle::try_current() else {
+                tracing::warn!("no runtime available for http seek rebuild");
+                return;
+            };
+            let player = self.clone();
+            let url = url.clone();
+            handle.spawn(async move {
+                match Player::http_decoder(&url).await {
+                    Ok((decoder, _)) => {
+                        // The user may have switched tracks or stopped during
+                        // the ~1 s rebuild — swapping in regardless would play
+                        // the OLD track over whatever is current. Only commit
+                        // if this URL is still the retained rodio source.
+                        let still_current = player
+                            .rodio_source
+                            .read()
+                            .ok()
+                            .map(|s| {
+                                matches!(s.as_ref(), Some(RodioSource::Http { url: u }) if *u == url)
+                            })
+                            .unwrap_or(false);
+                        if still_current {
+                            player.swap_in_and_seek(decoder, target);
+                        } else {
+                            tracing::info!("http seek rebuild superseded by a track change");
+                        }
+                    }
+                    Err(e) => tracing::warn!("http seek rebuild failed: {e}"),
+                }
+            });
+            return;
+        }
+        let outcome = match &source {
+            RodioSource::Bytes(bytes) => {
+                Self::decoder_from_bytes(bytes).map(|d| self.swap_in_and_seek(d, target))
+            }
+            RodioSource::File(path) => std::fs::File::open(path)
+                .map_err(|e| PlayerError::Decode(format!("reopen {}: {e}", path.display())))
+                .and_then(|f| {
+                    Decoder::try_from(f).map_err(|e| PlayerError::Decode(e.to_string()))
+                })
+                .map(|d| self.swap_in_and_seek(d, target)),
+            RodioSource::Http { .. } => return, // handled above (async path)
+        };
+        if let Err(e) = outcome {
+            tracing::warn!("seek rebuild failed, keeping current position: {e}");
+        }
+    }
+
+    fn swap_in_and_seek<S>(&self, decoder: S, target: Duration)
+    where
+        S: Source + Send + 'static,
+    {
+        let was_paused = self.rodio.is_paused();
+        let gain = Self::slider_to_gain(self.current_volume());
+        self.rodio.clear();
+        // Same first-5ms unity-gain leak guard as play_bytes.
+        self.rodio.set_volume(gain);
+        self.rodio.append(decoder);
+        if let Err(e) = self.rodio.try_seek(target) {
+            tracing::warn!("forward seek into fresh decoder failed: {e}");
+        }
+        if !was_paused {
+            self.rodio.play();
+        }
+    }
+
+    /// Decoder over shared bytes; explicit byte_len + seekable so Symphonia
+    /// gets the best seeking setup the source allows.
+    fn decoder_from_bytes(bytes: &Arc<[u8]>) -> Result<Decoder<Cursor<Arc<[u8]>>>, PlayerError> {
+        rodio::decoder::DecoderBuilder::new()
+            .with_data(Cursor::new(Arc::clone(bytes)))
+            .with_byte_len(bytes.len() as u64)
+            .with_seekable(true)
+            .build()
+            .map_err(|e| PlayerError::Decode(e.to_string()))
+    }
+
+    fn set_rodio_source(&self, source: Option<RodioSource>) {
+        if let Ok(mut w) = self.rodio_source.write() {
+            *w = source;
         }
     }
 

@@ -1,0 +1,93 @@
+/* ─────────────────────────────────────────────────────────── */
+/* ── Custom <Button> component (components/button.rs) ─────── */
+/* ─────────────────────────────────────────────────────────── */
+
+.sq-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-family: inherit;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: inherit;
+  border-radius: var(--r);
+  /* Real Apple squircle on engines that ship the W3C `corner-shape`
+     property (Chromium 142+, Safari TP, webkitgtk picks it up as those
+     engines roll forward). Falls back to a plain rounded rect on older
+     engines — visually indistinguishable at this size. */
+  corner-shape: squircle;
+  -webkit-corner-shape: squircle;
+  transition: background 140ms ease, color 140ms ease,
+              box-shadow 140ms ease, transform 80ms ease;
+}
+
+/* Md (default) — primary CTAs: Play, Connect, Find similar. */
+.sq-btn.sq-md {
+  padding: 11px 18px;
+  font-size: 0.78rem;
+}
+
+/* Sm — back buttons, settings rows, secondary actions. Slightly tighter
+   radius so the corner stays proportional on a 28 px-tall element. */
+.sq-btn.sq-sm {
+  padding: 6px 12px;
+  font-size: 0.68rem;
+  gap: 6px;
+  border-radius: var(--rs);
+}
+
+/* Primary — the one inverted chip-on state. */
+.sq-btn-primary {
+  background: var(--chip-on);
+  color: var(--chip-on-fg);
+}
+.sq-btn-primary:hover {
+  background: color-mix(in srgb, var(--chip-on) 85%, var(--bg));
+}
+
+/* Ghost — quiet filled surface, one step up on hover. */
+.sq-btn-ghost {
+  background: var(--raise1);
+  color: var(--text-muted);
+}
+.sq-btn-ghost:hover {
+  background: var(--raise2);
+  color: var(--text);
+}
+
+/* Press feedback — scales the whole button so the label tracks the
+   shape (the old impl scaled only the SVG, leaving the text floating). */
+.sq-btn:active { transform: scale(0.97); }
+
+.sq-btn:disabled { cursor: not-allowed; opacity: 0.45; }
+
+/* ── Apple-style squircle via corner-shape ──────────────────
+   The W3C-spec'd way (shipped in Chrome Canary + Safari Tech Preview;
+   webkitgtk picks it up as those engines roll forward). Combined with
+   the element's existing border-radius, this swaps the quarter-circle
+   corner for a true superellipse — the exact math Apple uses on iOS,
+   driven by the browser instead of any SVG hackery. Falls back
+   gracefully to plain rounded rect on engines that don't support it,
+   so it's safe to ship unconditionally. */
+.nav-item,
+.discover-seed-reroll,
+.mode-btn,
+.banner-play-btn,
+.settings-btn,
+.bridge-target-btn {
+  corner-shape: squircle;
+  -webkit-corner-shape: squircle;
+}
+
+
+/* Toggled-on ghost button (e.g. Library "Lossless only" filter). */
+.sq-btn-ghost.active {
+  background: var(--chip-on);
+  color: var(--chip-on-fg);
+}
