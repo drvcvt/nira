@@ -102,6 +102,27 @@ impl History {
         entries.iter().rev().take(n).cloned().collect()
     }
 
+    /// Remove one entry, identified by timestamp + title (played_at is
+    /// unique enough — two same-second plays of the same title are
+    /// indistinguishable to the user anyway). Rewrites the file.
+    pub fn remove(&self, played_at: DateTime<Utc>, title: &str) {
+        let snapshot = {
+            let mut entries = self.entries.lock().unwrap();
+            let before = entries.len();
+            entries.retain(|e| !(e.played_at == played_at && e.title == title));
+            if entries.len() == before {
+                return;
+            }
+            entries.clone()
+        };
+        let Some(path) = self.path.as_ref() else {
+            return;
+        };
+        if let Err(e) = rewrite_jsonl(path, &snapshot) {
+            tracing::warn!(error = %e, "history: remove persist failed");
+        }
+    }
+
     /// Clear both the in-memory buffer and the persisted JSONL file.
     pub fn clear(&self) -> std::io::Result<()> {
         if let Ok(mut entries) = self.entries.lock() {

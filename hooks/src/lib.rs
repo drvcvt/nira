@@ -16,6 +16,7 @@ use provider_spotify::SpotifyProvider;
 pub mod matching;
 pub mod queue;
 pub mod scrobble;
+mod taste;
 pub mod use_album;
 pub mod use_artist;
 pub mod use_ctx_menu;
@@ -26,6 +27,7 @@ pub mod use_history;
 pub mod use_library;
 pub mod use_likes;
 pub mod use_local_library;
+pub mod use_playlists;
 pub mod use_listenbrainz_feed;
 pub mod use_player;
 pub mod use_recommendations;
@@ -35,16 +37,17 @@ pub use matching::{find_strict_match, match_key, track_match_key};
 pub use queue::{RadioStatus, RepeatMode, UseQueue, use_queue};
 pub use use_album::{UseAlbum, use_album};
 pub use use_artist::{ArtistView, UseArtist, is_long_play, use_artist};
-pub use use_ctx_menu::{CtxMenuState, UseCtxMenu, use_ctx_menu};
+pub use use_ctx_menu::{AlbumCtx, CtxMenuState, CtxTarget, UseCtxMenu, use_ctx_menu};
 pub use use_detail::{DetailView, UseDetail, uri_has_detail_page, use_detail};
 pub use use_discovery::{DiscoveryMode, UseDiscovery, use_discovery};
 pub use use_downloads::{
     UseDownloads, download_from_hires-provider_by_query, download_hires-provider_album, download_hires-provider_track,
     download_hires-provider_track_by_match, use_downloads,
 };
-pub use use_history::{UseHistory, use_history};
+pub use use_history::{UseHistory, install_history, use_history};
 pub use use_library::{UseLibrary, install_library, use_library};
 pub use use_likes::{LikedTrack, UseLikes, use_likes};
+pub use use_playlists::{Playlist, PlaylistAlbum, UsePlaylists, use_playlists};
 pub use use_local_library::{UseLocalLibrary, use_local_library};
 pub use use_listenbrainz_feed::{UseListenBrainzFeed, use_listenbrainz_feed};
 pub use use_player::{PlayerContext, UsePlayer, use_player};
@@ -150,6 +153,13 @@ impl AppContext {
         // Local liked-songs store. Cross-provider (anything in a Track),
         // persisted as JSON in the config dir so cache wipes don't lose it.
         use_likes::install_likes();
+
+        // Local playlists — same persistence tier as likes.
+        use_playlists::install_playlists();
+
+        // Play-history singleton (Recently played + recommendation seed
+        // pool). Installed here so `remove` can refresh every subscriber.
+        use_history::install_history(player.clone());
 
         // Spotify Liked Songs — singleton so the paginated sync runs once
         // at the root instead of restarting on every Home↔Library switch.

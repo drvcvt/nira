@@ -5,9 +5,9 @@ use std::collections::HashSet;
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
 use hooks::{
-    AlbumUri, ProviderId, Track, download_from_hires-provider_by_query, download_hires-provider_album,
+    AlbumCtx, AlbumUri, ProviderId, Track, download_from_hires-provider_by_query, download_hires-provider_album,
     download_hires-provider_track, download_hires-provider_track_by_match, track_match_key, use_album, use_config,
-    use_detail, use_downloads, use_local_library, use_hires-provider, use_queue,
+    use_ctx_menu, use_detail, use_downloads, use_local_library, use_hires-provider, use_queue,
 };
 
 use crate::parts::{PlayableLi, TrackCtx, format_duration};
@@ -67,6 +67,7 @@ pub fn AlbumPage(uri: AlbumUri) -> Element {
 fn AlbumHeader(detail: hooks::AlbumDetail, on_play_all: EventHandler<()>) -> Element {
     let cover = detail.cover_url.clone().unwrap_or_default();
     let detail_router = use_detail();
+    let ctx = use_ctx_menu();
     let qz = use_hires-provider();
     let downloads = use_downloads();
     let local = use_local_library();
@@ -101,7 +102,32 @@ fn AlbumHeader(detail: hooks::AlbumDetail, on_play_all: EventHandler<()>) -> Ele
     };
 
     rsx! {
-        header { class: "album-banner",
+        header {
+            class: "album-banner",
+            // Album right-click: play/queue/add-to-playlist (as an album
+            // widget) — same menu the Library album cards open.
+            oncontextmenu: {
+                let uri = detail.uri.0.clone();
+                let title = detail.title.clone();
+                let artist = detail.artist.name.clone();
+                let cover_url = detail.cover_url.clone();
+                let tracks = detail.tracks.clone();
+                move |e: Event<MouseData>| {
+                    e.prevent_default();
+                    let pos = e.data.client_coordinates();
+                    ctx.open_album(
+                        pos.x,
+                        pos.y,
+                        AlbumCtx {
+                            uri: uri.clone(),
+                            title: title.clone(),
+                            artist: artist.clone(),
+                            cover_url: cover_url.clone(),
+                            tracks: tracks.clone(),
+                        },
+                    );
+                }
+            },
             div { class: "banner-cover",
                 if !cover.is_empty() {
                     img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }

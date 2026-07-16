@@ -1,7 +1,9 @@
-//! Library page — two tabs:
+//! Library page — four tabs:
 //!
 //! - **Saved** — local likes stored on disk (cross-provider). Anything the
 //!   user hearts in nira lands here, regardless of where it streams from.
+//! - **Local** — the scanned `library_root` files, grouped into albums.
+//! - **Playlists** — hand-curated cross-provider lists (JSON on disk).
 //! - **Spotify Liked** — the Spotify-server-side liked songs list, pulled
 //!   live via the API. Read-only mirror.
 
@@ -9,8 +11,8 @@ use std::sync::Arc;
 
 use dioxus::prelude::*;
 use hooks::{
-    AlbumUri, LikedTrack, Track, use_ctx_menu, use_detail, use_library, use_likes,
-    use_local_library, use_queue,
+    AlbumCtx, AlbumUri, LikedTrack, Playlist, PlaylistAlbum, Track, use_ctx_menu, use_detail,
+    use_library, use_likes, use_local_library, use_playlists, use_queue,
 };
 
 use crate::parts::{ArtistLinks, format_duration, open_track_context, provider_badge_class};
@@ -53,6 +55,7 @@ impl TrackContext {
 enum LibTab {
     Saved,
     Local,
+    Playlists,
     Spotify,
 }
 
@@ -61,6 +64,8 @@ pub fn Library() -> Element {
     let library = use_library();
     let likes = use_likes();
     let local = use_local_library();
+    let playlists = use_playlists();
+    let playlist_count = playlists.count();
 
     let mut tab = use_signal(|| LibTab::Saved);
     let active = *tab.read();
@@ -101,6 +106,13 @@ pub fn Library() -> Element {
                     span { class: "lib-tab-count", "{local_count}" }
                 }
                 button {
+                    class: if active == LibTab::Playlists { "lib-tab active" } else { "lib-tab" },
+                    onclick: move |_| tab.set(LibTab::Playlists),
+                    i { class: "fa-solid fa-list-ul" }
+                    " Playlists "
+                    span { class: "lib-tab-count", "{playlist_count}" }
+                }
+                button {
                     class: if active == LibTab::Spotify { "lib-tab active" } else { "lib-tab" },
                     onclick: move |_| tab.set(LibTab::Spotify),
                     i { class: "fa-brands fa-spotify" }
@@ -118,6 +130,7 @@ pub fn Library() -> Element {
                         error: local_error.clone(),
                     }
                 },
+                LibTab::Playlists => rsx! { PlaylistsPane {} },
                 LibTab::Spotify => rsx! {
                     SpotifyLikedList {
                         context: spotify_context.read().clone(),
@@ -170,6 +183,348 @@ fn SavedList(items: Vec<LikedTrack>) -> Element {
                             context,
                             index: idx,
                             on_unlike: move |_| likes.toggle(&t_for_unlike),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn PlaylistsPane() -> Element {
+    let playlists = use_playlists();
+    let queue = use_queue();
+    let mut selected = use_signal(|| None::<String>);
+    let mut new_name = use_signal(String::new);
+    let mut confirm_delete = use_signal(|| false);
+    // Leaving/entering a playlist resets the delete confirmation.
+    use_effect(move || {
+        let _ = selected.read();
+        confirm_delete.set(false);
+    });
+
+    let items = playlists.list();
+    let sel_pl: Option<Playlist> = selected
+        .read()
+        .as_ref()
+        .and_then(|id| items.iter().find(|p| p.id == *id).cloned());
+
+    // ── Detail view ─────────────────────────────────────────────
+    if let Some(pl) = sel_pl {
+        // Play/Shuffle feed the queue everything: loose tracks first, then
+        // each album widget's tracks in display order.
+        let all_tracks = pl.all_tracks();
+        let total = all_tracks.len();
+        let album_count = pl.albums.len();
+        let count_label = if album_count > 0 {
+            format!(
+                "{total} {} · {album_count} {}",
+                if total == 1 { "track" } else { "tracks" },
+                if album_count == 1 { "album" } else { "albums" },
+            )
+        } else {
+            format!("{total} {}", if total == 1 { "track" } else { "tracks" })
+        };
+        let context = TrackContext::new(pl.tracks.clone());
+        let play_context = TrackContext::new(all_tracks);
+        let pl_id = pl.id.clone();
+        let confirm = *confirm_delete.read();
+        let delete_label = if confirm { "Really delete?" } else { "Delete" };
+
+        return rsx! {
+            div { class: "lib-pl-head",
+                button {
+                    class: "sq-btn sq-btn-ghost sq-sm",
+                    onclick: move |_| selected.set(None),
+                    i { class: "fa-solid fa-arrow-left" }
+                    " Playlists"
+                }
+                div { class: "lib-pl-copy",
+                    span { class: "lib-pl-title", "{pl.name}" }
+                    span { class: "hint", "{count_label}" }
+                }
+                div { class: "lib-local-actions",
+                    button {
+                        class: "sq-btn sq-btn-ghost sq-sm",
+                        disabled: total == 0,
+                        onclick: {
+                            let queue = queue.clone();
+                            let play_context = play_context.clone();
+                            move |_| queue.play_context(play_context.to_vec(), 0)
+                        },
+                        i { class: "fa-solid fa-play" }
+                        " Play"
+                    }
+                    button {
+                        class: "sq-btn sq-btn-ghost sq-sm",
+                        disabled: total < 2,
+                        onclick: {
+                            let queue = queue.clone();
+                            let play_context = play_context.clone();
+                            move |_| queue.shuffle_all(play_context.to_vec())
+                        },
+                        i { class: "fa-solid fa-shuffle" }
+                        " Shuffle"
+                    }
+                    button {
+                        class: if confirm { "sq-btn sq-btn-ghost sq-sm active" } else { "sq-btn sq-btn-ghost sq-sm" },
+                        onclick: {
+                            let pl_id = pl_id.clone();
+                            move |_| {
+                                if *confirm_delete.peek() {
+                                    playlists.delete(&pl_id);
+                                    selected.set(None);
+                                } else {
+                                    confirm_delete.set(true);
+                                }
+                            }
+                        },
+                        i { class: "fa-solid fa-trash-can" }
+                        " {delete_label}"
+                    }
+                }
+            }
+            if pl.is_empty() {
+                div { class: "discover-empty",
+                    div { class: "discover-empty-glyph",
+                        i { class: "fa-solid fa-list-ul" }
+                    }
+                    p { "This playlist is empty." }
+                    p { class: "hint", "Right-click any track or album → \"Add to playlist\" → {pl.name}." }
+                }
+            }
+            if !pl.tracks.is_empty() {
+                ul { class: "track-list",
+                    for (idx, track) in pl.tracks.iter().enumerate() {
+                        {
+                            let track = track.clone();
+                            let row_context = context.clone();
+                            let pl_id = pl_id.clone();
+                            let uri = track.uri.clone();
+                            rsx! {
+                                TrackRow {
+                                    key: "{track.uri.0}",
+                                    track: track.clone(),
+                                    saved_at: None,
+                                    show_unlike: true,
+                                    remove_title: Some("Remove from playlist".to_string()),
+                                    context: row_context,
+                                    index: idx,
+                                    on_unlike: move |_| playlists.remove_track(&pl_id, &uri),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for album in pl.albums.iter() {
+                PlaylistAlbumWidget {
+                    key: "{album.uri}",
+                    playlist_id: pl_id.clone(),
+                    album: album.clone(),
+                }
+            }
+        };
+    }
+
+    // ── Overview ────────────────────────────────────────────────
+    rsx! {
+        div { class: "lib-pl-create",
+            input {
+                class: "lib-pl-input",
+                placeholder: "New playlist…",
+                value: "{new_name}",
+                oninput: move |e: FormEvent| new_name.set(e.value()),
+                onkeydown: move |e: KeyboardEvent| {
+                    if e.key() == Key::Enter && !new_name.peek().trim().is_empty() {
+                        playlists.create(&new_name.peek());
+                        new_name.set(String::new());
+                    }
+                },
+            }
+            button {
+                class: "sq-btn sq-btn-ghost sq-sm",
+                disabled: new_name.read().trim().is_empty(),
+                onclick: move |_| {
+                    playlists.create(&new_name.peek());
+                    new_name.set(String::new());
+                },
+                i { class: "fa-solid fa-plus" }
+                " Create"
+            }
+        }
+
+        if items.is_empty() {
+            div { class: "discover-empty",
+                div { class: "discover-empty-glyph",
+                    i { class: "fa-solid fa-list-ul" }
+                }
+                p { "No playlists yet." }
+                p { class: "hint",
+                    "Create one above — or right-click any track and pick \"Add to playlist\"."
+                }
+            }
+        } else {
+            div { class: "album-grid local-album-grid",
+                for pl in items.iter() {
+                    {
+                        let id = pl.id.clone();
+                        let name = pl.name.clone();
+                        let count = pl.tracks.len() + pl.albums.iter().map(|a| a.tracks.len()).sum::<usize>();
+                        let cover = pl
+                            .tracks
+                            .iter()
+                            .find_map(|t| t.cover_url.clone())
+                            .or_else(|| pl.albums.iter().find_map(|a| a.cover_url.clone()));
+                        let sub = if pl.albums.is_empty() {
+                            format!("{count} {}", if count == 1 { "track" } else { "tracks" })
+                        } else {
+                            format!(
+                                "{count} {} · {} {}",
+                                if count == 1 { "track" } else { "tracks" },
+                                pl.albums.len(),
+                                if pl.albums.len() == 1 { "album" } else { "albums" },
+                            )
+                        };
+                        rsx! {
+                            button {
+                                key: "{id}",
+                                class: "album-card",
+                                r#type: "button",
+                                title: "{name}",
+                                onclick: move |_| selected.set(Some(id.clone())),
+                                div { class: "album-cover",
+                                    if let Some(src) = cover.as_ref() {
+                                        img { src: "{src}", alt: "", loading: "lazy", decoding: "async" }
+                                    } else {
+                                        span { class: "album-cover-fallback",
+                                            i { class: "fa-solid fa-list-ul" }
+                                        }
+                                    }
+                                }
+                                div { class: "album-meta",
+                                    span { class: "album-title", "{name}" }
+                                    span { class: "album-sub", "{sub}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One embedded album inside a playlist — cover + meta header, expandable
+/// track list, play/remove actions. Songs added normally stay loose rows;
+/// this is the "whole album as a widget" path.
+#[component]
+fn PlaylistAlbumWidget(playlist_id: String, album: PlaylistAlbum) -> Element {
+    let playlists = use_playlists();
+    let queue = use_queue();
+    let ctx = use_ctx_menu();
+    let mut expanded = use_signal(|| false);
+    let is_open = *expanded.read();
+
+    let count = album.tracks.len();
+    let sub = format!(
+        "{} · {} {}",
+        album.artist,
+        count,
+        if count == 1 { "track" } else { "tracks" }
+    );
+    let cover = album.cover_url.clone().unwrap_or_default();
+    let context = TrackContext::new(album.tracks.clone());
+    let chevron = if is_open {
+        "fa-solid fa-chevron-down"
+    } else {
+        "fa-solid fa-chevron-right"
+    };
+
+    rsx! {
+        section { class: "pl-album",
+            header { class: "pl-album-head",
+                button {
+                    class: "pl-album-main",
+                    r#type: "button",
+                    title: "{album.title} — {album.artist}",
+                    onclick: move |_| {
+                        let now = *expanded.peek();
+                        expanded.set(!now);
+                    },
+                    oncontextmenu: {
+                        let album = album.clone();
+                        move |e: Event<MouseData>| {
+                            e.prevent_default();
+                            let pos = e.data.client_coordinates();
+                            ctx.open_album(
+                                pos.x,
+                                pos.y,
+                                AlbumCtx {
+                                    uri: album.uri.clone(),
+                                    title: album.title.clone(),
+                                    artist: album.artist.clone(),
+                                    cover_url: album.cover_url.clone(),
+                                    tracks: album.tracks.clone(),
+                                },
+                            );
+                        }
+                    },
+                    div { class: "pl-album-cover",
+                        if !cover.is_empty() {
+                            img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }
+                        } else {
+                            i { class: "fa-solid fa-compact-disc" }
+                        }
+                    }
+                    div { class: "pl-album-meta",
+                        span { class: "pl-album-title", "{album.title}" }
+                        span { class: "pl-album-sub", "{sub}" }
+                    }
+                    i { class: "pl-album-chevron {chevron}" }
+                }
+                div { class: "pl-album-actions",
+                    button {
+                        class: "sq-btn sq-btn-ghost sq-sm",
+                        title: "Play this album",
+                        disabled: count == 0,
+                        onclick: {
+                            let queue = queue.clone();
+                            let context = context.clone();
+                            move |_| queue.play_context(context.to_vec(), 0)
+                        },
+                        i { class: "fa-solid fa-play" }
+                    }
+                    button {
+                        class: "sq-btn sq-btn-ghost sq-sm",
+                        title: "Remove album from playlist",
+                        onclick: {
+                            let playlist_id = playlist_id.clone();
+                            let uri = album.uri.clone();
+                            move |_| playlists.remove_album(&playlist_id, &uri)
+                        },
+                        i { class: "fa-solid fa-xmark" }
+                    }
+                }
+            }
+            if is_open {
+                ul { class: "track-list",
+                    for (idx, track) in album.tracks.iter().enumerate() {
+                        {
+                            let track = track.clone();
+                            let row_context = context.clone();
+                            rsx! {
+                                TrackRow {
+                                    key: "{track.uri.0}",
+                                    track: track.clone(),
+                                    saved_at: None,
+                                    show_unlike: false,
+                                    context: row_context,
+                                    index: idx,
+                                    on_unlike: move |_| {},
+                                }
+                            }
                         }
                     }
                 }
@@ -343,17 +698,50 @@ fn LocalAlbumCard(
     lossless: bool,
 ) -> Element {
     let detail = use_detail();
+    let ctx = use_ctx_menu();
+    let local = use_local_library();
     let sub = format!(
         "{artist} · {count} {}{}",
         if count == 1 { "track" } else { "tracks" },
         if lossless { " · lossless" } else { "" },
     );
+    let uri_for_click = album_uri.clone();
     rsx! {
         button {
             class: "album-card",
             r#type: "button",
             title: "{title} — {artist}",
-            onclick: move |_| detail.open_album(AlbumUri(album_uri.clone())),
+            onclick: move |_| detail.open_album(AlbumUri(uri_for_click.clone())),
+            oncontextmenu: {
+                let album_uri = album_uri.clone();
+                let title = title.clone();
+                let artist = artist.clone();
+                let cover = cover.clone();
+                move |e: Event<MouseData>| {
+                    e.prevent_default();
+                    let pos = e.data.client_coordinates();
+                    // The scanner sorts by album, so this filter IS the
+                    // album's track list in disc/track order.
+                    let tracks: Vec<Track> = local
+                        .tracks
+                        .peek()
+                        .iter()
+                        .filter(|t| t.album.as_ref().is_some_and(|a| a.uri.0 == album_uri))
+                        .cloned()
+                        .collect();
+                    ctx.open_album(
+                        pos.x,
+                        pos.y,
+                        AlbumCtx {
+                            uri: album_uri.clone(),
+                            title: title.clone(),
+                            artist: artist.clone(),
+                            cover_url: cover.clone(),
+                            tracks,
+                        },
+                    );
+                }
+            },
             div { class: "album-cover",
                 if let Some(src) = cover.as_ref() {
                     img { src: "{src}", alt: "", loading: "lazy", decoding: "async" }
@@ -560,6 +948,9 @@ fn TrackRow(
     context: TrackContext,
     index: usize,
     #[props(default)] quality_badge: Option<String>,
+    /// Tooltip for the trailing remove button; defaults to the Saved tab's
+    /// "Remove from Liked".
+    #[props(default)] remove_title: Option<String>,
     on_unlike: EventHandler<()>,
 ) -> Element {
     let queue = use_queue();
@@ -620,7 +1011,7 @@ fn TrackRow(
             if show_unlike {
                 button {
                     class: "track-row-unlike",
-                    title: "Remove from Liked",
+                    title: remove_title.as_deref().unwrap_or("Remove from Liked"),
                     onclick: move |e: MouseEvent| {
                         e.stop_propagation();
                         on_unlike.call(());

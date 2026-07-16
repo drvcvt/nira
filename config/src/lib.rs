@@ -198,6 +198,19 @@ impl AppConfig {
         Self::cache_dir().map(|d| d.join("recommendations.json"))
     }
 
+    /// Persisted playback queue (entries + index + modes) so a restart
+    /// resumes where the session left off. Cache-tier: losing it just means
+    /// an empty queue on next boot.
+    pub fn queue_state_path() -> Option<PathBuf> {
+        Self::cache_dir().map(|d| d.join("queue.json"))
+    }
+
+    /// Local playlists. Config-tier like likes — hand-curated lists must
+    /// survive a cache wipe.
+    pub fn playlists_path() -> Option<PathBuf> {
+        Self::config_dir().map(|d| d.join("playlists.json"))
+    }
+
     /// Atomic write helper: serialise → write to `path.tmp` → rename. Used
     /// for every cache file we own so a kill-at-the-wrong-moment can't leave
     /// a half-written JSON that breaks the next launch.

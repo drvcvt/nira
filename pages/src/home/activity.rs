@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use dioxus::prelude::*;
 use hooks::{
-    HistoryEntry, Provider, Query, Track, TrackUri, UseLibrary, use_ctx_menu, use_local_library,
-    use_hires-provider, use_queue, use_soundcloud, use_spotify,
+    ArtistRef, ArtistUri, HistoryEntry, Provider, ProviderId, Query, Track, TrackUri, UseLibrary,
+    use_ctx_menu, use_local_library, use_hires-provider, use_queue, use_soundcloud, use_spotify,
 };
 
 use super::rails::{Rail, SkeletonRow};
@@ -106,11 +106,13 @@ fn HistoryCard(entry: HistoryEntry, entries: Vec<HistoryEntry>, index: usize) ->
                     let local_tracks = local.tracks.peek().clone();
                     let entry = entry.clone();
                     spawn(async move {
-                        if let Some(track) =
-                            resolve_history_entry(sc, sp, qz, &local_tracks, &entry).await
-                        {
-                            ctx.open(pos.x, pos.y, track);
-                        }
+                        // Open the menu even when the entry no longer
+                        // resolves anywhere — deleting a dead row is the
+                        // main reason to right-click it.
+                        let track = resolve_history_entry(sc, sp, qz, &local_tracks, &entry)
+                            .await
+                            .unwrap_or_else(|| placeholder_track(&entry));
+                        ctx.open_for_history(pos.x, pos.y, track, entry);
                     });
                 }
             },
@@ -128,6 +130,31 @@ fn HistoryCard(entry: HistoryEntry, entries: Vec<HistoryEntry>, index: usize) ->
             div { class: "cover-card-sub", "{artist}" }
             div { class: "cover-card-time", "{played_label}" }
         }
+    }
+}
+
+/// Menu-only stand-in for a history row that resolves nowhere (provider
+/// gone, deleted upload). Playback actions on it will surface an error;
+/// "Remove from history" — the point of opening it — works regardless.
+fn placeholder_track(entry: &HistoryEntry) -> Track {
+    Track {
+        uri: TrackUri(entry.track_uri.clone().unwrap_or_default()),
+        provider: match entry.provider.as_str() {
+            "Spotify" => ProviderId::Spotify,
+            "SoundCloud" => ProviderId::SoundCloud,
+            "the hi-res provider" => ProviderId::the hi-res provider,
+            _ => ProviderId::Local,
+        },
+        title: entry.title.clone(),
+        artists: vec![ArtistRef {
+            uri: ArtistUri(String::new()),
+            name: entry.artist.clone(),
+        }],
+        album: None,
+        duration: std::time::Duration::ZERO,
+        cover_url: entry.cover_url.clone(),
+        mbid: None,
+        added_at: None,
     }
 }
 

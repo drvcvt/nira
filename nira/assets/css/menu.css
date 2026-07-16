@@ -189,3 +189,77 @@
 }
 
 .download-toast-close:hover { color: var(--text); background: var(--raise3); }
+
+
+/* ── "Add to playlist" inline expansion + chevron ─────────────────────── */
+
+.ctx-chevron {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.ctx-sublist {
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow-y: auto;
+  /* One brightness step in from the menu surface, not a border. */
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  border-radius: var(--rs);
+  padding: 3px;
+  margin: 2px 2px 3px;
+}
+
+.ctx-subitem {
+  padding-left: 14px;
+}
+
+.ctx-subcount {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ctx-newpl {
+  display: flex;
+  gap: 5px;
+  padding: 4px 4px 3px;
+}
+
+.ctx-newpl-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--raise3);
+  border: none;
+  outline: none;
+  border-radius: var(--rs);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 9px;
+}
+
+.ctx-newpl-input::placeholder {
+  color: var(--faint);
+}
+
+.ctx-newpl-btn {
+  appearance: none;
+  border: none;
+  background: var(--raise3);
+  color: var(--sub);
+  cursor: pointer;
+  width: 28px;
+  border-radius: var(--rs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.ctx-newpl-btn:hover {
+  background: var(--chip-on);
+  color: var(--chip-on-fg);
+}
