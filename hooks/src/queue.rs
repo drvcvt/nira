@@ -20,8 +20,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dioxus::prelude::*;
-use discovery::{DiscoveryEngine, SimilarToSeed};
-use player::{NowPlaying, Player, TransportCmd};
+use discovery::{DiscoveryEngine, DiscoveryResult, SimilarToSeed, canonical_title};
+use player::{Active, NowPlaying, Player, PlayerSnapshot, TransportCmd};
 use provider_api::{Provider, ProviderId, StreamHandle, Track};
 use provider_hires-provider::the hi-res providerProvider;
 use provider_soundcloud::SoundCloudProvider;
@@ -60,6 +60,10 @@ pub struct UseQueue {
     /// Kept in sync by add_to_queue/play_next while shuffled.
     pre_shuffle: Signal<Option<Vec<Track>>>,
     pub radio_status: Signal<RadioStatus>,
+    /// Gapless bookkeeping: (load_generation, target index) of the entry
+    /// whose audio has been (or is being) appended to the sink for a
+    /// gapless hand-off. Cleared when the hand-off commits or fails.
+    gapless_prefetched: Signal<Option<(u64, usize)>>,
     sc: Arc<SoundCloudProvider>,
     sp: Arc<SpotifyProvider>,
     qz: Arc<the hi-res providerProvider>,
@@ -81,11 +85,22 @@ pub enum RadioStatus {
     Error(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RepeatMode {
     Off,
     All,
     One,
+}
+
+/// On-disk shape of the queue (cache tier). Written on every queue-shape
+/// change, read once on boot so a restart resumes where the session left
+/// off — paused, at the same entry; pressing play starts it.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedQueue {
+    entries: Vec<Track>,
+    current_index: Option<usize>,
+    shuffle: bool,
+    repeat: RepeatMode,
 }
 
 impl UseQueue {
@@ -296,6 +311,21 @@ impl UseQueue {
         self.append_to_pre_shuffle(track);
     }
 
+    /// Append several tracks (an album drop) in one signal write. Same
+    /// patient semantics as `add_to_queue` — never starts playback.
+    pub fn add_all(&self, tracks: Vec<Track>) {
+        if tracks.is_empty() {
+            return;
+        }
+        let mut entries = self.entries;
+        let mut updated = entries.peek().clone();
+        updated.extend(tracks.iter().cloned());
+        entries.set(updated);
+        for t in tracks {
+            self.append_to_pre_shuffle(t);
+        }
+    }
+
     /// Insert a track right after the currently-playing entry so it plays
     /// next when the current one ends (or when the user hits Next). If
     /// nothing is playing yet, behaves like `add_to_queue`.
@@ -336,6 +366,11 @@ impl UseQueue {
         let mut status = self.radio_status;
         status.set(RadioStatus::Loading);
         let seed_for_fallback = seed.clone();
+        // Spotify-style blend: a second seed drawn from recent listening
+        // (decay-weighted, different artist) widens the radio beyond the
+        // clicked track's immediate neighbourhood, 2:1 in the seed's favour.
+        // ponytail: one profile seed; bump to 2-3 if radios still feel narrow.
+        let profile_seed = self.radio_profile_seed(&seed);
         // The lookup takes seconds; if the user starts anything else in the
         // meantime (click a track, next, stop), every one of those bumps the
         // load generation — a changed generation means the radio result must
@@ -352,7 +387,19 @@ impl UseQueue {
                 mbid: None,
             };
             let superseded = |q: &UseQueue| *q.load_generation.peek() != generation_at_start;
-            let results = match engine.similar_to(s).await {
+            // The profile path is best-effort: its failure never fails the
+            // radio, the seed's own neighbourhood just plays undiluted.
+            let looked_up = match profile_seed {
+                Some(p) => {
+                    let (main, extra) = tokio::join!(engine.similar_to(s), engine.similar_to(p));
+                    main.map(|m| match extra {
+                        Ok(e) => interleave_radio(m, e),
+                        Err(_) => m,
+                    })
+                }
+                None => engine.similar_to(s).await,
+            };
+            let results = match looked_up {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!(error = %e, "song radio lookup failed");
@@ -377,10 +424,48 @@ impl UseQueue {
                     list.push(t);
                 }
             }
+            // Keep the clicked seed at 0 but pull same-artist runs apart.
+            spread_artists(&mut list);
             tracing::info!(count = list.len(), "song radio queued");
             status.set(RadioStatus::Idle);
             queue.play_list(list, 0);
         });
+    }
+
+    /// A second radio seed sampled from recent listening: decay-weighted so
+    /// current taste dominates, restricted to artists other than the radio
+    /// seed itself. Repeat plays of a track naturally stack its weight.
+    fn radio_profile_seed(&self, seed: &Track) -> Option<SimilarToSeed> {
+        let seed_artist = seed
+            .artists
+            .first()
+            .map(|a| a.name.to_lowercase())
+            .unwrap_or_default();
+        let now = chrono::Utc::now();
+        let pool: Vec<(f64, SimilarToSeed)> = self
+            .player
+            .history()
+            .recent(50)
+            .into_iter()
+            .filter(|e| {
+                !e.artist.is_empty()
+                    && !e.title.is_empty()
+                    && e.artist.to_lowercase() != seed_artist
+            })
+            .map(|e| {
+                (
+                    crate::taste::play_weight(now, e.played_at),
+                    SimilarToSeed {
+                        artist: e.artist,
+                        title: e.title,
+                        mbid: None,
+                    },
+                )
+            })
+            .collect();
+        crate::taste::weighted_sample(pool, 1, &mut rand::rng())
+            .into_iter()
+            .next()
     }
 
     pub fn toggle_shuffle(&self) {
@@ -498,7 +583,75 @@ fn shuffled_context(mut tracks: Vec<Track>, start_idx: usize) -> (Vec<Track>, us
     let current = tracks.remove(start_idx);
     tracks.shuffle(&mut rand::rng());
     tracks.insert(0, current);
+    spread_artists(&mut tracks);
     (tracks, 0)
+}
+
+fn spread_key(track: &Track) -> String {
+    track
+        .artists
+        .first()
+        .map(|a| a.name.to_lowercase())
+        .unwrap_or_default()
+}
+
+/// Post-shuffle pass, Spotify-style: pull back-to-back same-artist pairs
+/// apart by swapping the second one with the next differing track. Index 0
+/// (the playing track) is never moved.
+/// ponytail: greedy single pass, O(n²) worst case — fine at queue sizes;
+/// a proper balanced-shuffle only if runs still bother anyone.
+fn spread_artists(tracks: &mut [Track]) {
+    for i in 1..tracks.len() {
+        if spread_key(&tracks[i]) != spread_key(&tracks[i - 1]) {
+            continue;
+        }
+        if let Some(j) =
+            (i + 1..tracks.len()).find(|&j| spread_key(&tracks[j]) != spread_key(&tracks[i - 1]))
+        {
+            tracks.swap(i, j);
+        }
+    }
+}
+
+/// Blend two radio result sets 2:1 — two picks from the clicked seed's
+/// neighbourhood, then one from the taste-profile seed — deduped on the
+/// noise-stripped title so the same song can't enter once per source.
+fn interleave_radio(
+    main: Vec<DiscoveryResult>,
+    profile: Vec<DiscoveryResult>,
+) -> Vec<DiscoveryResult> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(main.len() + profile.len());
+    let mut push = |r: DiscoveryResult, out: &mut Vec<DiscoveryResult>| {
+        let canon = canonical_title(&r.title);
+        let key = if canon.is_empty() {
+            format!("{}|{}", r.artist.to_lowercase(), r.title.to_lowercase())
+        } else {
+            canon
+        };
+        if seen.insert(key) {
+            out.push(r);
+        }
+    };
+    let mut main = main.into_iter();
+    let mut profile = profile.into_iter();
+    loop {
+        let mut any = false;
+        for _ in 0..2 {
+            if let Some(r) = main.next() {
+                any = true;
+                push(r, &mut out);
+            }
+        }
+        if let Some(r) = profile.next() {
+            any = true;
+            push(r, &mut out);
+        }
+        if !any {
+            break;
+        }
+    }
+    out
 }
 
 /// Spawn the load task for the queue's current_index entry. Used by
@@ -588,6 +741,104 @@ fn load_current(queue: UseQueue) {
         }
         is_loading.set(false);
     });
+}
+
+/// How close to the end of the current track the gapless prefetch kicks in.
+/// Enough headroom for a stream URL resolve + HTTP prefetch on a normal
+/// connection; short enough that skips rarely waste a fetch.
+const GAPLESS_PREFETCH_WINDOW: Duration = Duration::from_secs(12);
+
+/// Near the end of a rodio-backed track, resolve the next queue entry and
+/// append its audio to the sink so the hand-off is gapless. Streaming
+/// entries get the same FLAC-first swap as a normal load. Every failure is
+/// silent — the falling-edge auto-advance handles the transition exactly as
+/// before, just with the old audible gap.
+/// ponytail: if the queue is edited between append and hand-off, the index
+/// can point one row off until the next transition; bumping the generation
+/// on queue edits would fix it if it ever bothers anyone.
+fn maybe_prefetch_gapless(queue: &UseQueue, snap: &PlayerSnapshot) {
+    if snap.active != Active::Rodio || snap.is_paused {
+        return;
+    }
+    let Some(dur) = snap.duration else { return };
+    if dur.is_zero() || snap.position >= dur || dur - snap.position > GAPLESS_PREFETCH_WINDOW {
+        return;
+    }
+    let Some(i) = *queue.current_index.peek() else {
+        return;
+    };
+    let len = queue.entries.peek().len();
+    // Mirror advance_after_end's target choice so repeat modes loop
+    // gaplessly too.
+    let target = match *queue.repeat_mode.peek() {
+        RepeatMode::One => i,
+        RepeatMode::All if i + 1 >= len => 0,
+        _ if i + 1 < len => i + 1,
+        _ => return, // queue ends here — natural stop
+    };
+    let generation = *queue.load_generation.peek();
+    if *queue.gapless_prefetched.peek() == Some((generation, target)) {
+        return; // already in flight / appended for this transition
+    }
+    let mut prefetched = queue.gapless_prefetched;
+    prefetched.set(Some((generation, target)));
+    spawn(prefetch_gapless(queue.clone(), generation, target));
+}
+
+async fn prefetch_gapless(queue: UseQueue, generation: u64, target: usize) {
+    let Some(track) = queue.entries.peek().get(target).cloned() else {
+        return;
+    };
+    // librespot is its own engine — a Spotify entry can't be appended to
+    // the rodio sink; that transition keeps the normal load path.
+    if track.provider == ProviderId::Spotify {
+        return;
+    }
+    let playing = resolve_flac_first(&queue, &track)
+        .await
+        .unwrap_or_else(|| track.clone());
+    let stale = || *queue.load_generation.peek() != generation;
+    if stale() {
+        return;
+    }
+    let np = now_playing_from(&playing);
+    let player = queue.player.clone();
+    let appended = match playing.provider {
+        ProviderId::Local => match provider_local::path_from_uri(&playing.uri.0) {
+            Some(path) => player
+                .append_next_file(path, Some(playing.duration), np)
+                .unwrap_or(false),
+            None => false,
+        },
+        ProviderId::SoundCloud | ProviderId::the hi-res provider => {
+            let loaded = if playing.provider == ProviderId::SoundCloud {
+                load_sc(queue.sc.as_ref(), &playing).await
+            } else {
+                load_qz(queue.qz.as_ref(), &playing).await
+            };
+            match loaded {
+                Ok(LoadedStream::Url(url)) => {
+                    match Player::prepare_http(&url, Some(playing.duration)).await {
+                        Ok(prepared) if !stale() => player.append_next_http(prepared, np),
+                        _ => false,
+                    }
+                }
+                Ok(LoadedStream::Bytes(bytes)) if !stale() => player
+                    .append_next_bytes(bytes, Some(playing.duration), np)
+                    .unwrap_or(false),
+                _ => false,
+            }
+        }
+        ProviderId::Spotify => false,
+    };
+    if appended {
+        tracing::info!(target_idx = target, "gapless: next track appended to sink");
+    } else if *queue.gapless_prefetched.peek() == Some((generation, target)) {
+        // Roll the marker back so the falling-edge path (or a later retry
+        // within the window) still handles the transition.
+        let mut prefetched = queue.gapless_prefetched;
+        prefetched.set(None);
+    }
 }
 
 /// Fetch + hand one track to the audio engine via its provider. Returns
@@ -835,6 +1086,7 @@ pub fn install(
     let error = use_signal(|| None::<String>);
     let is_loading_track = use_signal(|| false);
     let radio_status = use_signal(|| RadioStatus::Idle);
+    let gapless_prefetched = use_signal(|| None::<(u64, usize)>);
 
     let queue = UseQueue {
         entries,
@@ -847,6 +1099,7 @@ pub fn install(
         load_generation,
         pre_shuffle,
         radio_status,
+        gapless_prefetched,
         sc,
         sp,
         qz,
@@ -856,6 +1109,57 @@ pub fn install(
     use_context_provider({
         let queue = queue.clone();
         move || queue
+    });
+
+    // Restore the persisted queue before the first frame. Audio stays
+    // stopped — the bottombar's play button already starts the queue at
+    // current_index when nothing is loaded. Mid-track position is not
+    // restored; resume starts the entry from the top.
+    use_hook(move || {
+        let Some(path) = config::AppConfig::queue_state_path() else {
+            return;
+        };
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        match serde_json::from_str::<PersistedQueue>(&raw) {
+            Ok(saved) if !saved.entries.is_empty() => {
+                let idx = saved
+                    .current_index
+                    .map(|i| i.min(saved.entries.len() - 1))
+                    .unwrap_or(0);
+                let mut entries_sig = entries;
+                let mut current_sig = current_index;
+                let mut shuffle_sig = shuffle_enabled;
+                let mut repeat_sig = repeat_mode;
+                entries_sig.set(saved.entries);
+                current_sig.set(Some(idx));
+                shuffle_sig.set(saved.shuffle);
+                repeat_sig.set(saved.repeat);
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "queue restore: parse failed; starting empty"),
+        }
+    });
+
+    // Persist on every queue-shape change (entries/index/modes). The write
+    // runs off-thread and atomically; a 100-track queue is ~100 KB of JSON,
+    // cheap at human-scale mutation rates.
+    use_effect(move || {
+        let state = PersistedQueue {
+            entries: entries.read().clone(),
+            current_index: *current_index.read(),
+            shuffle: *shuffle_enabled.read(),
+            repeat: *repeat_mode.read(),
+        };
+        let Some(path) = config::AppConfig::queue_state_path() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            if let Err(e) = config::AppConfig::atomic_write_json(&path, &state) {
+                tracing::warn!(error = %e, "queue persist failed");
+            }
+        });
     });
 
     // Watcher — polls player.snapshot, drives the small state machine,
@@ -872,10 +1176,27 @@ pub fn install(
                 let mut state = queue.advance_state;
                 let current = *state.peek();
 
+                // Gapless hand-off happened inside the sink — walk the
+                // index to the prefetched entry, no load, no state change.
+                if player.take_gapless_advanced() {
+                    if let Some((generation, idx)) = *queue.gapless_prefetched.peek()
+                        && generation == *queue.load_generation.peek()
+                    {
+                        let mut current_sig = queue.current_index;
+                        current_sig.set(Some(idx));
+                        tracing::info!(idx, "queue: gapless hand-off committed");
+                    }
+                    let mut prefetched = queue.gapless_prefetched;
+                    prefetched.set(None);
+                }
+
                 match current {
                     AdvanceState::Loading if snap.has_source => {
                         tracing::info!("queue: load succeeded, now Playing");
                         state.set(AdvanceState::Playing);
+                    }
+                    AdvanceState::Playing if snap.has_source => {
+                        maybe_prefetch_gapless(&queue, &snap);
                     }
                     AdvanceState::Playing if !snap.has_source && !snap.is_paused => {
                         // Backend dropped its source while we expected it to
@@ -931,4 +1252,108 @@ pub fn install(
 
 pub fn use_queue() -> UseQueue {
     use_context::<UseQueue>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use provider_api::{ArtistRef, ArtistUri, TrackUri};
+
+    fn track(artist: &str, title: &str) -> Track {
+        Track {
+            uri: TrackUri(format!("soundcloud:track:{artist}-{title}")),
+            provider: ProviderId::SoundCloud,
+            title: title.into(),
+            artists: vec![ArtistRef {
+                uri: ArtistUri("soundcloud:user:1".into()),
+                name: artist.into(),
+            }],
+            album: None,
+            duration: Duration::from_secs(180),
+            cover_url: None,
+            mbid: None,
+            added_at: None,
+        }
+    }
+
+    fn result(artist: &str, title: &str) -> DiscoveryResult {
+        DiscoveryResult {
+            mbid: None,
+            title: title.into(),
+            artist: artist.into(),
+            cover_url: None,
+            spotify: None,
+            soundcloud: Some(track(artist, title)),
+            score: 1.0,
+            rationale: String::new(),
+        }
+    }
+
+    #[test]
+    fn spread_artists_breaks_up_adjacent_runs() {
+        let mut tracks = vec![
+            track("A", "1"),
+            track("A", "2"),
+            track("B", "1"),
+            track("A", "3"),
+            track("C", "1"),
+        ];
+        spread_artists(&mut tracks);
+        // Current track stays put.
+        assert_eq!(tracks[0].title, "1");
+        assert_eq!(tracks[0].artists[0].name, "A");
+        for pair in tracks.windows(2) {
+            assert_ne!(
+                spread_key(&pair[0]),
+                spread_key(&pair[1]),
+                "adjacent same-artist pair survived: {:?}",
+                tracks
+                    .iter()
+                    .map(|t| t.artists[0].name.clone())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn spread_artists_single_artist_queue_terminates_unchanged() {
+        let mut tracks = vec![track("A", "1"), track("A", "2"), track("A", "3")];
+        spread_artists(&mut tracks);
+        let titles: Vec<_> = tracks.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, vec!["1", "2", "3"]);
+    }
+
+    #[test]
+    fn interleave_radio_blends_two_to_one_and_dedupes() {
+        let main = vec![
+            result("M", "Alpha"),
+            result("M", "Beta"),
+            result("M", "Gamma"),
+        ];
+        let profile = vec![
+            result("P", "Delta"),
+            result("M", "Alpha"),
+            result("P", "Epsilon"),
+        ];
+        let blended = interleave_radio(main, profile);
+        let names: Vec<String> = blended
+            .iter()
+            .map(|r| format!("{}-{}", r.artist, r.title))
+            .collect();
+        // 2 main : 1 profile, the duplicate Alpha is dropped.
+        assert_eq!(
+            names,
+            vec!["M-Alpha", "M-Beta", "P-Delta", "M-Gamma", "P-Epsilon"]
+        );
+    }
+
+    #[test]
+    fn interleave_radio_collapses_same_song_across_sources() {
+        // Same song, different uploader and upload noise — one copy survives.
+        let main = vec![result("M", "Cool Song")];
+        let profile = vec![result("P", "Cool Song (Official Audio)")];
+        let blended = interleave_radio(main, profile);
+        assert_eq!(blended.len(), 1);
+        assert_eq!(blended[0].artist, "M");
+    }
 }

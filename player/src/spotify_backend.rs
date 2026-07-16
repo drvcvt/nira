@@ -64,9 +64,11 @@ impl SpotifyBackend {
     pub async fn new(access_token: &str) -> Result<Self, SpotifyBackendError> {
         let session_config = SessionConfig::default();
         // Emit a position event every 500 ms while playing so our snapshot
-        // tick can show a live timer in the bottombar.
+        // tick can show a live timer in the bottombar. Normalisation on so
+        // Spotify levels sit with the ReplayGain-normalised local files.
         let player_config = PlayerConfig {
             position_update_interval: Some(Duration::from_millis(500)),
+            normalisation: true,
             ..PlayerConfig::default()
         };
         let audio_format = AudioFormat::default();

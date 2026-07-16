@@ -114,6 +114,16 @@ pub struct PreparedHttp {
     url: String,
 }
 
+/// Metadata for a gapless hand-off. The next track's audio is already
+/// appended to the rodio sink; this is what the player state becomes the
+/// moment the sink crosses the source boundary.
+struct PendingNext {
+    source: RodioSource,
+    duration: Option<Duration>,
+    now_playing: NowPlaying,
+    track_gain: f32,
+}
+
 #[derive(Clone)]
 pub struct Player {
     rodio: Arc<RodioPlayer>,
@@ -130,6 +140,19 @@ pub struct Player {
     /// track-start where the first ~5 ms of audio leaked through at unity
     /// gain — perceived as full-volume earrape when a track changes.
     user_volume: Arc<RwLock<f32>>,
+    /// Per-track normalisation gain (linear), from ReplayGain tags on local
+    /// files; 1.0 for untagged/streamed sources. Multiplies into the rodio
+    /// sink volume next to the user's slider gain. librespot does its own
+    /// normalisation (enabled in `SpotifyBackend`).
+    track_gain: Arc<RwLock<f32>>,
+    /// Gapless hand-off state: metadata for the already-appended next
+    /// source, plus the last observed per-source position — a backwards
+    /// jump means the sink crossed the boundary.
+    pending_next: Arc<Mutex<Option<PendingNext>>>,
+    last_rodio_pos: Arc<Mutex<Duration>>,
+    /// One-shot "the sink slid into the prefetched track" flag; the queue
+    /// watcher consumes it via [`Player::take_gapless_advanced`].
+    gapless_advanced: Arc<std::sync::atomic::AtomicBool>,
     /// Outbound side of the transport bus. Sends `Next`/`Previous` from
     /// MPRIS (and future media-key surfaces) to whatever consumer the queue
     /// install path wired up. Unbounded so an off-thread MPRIS request never
@@ -195,6 +218,10 @@ impl Player {
             now_playing: Arc::new(RwLock::new(None)),
             history: History::open(history_path),
             user_volume: Arc::new(RwLock::new(initial_volume)),
+            track_gain: Arc::new(RwLock::new(1.0)),
+            pending_next: Arc::new(Mutex::new(None)),
+            last_rodio_pos: Arc::new(Mutex::new(Duration::ZERO)),
+            gapless_advanced: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             transport_tx,
             transport_rx: Arc::new(Mutex::new(Some(transport_rx))),
         })
@@ -242,6 +269,50 @@ impl Player {
         }
     }
 
+    /// Effective rodio sink gain: user slider (log curve) × per-track
+    /// normalisation factor.
+    fn rodio_gain(&self) -> f32 {
+        Self::slider_to_gain(self.current_volume())
+            * *self.track_gain.read().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn set_track_gain(&self, g: f32) {
+        if let Ok(mut w) = self.track_gain.write() {
+            *w = g;
+        }
+    }
+
+    /// Drop any queued gapless hand-off state. Every path that replaces or
+    /// silences the rodio sink must call this — the appended audio dies
+    /// with `rodio.clear()`, and stale metadata must not commit later.
+    fn clear_pending(&self) {
+        if let Ok(mut p) = self.pending_next.lock() {
+            *p = None;
+        }
+        if let Ok(mut l) = self.last_rodio_pos.lock() {
+            *l = Duration::ZERO;
+        }
+        self.gapless_advanced
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// ReplayGain track gain (album gain as fallback) from a local file's
+    /// tags, as a linear factor. Untagged or unparsable → 1.0.
+    fn replaygain_factor(path: &Path) -> f32 {
+        use lofty::prelude::*;
+        use lofty::tag::ItemKey;
+        let Ok(tagged) = lofty::read_from_path(path) else {
+            return 1.0;
+        };
+        let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else {
+            return 1.0;
+        };
+        tag.get_string(&ItemKey::ReplayGainTrackGain)
+            .or_else(|| tag.get_string(&ItemKey::ReplayGainAlbumGain))
+            .map(gain_db_to_factor)
+            .unwrap_or(1.0)
+    }
+
     /// Read-only handle to the play log so hooks can subscribe to it.
     pub fn history(&self) -> &History {
         &self.history
@@ -260,6 +331,8 @@ impl Player {
     /// Test tone via rodio. Stops Spotify first.
     pub fn play_test_tone(&self) {
         self.silence_spotify();
+        self.clear_pending();
+        self.set_track_gain(1.0);
         self.set_rodio_source(None);
         self.rodio.clear();
         // 0.2 headroom keeps the sine from clipping even at user-volume 1.0.
@@ -289,7 +362,9 @@ impl Player {
     /// Stops Spotify if it was active so we don't double-play.
     pub fn play_bytes(&self, bytes: Vec<u8>) -> Result<(), PlayerError> {
         self.silence_spotify();
-        let gain = Self::slider_to_gain(self.current_volume());
+        self.clear_pending();
+        self.set_track_gain(1.0);
+        let gain = self.rodio_gain();
         let bytes: Arc<[u8]> = bytes.into();
         let decoder = Self::decoder_from_bytes(&bytes)?;
         let dur = decoder.total_duration();
@@ -325,7 +400,15 @@ impl Player {
         fallback_duration: Option<Duration>,
     ) -> Result<(), PlayerError> {
         self.silence_spotify();
-        let gain = Self::slider_to_gain(self.current_volume());
+        self.clear_pending();
+        // Loudness normalisation: the file's ReplayGain tag (when present)
+        // rides on top of the user volume curve.
+        let rg = Self::replaygain_factor(path);
+        if (rg - 1.0).abs() > 0.001 {
+            tracing::info!(factor = rg, path = %path.display(), "replaygain applied");
+        }
+        self.set_track_gain(rg);
+        let gain = self.rodio_gain();
         let file = std::fs::File::open(path)
             .map_err(|e| PlayerError::Decode(format!("open {}: {e}", path.display())))?;
         let decoder = Decoder::try_from(file).map_err(|e| PlayerError::Decode(e.to_string()))?;
@@ -367,12 +450,14 @@ impl Player {
     /// first, same as the other rodio entry points.
     pub fn play_prepared(&self, prepared: PreparedHttp) {
         self.silence_spotify();
+        self.clear_pending();
+        self.set_track_gain(1.0);
         let PreparedHttp {
             decoder,
             duration,
             url,
         } = prepared;
-        let gain = Self::slider_to_gain(self.current_volume());
+        let gain = self.rodio_gain();
         self.set_rodio_source(Some(RodioSource::Http { url }));
         self.rodio.clear();
         // Same first-5ms unity-gain leak guard as play_bytes.
@@ -384,6 +469,148 @@ impl Player {
         }
         self.set_active(Active::Rodio);
         self.record_now_playing();
+    }
+
+    /// Queue a prepared progressive stream behind the current rodio source
+    /// for a gapless hand-off. Audio is appended to the sink now; the
+    /// player metadata (duration, now-playing, history, per-track gain)
+    /// flips when the sink crosses the source boundary. Returns false when
+    /// the append was refused (rodio not actively playing, or a hand-off is
+    /// already queued).
+    pub fn append_next_http(&self, prepared: PreparedHttp, np: NowPlaying) -> bool {
+        let PreparedHttp {
+            decoder,
+            duration,
+            url,
+        } = prepared;
+        self.append_next(decoder, RodioSource::Http { url }, duration, np, 1.0)
+    }
+
+    /// Gapless hand-off for a local file. Reads the ReplayGain factor now so
+    /// the boundary commit can apply it without touching the disk.
+    pub fn append_next_file(
+        &self,
+        path: &Path,
+        fallback_duration: Option<Duration>,
+        np: NowPlaying,
+    ) -> Result<bool, PlayerError> {
+        let file = std::fs::File::open(path)
+            .map_err(|e| PlayerError::Decode(format!("open {}: {e}", path.display())))?;
+        let decoder = Decoder::try_from(file).map_err(|e| PlayerError::Decode(e.to_string()))?;
+        let duration = decoder.total_duration().or(fallback_duration);
+        let gain = Self::replaygain_factor(path);
+        Ok(self.append_next(
+            decoder,
+            RodioSource::File(path.to_path_buf()),
+            duration,
+            np,
+            gain,
+        ))
+    }
+
+    /// Gapless hand-off for fully materialised bytes (SoundCloud HLS).
+    pub fn append_next_bytes(
+        &self,
+        bytes: Vec<u8>,
+        fallback_duration: Option<Duration>,
+        np: NowPlaying,
+    ) -> Result<bool, PlayerError> {
+        let bytes: Arc<[u8]> = bytes.into();
+        let decoder = Self::decoder_from_bytes(&bytes)?;
+        let duration = decoder.total_duration().or(fallback_duration);
+        Ok(self.append_next(decoder, RodioSource::Bytes(bytes), duration, np, 1.0))
+    }
+
+    fn append_next<S>(
+        &self,
+        decoder: S,
+        source: RodioSource,
+        duration: Option<Duration>,
+        np: NowPlaying,
+        track_gain: f32,
+    ) -> bool
+    where
+        S: Source + Send + 'static,
+    {
+        // Only valid while rodio is actively rendering — appending onto an
+        // idle sink would start the next track early, and a Spotify-active
+        // player has nothing to hand off from.
+        if *self.active.read().unwrap_or_else(|p| p.into_inner()) != Active::Rodio
+            || self.rodio.empty()
+        {
+            return false;
+        }
+        {
+            let Ok(mut pending) = self.pending_next.lock() else {
+                return false;
+            };
+            if pending.is_some() {
+                return false; // one hand-off at a time
+            }
+            *pending = Some(PendingNext {
+                source,
+                duration,
+                now_playing: np,
+                track_gain,
+            });
+        }
+        if let Ok(mut l) = self.last_rodio_pos.lock() {
+            *l = self.rodio.get_pos();
+        }
+        self.rodio.append(decoder);
+        true
+    }
+
+    /// Detect the sink crossing into the appended next source: rodio's
+    /// per-source position jumps backwards when the old source ends and the
+    /// appended one starts at zero. Commits the pending metadata and raises
+    /// the flag the queue watcher consumes. Called from `snapshot()` — the
+    /// one funnel every UI/MPRIS tick already goes through. User seeks
+    /// can't fake the jump: `seek` keeps `last_rodio_pos` in sync.
+    fn commit_gapless_if_crossed(&self) {
+        if self
+            .pending_next
+            .lock()
+            .map(|p| p.is_none())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        if *self.active.read().unwrap_or_else(|p| p.into_inner()) != Active::Rodio {
+            return;
+        }
+        let pos = self.rodio.get_pos();
+        let prev = {
+            let Ok(mut last) = self.last_rodio_pos.lock() else {
+                return;
+            };
+            let prev = *last;
+            *last = pos;
+            prev
+        };
+        if pos + Duration::from_secs(2) >= prev {
+            return;
+        }
+        let Some(next) = self.pending_next.lock().ok().and_then(|mut p| p.take()) else {
+            return;
+        };
+        self.set_rodio_source(Some(next.source));
+        if let Ok(mut d) = self.duration.write() {
+            *d = next.duration;
+        }
+        self.set_track_gain(next.track_gain);
+        self.rodio.set_volume(self.rodio_gain());
+        self.set_now_playing(Some(next.now_playing));
+        self.record_now_playing();
+        self.gapless_advanced
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// One-shot consume of "the sink slid into the prefetched track". The
+    /// queue watcher polls this and moves `current_index` without a reload.
+    pub fn take_gapless_advanced(&self) -> bool {
+        self.gapless_advanced
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Progressive reader + decoder over an HTTP resource. Temp-file backed;
@@ -469,6 +696,7 @@ impl Player {
             .unwrap()
             .clone()
             .ok_or(PlayerError::SpotifyNotReady)?;
+        self.clear_pending();
         self.rodio.clear();
         backend.load_and_play(uri)?;
         if let Ok(mut d) = self.duration.write() {
@@ -524,6 +752,7 @@ impl Player {
     /// newly committed track, never to the one being replaced.
     pub fn stop_for_load(&self) {
         self.silence_spotify();
+        self.clear_pending();
         self.set_rodio_source(None);
         self.rodio.clear();
         if let Ok(mut d) = self.duration.write() {
@@ -550,12 +779,22 @@ impl Player {
                 }
             }
             Active::Rodio => {
-                if let Err(e) = self.rodio.try_seek(target) {
-                    // Symphonia can't seek backward on some formats (MP3 from
-                    // bytes in particular). Rebuild the decoder from the
-                    // retained source and seek forward from zero instead.
-                    tracing::info!("rodio seek failed ({e}); rebuilding decoder");
-                    self.rodio_rebuild_seek(target);
+                match self.rodio.try_seek(target) {
+                    Ok(()) => {
+                        // Keep the gapless boundary detector honest: a user
+                        // seek is a legitimate backwards jump, not a source
+                        // hand-off.
+                        if let Ok(mut l) = self.last_rodio_pos.lock() {
+                            *l = target;
+                        }
+                    }
+                    Err(e) => {
+                        // Symphonia can't seek backward on some formats (MP3
+                        // from bytes in particular). Rebuild the decoder from
+                        // the retained source and seek forward from zero.
+                        tracing::info!("rodio seek failed ({e}); rebuilding decoder");
+                        self.rodio_rebuild_seek(target);
+                    }
                 }
             }
             Active::None => {}
@@ -640,7 +879,10 @@ impl Player {
         S: Source + Send + 'static,
     {
         let was_paused = self.rodio.is_paused();
-        let gain = Self::slider_to_gain(self.current_volume());
+        // The rebuild clears the sink, which drops any gapless-appended
+        // next source with it — its metadata must not commit later.
+        self.clear_pending();
+        let gain = self.rodio_gain();
         self.rodio.clear();
         // Same first-5ms unity-gain leak guard as play_bytes.
         self.rodio.set_volume(gain);
@@ -676,9 +918,10 @@ impl Player {
             *w = v;
         }
         // Convert the perceptual slider position to a linear gain via the
-        // 60 dB log curve. librespot's `SoftMixer` already applies the same
-        // curve internally, so we pass the raw slider value over there.
-        self.rodio.set_volume(Self::slider_to_gain(v));
+        // 60 dB log curve (× the current track's normalisation factor).
+        // librespot's `SoftMixer` applies the same curve internally, so we
+        // pass the raw slider value over there.
+        self.rodio.set_volume(self.rodio_gain());
         if let Some(b) = self
             .spotify
             .lock()
@@ -690,6 +933,9 @@ impl Player {
     }
 
     pub fn snapshot(&self) -> PlayerSnapshot {
+        // Gapless: flip metadata the moment the sink crossed into the
+        // appended next source. Cheap no-op unless a hand-off is queued.
+        self.commit_gapless_if_crossed();
         let active = *self.active.read().unwrap_or_else(|p| p.into_inner());
         let (is_paused, position, has_source) = match active {
             Active::Spotify => match self
@@ -767,5 +1013,35 @@ impl Player {
             cover_url: np.cover_url,
             played_at: Utc::now(),
         });
+    }
+}
+
+/// ReplayGain tag value ("-6.35 dB") → linear factor. Clamped to ±12 dB so
+/// one mistagged file can't blast or vanish; unparsable → 1.0.
+fn gain_db_to_factor(raw: &str) -> f32 {
+    let cleaned = raw
+        .trim()
+        .trim_end_matches(|c: char| c.is_alphabetic())
+        .trim();
+    match cleaned.parse::<f32>() {
+        Ok(db) => 10f32.powf(db.clamp(-12.0, 12.0) / 20.0),
+        Err(_) => 1.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gain_db_to_factor;
+
+    #[test]
+    fn replaygain_parse_and_clamp() {
+        assert!((gain_db_to_factor("-6.02 dB") - 0.5).abs() < 0.01);
+        assert!((gain_db_to_factor("0 dB") - 1.0).abs() < f32::EPSILON);
+        assert!((gain_db_to_factor("+3.0dB") - 1.413).abs() < 0.01);
+        // Clamp: ±12 dB max.
+        assert!((gain_db_to_factor("-40 dB") - 10f32.powf(-0.6)).abs() < 0.001);
+        // Garbage → no adjustment.
+        assert_eq!(gain_db_to_factor("loud"), 1.0);
+        assert_eq!(gain_db_to_factor(""), 1.0);
     }
 }

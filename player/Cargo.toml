@@ -13,6 +13,7 @@ librespot = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 chrono = { workspace = true }
+lofty = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 stream-download = { version = "0.24", default-features = false, features = ["reqwest", "reqwest-rustls", "temp-storage"] }
