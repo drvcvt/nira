@@ -64,6 +64,10 @@ pub struct UseQueue {
     /// whose audio has been (or is being) appended to the sink for a
     /// gapless hand-off. Cleared when the hand-off commits or fails.
     gapless_prefetched: Signal<Option<(u64, usize)>>,
+    /// One-shot mid-track resume: (entry uri, position) restored from disk.
+    /// Consumed on the first successful load; only seeks when that load is
+    /// the entry the position belongs to.
+    resume_hint: Signal<Option<(String, Duration)>>,
     sc: Arc<SoundCloudProvider>,
     sp: Arc<SpotifyProvider>,
     qz: Arc<the hi-res providerProvider>,
@@ -101,6 +105,15 @@ struct PersistedQueue {
     current_index: Option<usize>,
     shuffle: bool,
     repeat: RepeatMode,
+}
+
+/// Companion file to [`PersistedQueue`]: where inside the current entry
+/// playback was, written every ~5 s while playing. Restoring arms a
+/// one-shot seek so pressing play continues mid-track.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedPosition {
+    uri: String,
+    secs: u64,
 }
 
 impl UseQueue {
@@ -213,6 +226,11 @@ impl UseQueue {
         let mut current = self.current_index;
         current.set(Some(0));
         self.player.stop();
+        // The queue ran out naturally — a stale mid-track position would
+        // otherwise resurface on the next boot's "play it again".
+        if let Some(p) = config::AppConfig::playback_position_path() {
+            let _ = std::fs::remove_file(p);
+        }
     }
 
     fn jump_to(&self, idx: usize) {
@@ -1162,6 +1180,7 @@ pub fn install(
     let is_loading_track = use_signal(|| false);
     let radio_status = use_signal(|| RadioStatus::Idle);
     let gapless_prefetched = use_signal(|| None::<(u64, usize)>);
+    let resume_hint = use_signal(|| None::<(String, Duration)>);
 
     let queue = UseQueue {
         entries,
@@ -1175,6 +1194,7 @@ pub fn install(
         pre_shuffle,
         radio_status,
         gapless_prefetched,
+        resume_hint,
         sc,
         sp,
         qz,
@@ -1203,6 +1223,18 @@ pub fn install(
                     .current_index
                     .map(|i| i.min(saved.entries.len() - 1))
                     .unwrap_or(0);
+                // Mid-track resume: arm a one-shot seek when the saved
+                // position belongs to the entry we restored to. Positions
+                // under 5 s aren't worth resuming into.
+                if let Some(pos_path) = config::AppConfig::playback_position_path()
+                    && let Ok(pos_raw) = std::fs::read_to_string(&pos_path)
+                    && let Ok(saved_pos) = serde_json::from_str::<PersistedPosition>(&pos_raw)
+                    && saved_pos.secs > 5
+                    && saved.entries.get(idx).is_some_and(|t| t.uri.0 == saved_pos.uri)
+                {
+                    let mut hint = resume_hint;
+                    hint.set(Some((saved_pos.uri, Duration::from_secs(saved_pos.secs))));
+                }
                 let mut entries_sig = entries;
                 let mut current_sig = current_index;
                 let mut shuffle_sig = shuffle_enabled;
@@ -1245,11 +1277,36 @@ pub fn install(
         spawn(async move {
             let queue = queue_for_watcher;
             let player = player_for_watcher;
+            // Every 10th tick (~5 s) the in-track position is persisted for
+            // the next boot's mid-track resume.
+            let mut save_tick: u32 = 0;
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 let snap = player.snapshot();
                 let mut state = queue.advance_state;
                 let current = *state.peek();
+
+                save_tick = save_tick.wrapping_add(1);
+                if save_tick % 10 == 0
+                    && current == AdvanceState::Playing
+                    && snap.has_source
+                    && !snap.is_paused
+                    && let Some(uri) = queue
+                        .current_index
+                        .peek()
+                        .and_then(|i| queue.entries.peek().get(i).map(|t| t.uri.0.clone()))
+                    && let Some(path) = config::AppConfig::playback_position_path()
+                {
+                    let pos = PersistedPosition {
+                        uri,
+                        secs: snap.position.as_secs(),
+                    };
+                    std::thread::spawn(move || {
+                        if let Err(e) = config::AppConfig::atomic_write_json(&path, &pos) {
+                            tracing::debug!(error = %e, "position persist failed");
+                        }
+                    });
+                }
 
                 // Gapless hand-off happened inside the sink — walk the
                 // index to the prefetched entry, no load, no state change.
@@ -1269,6 +1326,22 @@ pub fn install(
                     AdvanceState::Loading if snap.has_source => {
                         tracing::info!("queue: load succeeded, now Playing");
                         state.set(AdvanceState::Playing);
+                        // One-shot mid-track resume from the previous
+                        // session — only when this load IS the entry the
+                        // saved position belongs to.
+                        let hint = queue.resume_hint.peek().clone();
+                        if let Some((uri, pos)) = hint {
+                            let mut hint_sig = queue.resume_hint;
+                            hint_sig.set(None);
+                            let cur_uri = queue
+                                .current_index
+                                .peek()
+                                .and_then(|i| queue.entries.peek().get(i).map(|t| t.uri.0.clone()));
+                            if cur_uri.as_deref() == Some(uri.as_str()) {
+                                tracing::info!(secs = pos.as_secs(), "resuming mid-track");
+                                player.seek(pos);
+                            }
+                        }
                     }
                     AdvanceState::Playing if snap.has_source => {
                         maybe_prefetch_gapless(&queue, &snap);

@@ -35,7 +35,7 @@ pub mod use_search;
 
 pub use matching::{find_strict_match, match_key, track_match_key};
 pub use queue::{RadioStatus, RepeatMode, UseQueue, use_queue};
-pub use use_album::{UseAlbum, use_album};
+pub use use_album::{UseAlbum, fetch_album_detail, use_album};
 pub use use_artist::{ArtistView, UseArtist, is_long_play, use_artist};
 pub use use_ctx_menu::{AlbumCtx, CtxMenuState, CtxTarget, UseCtxMenu, use_ctx_menu};
 pub use use_detail::{DetailView, UseDetail, uri_has_detail_page, use_detail};

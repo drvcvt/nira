@@ -335,3 +335,62 @@
 .pl-album .track-list {
   margin: 4px 2px 2px;
 }
+
+
+/* ── Playlist reorder + rename ───────────────────────────────────────── */
+
+.track-row-reorder {
+  display: flex;
+  gap: 2px;
+}
+
+.track-row-move {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--rs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.track-row-move:hover:not(:disabled) {
+  background: var(--raise3);
+  color: var(--text);
+}
+
+.track-row-move:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.lib-pl-title .lib-pl-edit {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  margin-left: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--rs);
+  font-size: 11px;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.lib-pl-title .lib-pl-edit:hover {
+  background: var(--raise2);
+  color: var(--text);
+}
+
+.lib-pl-rename {
+  font-size: 17px;
+  font-weight: 650;
+  max-width: 340px;
+}

@@ -11,7 +11,9 @@
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
 use hooks::{
-    AlbumBrief, ArtistUri, RelatedArtist, Track, is_long_play, use_artist, use_detail, use_queue,
+    AlbumBrief, AlbumCtx, ArtistUri, RelatedArtist, Track, fetch_album_detail, is_long_play,
+    use_artist, use_ctx_menu, use_detail, use_local_library, use_hires-provider, use_queue,
+    use_soundcloud, use_spotify,
 };
 
 use crate::parts::{PlayableLi, TrackCtx};
@@ -343,6 +345,11 @@ fn AlbumGrid(albums: Vec<AlbumBrief>, empty_label: String) -> Element {
 
 #[component]
 fn AlbumCard(album: AlbumBrief, on_open: EventHandler<()>) -> Element {
+    let ctx = use_ctx_menu();
+    let sc = use_soundcloud();
+    let sp = use_spotify();
+    let qz = use_hires-provider();
+    let local = use_local_library();
     let cover = album.cover_url.clone().unwrap_or_default();
     let provider = album.provider.label();
     let kind_label = match album.album_type {
@@ -367,6 +374,33 @@ fn AlbumCard(album: AlbumBrief, on_open: EventHandler<()>) -> Element {
             class: "album-card",
             r#type: "button",
             onclick: move |_| on_open.call(()),
+            // Album right-click needs the track list, which the brief card
+            // doesn't carry — fetch the detail first, then open the menu.
+            oncontextmenu: {
+                let uri = album.uri.clone();
+                move |e: Event<MouseData>| {
+                    e.prevent_default();
+                    let pos = e.data.client_coordinates();
+                    let (sc, sp, qz) = (sc.clone(), sp.clone(), qz.clone());
+                    let uri = uri.clone();
+                    spawn(async move {
+                        let Some(d) = fetch_album_detail(sc, sp, qz, local, uri).await else {
+                            return;
+                        };
+                        ctx.open_album(
+                            pos.x,
+                            pos.y,
+                            AlbumCtx {
+                                uri: d.uri.0,
+                                title: d.title,
+                                artist: d.artist.name,
+                                cover_url: d.cover_url,
+                                tracks: d.tracks,
+                            },
+                        );
+                    });
+                }
+            },
             div { class: "album-cover",
                 if !cover.is_empty() {
                     img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }

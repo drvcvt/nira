@@ -146,6 +146,32 @@ impl UsePlaylists {
         added
     }
 
+    /// Swap a loose track with its neighbour (delta ±1).
+    pub fn move_track(&self, id: &str, from: usize, delta: isize) {
+        self.mutate(|items| {
+            if let Some(p) = items.iter_mut().find(|p| p.id == id) {
+                let to = from as isize + delta;
+                if from < p.tracks.len() && to >= 0 && (to as usize) < p.tracks.len() {
+                    p.tracks.swap(from, to as usize);
+                    p.updated_at = Utc::now();
+                }
+            }
+        });
+    }
+
+    /// Swap an album widget with its neighbour (delta ±1).
+    pub fn move_album(&self, id: &str, from: usize, delta: isize) {
+        self.mutate(|items| {
+            if let Some(p) = items.iter_mut().find(|p| p.id == id) {
+                let to = from as isize + delta;
+                if from < p.albums.len() && to >= 0 && (to as usize) < p.albums.len() {
+                    p.albums.swap(from, to as usize);
+                    p.updated_at = Utc::now();
+                }
+            }
+        });
+    }
+
     pub fn contains_album(&self, id: &str, album_uri: &str) -> bool {
         self.items
             .read()

@@ -211,6 +211,12 @@ impl AppConfig {
         Self::config_dir().map(|d| d.join("playlists.json"))
     }
 
+    /// Last playback position (uri + seconds), written every few seconds
+    /// while playing so a restart can resume mid-track.
+    pub fn playback_position_path() -> Option<PathBuf> {
+        Self::cache_dir().map(|d| d.join("position.json"))
+    }
+
     /// Atomic write helper: serialise → write to `path.tmp` → rename. Used
     /// for every cache file we own so a kill-at-the-wrong-moment can't leave
     /// a half-written JSON that breaks the next launch.

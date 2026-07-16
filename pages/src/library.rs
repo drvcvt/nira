@@ -198,10 +198,13 @@ fn PlaylistsPane() -> Element {
     let mut selected = use_signal(|| None::<String>);
     let mut new_name = use_signal(String::new);
     let mut confirm_delete = use_signal(|| false);
-    // Leaving/entering a playlist resets the delete confirmation.
+    // In-place rename draft; None = showing the plain title.
+    let mut editing_name = use_signal(|| None::<String>);
+    // Leaving/entering a playlist resets the delete confirmation + rename.
     use_effect(move || {
         let _ = selected.read();
         confirm_delete.set(false);
+        editing_name.set(None);
     });
 
     let items = playlists.list();
@@ -241,7 +244,40 @@ fn PlaylistsPane() -> Element {
                     " Playlists"
                 }
                 div { class: "lib-pl-copy",
-                    span { class: "lib-pl-title", "{pl.name}" }
+                    if let Some(draft) = editing_name.read().clone() {
+                        input {
+                            class: "lib-pl-input lib-pl-rename",
+                            value: "{draft}",
+                            autofocus: true,
+                            oninput: move |e: FormEvent| editing_name.set(Some(e.value())),
+                            onkeydown: {
+                                let pl_id = pl_id.clone();
+                                move |e: KeyboardEvent| {
+                                    if e.key() == Key::Enter {
+                                        if let Some(name) = editing_name.peek().clone() {
+                                            playlists.rename(&pl_id, &name);
+                                        }
+                                        editing_name.set(None);
+                                    } else if e.key() == Key::Escape {
+                                        editing_name.set(None);
+                                    }
+                                }
+                            },
+                        }
+                    } else {
+                        span { class: "lib-pl-title",
+                            "{pl.name}"
+                            button {
+                                class: "lib-pl-edit",
+                                title: "Rename playlist",
+                                onclick: {
+                                    let name = pl.name.clone();
+                                    move |_| editing_name.set(Some(name.clone()))
+                                },
+                                i { class: "fa-solid fa-pen" }
+                            }
+                        }
+                    }
                     span { class: "hint", "{count_label}" }
                 }
                 div { class: "lib-local-actions",
@@ -302,6 +338,15 @@ fn PlaylistsPane() -> Element {
                             let row_context = context.clone();
                             let pl_id = pl_id.clone();
                             let uri = track.uri.clone();
+                            let track_total = pl.tracks.len();
+                            let up = (idx > 0).then(|| {
+                                let pl_id = pl_id.clone();
+                                EventHandler::new(move |_| playlists.move_track(&pl_id, idx, -1))
+                            });
+                            let down = (idx + 1 < track_total).then(|| {
+                                let pl_id = pl_id.clone();
+                                EventHandler::new(move |_| playlists.move_track(&pl_id, idx, 1))
+                            });
                             rsx! {
                                 TrackRow {
                                     key: "{track.uri.0}",
@@ -311,6 +356,8 @@ fn PlaylistsPane() -> Element {
                                     remove_title: Some("Remove from playlist".to_string()),
                                     context: row_context,
                                     index: idx,
+                                    on_move_up: up,
+                                    on_move_down: down,
                                     on_unlike: move |_| playlists.remove_track(&pl_id, &uri),
                                 }
                             }
@@ -318,11 +365,13 @@ fn PlaylistsPane() -> Element {
                     }
                 }
             }
-            for album in pl.albums.iter() {
+            for (a_idx, album) in pl.albums.iter().enumerate() {
                 PlaylistAlbumWidget {
                     key: "{album.uri}",
                     playlist_id: pl_id.clone(),
                     album: album.clone(),
+                    index: a_idx,
+                    total: pl.albums.len(),
                 }
             }
         };
@@ -420,7 +469,12 @@ fn PlaylistsPane() -> Element {
 /// track list, play/remove actions. Songs added normally stay loose rows;
 /// this is the "whole album as a widget" path.
 #[component]
-fn PlaylistAlbumWidget(playlist_id: String, album: PlaylistAlbum) -> Element {
+fn PlaylistAlbumWidget(
+    playlist_id: String,
+    album: PlaylistAlbum,
+    index: usize,
+    total: usize,
+) -> Element {
     let playlists = use_playlists();
     let queue = use_queue();
     let ctx = use_ctx_menu();
@@ -485,6 +539,26 @@ fn PlaylistAlbumWidget(playlist_id: String, album: PlaylistAlbum) -> Element {
                     i { class: "pl-album-chevron {chevron}" }
                 }
                 div { class: "pl-album-actions",
+                    button {
+                        class: "sq-btn sq-btn-ghost sq-sm",
+                        title: "Move up",
+                        disabled: index == 0,
+                        onclick: {
+                            let playlist_id = playlist_id.clone();
+                            move |_| playlists.move_album(&playlist_id, index, -1)
+                        },
+                        i { class: "fa-solid fa-chevron-up" }
+                    }
+                    button {
+                        class: "sq-btn sq-btn-ghost sq-sm",
+                        title: "Move down",
+                        disabled: index + 1 >= total,
+                        onclick: {
+                            let playlist_id = playlist_id.clone();
+                            move |_| playlists.move_album(&playlist_id, index, 1)
+                        },
+                        i { class: "fa-solid fa-chevron-down" }
+                    }
                     button {
                         class: "sq-btn sq-btn-ghost sq-sm",
                         title: "Play this album",
@@ -951,6 +1025,9 @@ fn TrackRow(
     /// Tooltip for the trailing remove button; defaults to the Saved tab's
     /// "Remove from Liked".
     #[props(default)] remove_title: Option<String>,
+    /// Reorder handles (playlist rows). None on other tabs = no buttons.
+    #[props(default)] on_move_up: Option<EventHandler<()>>,
+    #[props(default)] on_move_down: Option<EventHandler<()>>,
     on_unlike: EventHandler<()>,
 ) -> Element {
     let queue = use_queue();
@@ -1007,6 +1084,34 @@ fn TrackRow(
                 }
             } else {
                 div { class: "{badge_class}", "{track.provider.badge()}" }
+            }
+            if on_move_up.is_some() || on_move_down.is_some() {
+                div { class: "track-row-reorder",
+                    button {
+                        class: "track-row-move",
+                        title: "Move up",
+                        disabled: on_move_up.is_none(),
+                        onclick: move |e: MouseEvent| {
+                            e.stop_propagation();
+                            if let Some(h) = on_move_up {
+                                h.call(());
+                            }
+                        },
+                        i { class: "fa-solid fa-chevron-up" }
+                    }
+                    button {
+                        class: "track-row-move",
+                        title: "Move down",
+                        disabled: on_move_down.is_none(),
+                        onclick: move |e: MouseEvent| {
+                            e.stop_propagation();
+                            if let Some(h) = on_move_down {
+                                h.call(());
+                            }
+                        },
+                        i { class: "fa-solid fa-chevron-down" }
+                    }
+                }
             }
             if show_unlike {
                 button {

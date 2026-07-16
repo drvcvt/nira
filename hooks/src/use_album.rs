@@ -87,6 +87,31 @@ impl UseAlbum {
     }
 }
 
+/// One-shot album fetch for surfaces that need the tracks without the
+/// `UseAlbum` signal machinery — the album right-click on artist-page
+/// cards resolves the payload through this before opening the menu.
+pub async fn fetch_album_detail(
+    sc: Arc<SoundCloudProvider>,
+    sp: Arc<SpotifyProvider>,
+    qz: Arc<the hi-res providerProvider>,
+    local: UseLocalLibrary,
+    uri: AlbumUri,
+) -> Option<AlbumDetail> {
+    if uri.0.starts_with("local:album:") {
+        return local_album_detail(&local, &uri);
+    }
+    let provider: Option<Arc<dyn Provider>> = if uri.0.starts_with("spotify:") {
+        Some(sp as Arc<dyn Provider>)
+    } else if uri.0.starts_with("soundcloud:") {
+        Some(sc as Arc<dyn Provider>)
+    } else if uri.0.starts_with("hires-provider:") {
+        Some(qz as Arc<dyn Provider>)
+    } else {
+        None
+    };
+    provider?.album(&uri).await.ok()
+}
+
 /// Build an [`AlbumDetail`] for a `local:album:` URI out of the scanned
 /// library. Tracks arrive pre-sorted disc → track from the scanner.
 fn local_album_detail(local: &UseLocalLibrary, uri: &AlbumUri) -> Option<AlbumDetail> {
