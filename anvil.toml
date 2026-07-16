@@ -17,7 +17,8 @@ disk = "30G"
 # dx is not installed on mini; the worker is NixOS, so the toolchain comes
 # from an ephemeral nix-shell instead of a persistent install (store paths
 # get GC'd, nothing lands in a profile). Desktop bundles additionally need
-# the GTK/WebKit build closure. dioxus-cli must match workspace dioxus 0.7.
+# the GTK/WebKit build closure. mini's nixpkgs dioxus-cli is 0.7.9, matching
+# workspace dioxus 0.7.9 (checked 2026-07-16).
 #
 # [tasks.dev]
 # command = ["nix-shell", "-p", "dioxus-cli", "pkg-config", "gtk3", "webkitgtk_4_1", "libsoup_3", "glib", "openssl", "alsa-lib", "--run", "dx build --desktop -p nira"]
