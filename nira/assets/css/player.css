@@ -613,3 +613,36 @@
   text-align: right;
 }
 
+
+
+/* ── Per-row queue remove ────────────────────────────────────────────── */
+
+.queue-row {
+  /* 6th column for the remove button. */
+  grid-template-columns: 28px 38px minmax(0, 1fr) auto auto 24px;
+}
+
+.queue-row-remove {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--rs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.queue-row:hover .queue-row-remove {
+  opacity: 1;
+}
+
+.queue-row-remove:hover {
+  background: var(--raise3);
+  color: var(--text);
+}

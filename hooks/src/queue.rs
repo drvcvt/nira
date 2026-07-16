@@ -274,6 +274,7 @@ impl UseQueue {
     /// Drop everything except the currently-playing entry; playback keeps
     /// running. This is the queue popover's "clear" action.
     pub fn clear_upcoming(&self) {
+        self.invalidate_gapless();
         let entries_now = self.entries.peek().clone();
         let cur = *self.current_index.peek();
         let was_loading = *self.advance_state.peek() == AdvanceState::Loading;
@@ -304,6 +305,7 @@ impl UseQueue {
     /// "Add to queue" is the patient action; users press a separate Play to
     /// start it. (Compare `play_list` which forces playback.)
     pub fn add_to_queue(&self, track: Track) {
+        self.invalidate_gapless();
         let mut entries = self.entries;
         let mut updated = entries.peek().clone();
         updated.push(track.clone());
@@ -317,6 +319,7 @@ impl UseQueue {
         if tracks.is_empty() {
             return;
         }
+        self.invalidate_gapless();
         let mut entries = self.entries;
         let mut updated = entries.peek().clone();
         updated.extend(tracks.iter().cloned());
@@ -326,10 +329,77 @@ impl UseQueue {
         }
     }
 
+    /// A queue edit invalidates any queued gapless hand-off — its audio may
+    /// belong to an entry that no longer follows the current one. The player
+    /// skips the stale audio at the boundary; the prefetch window re-arms
+    /// against the edited queue on the next watcher tick.
+    fn invalidate_gapless(&self) {
+        if self.gapless_prefetched.peek().is_some() {
+            self.player.cancel_next();
+            let mut prefetched = self.gapless_prefetched;
+            prefetched.set(None);
+        }
+    }
+
+    /// Remove one entry from the queue. Removing the playing entry loads
+    /// whatever slides into its slot (or stops on an emptied queue); rows
+    /// before the playing one shift the index down by one.
+    pub fn remove_at(&self, idx: usize) {
+        let mut updated = self.entries.peek().clone();
+        if idx >= updated.len() {
+            return;
+        }
+        self.invalidate_gapless();
+        let removed = updated.remove(idx);
+        let cur = *self.current_index.peek();
+        let mut entries = self.entries;
+        let mut current = self.current_index;
+
+        // Keep the pre-shuffle order in sync so switching shuffle off
+        // doesn't resurrect the removed row.
+        let mut pre_shuffle = self.pre_shuffle;
+        let saved_order = pre_shuffle.peek().clone();
+        if let Some(mut original) = saved_order
+            && let Some(p) = original.iter().position(|t| t.uri == removed.uri)
+        {
+            original.remove(p);
+            pre_shuffle.set(Some(original));
+        }
+
+        match cur {
+            Some(c) if idx == c => {
+                if updated.is_empty() {
+                    entries.set(updated);
+                    current.set(None);
+                    self.stop();
+                    return;
+                }
+                let new_idx = c.min(updated.len() - 1);
+                entries.set(updated);
+                current.set(Some(new_idx));
+                // Only reload when audio was actually going — removing the
+                // pointed-at row of an idle (restored) queue just re-points.
+                if *self.advance_state.peek() != AdvanceState::Idle {
+                    let mut state = self.advance_state;
+                    state.set(AdvanceState::Loading);
+                    self.player.stop_for_load();
+                    self.bump_load_generation();
+                    load_current(self.clone());
+                }
+            }
+            Some(c) if idx < c => {
+                entries.set(updated);
+                current.set(Some(c - 1));
+            }
+            _ => entries.set(updated),
+        }
+    }
+
     /// Insert a track right after the currently-playing entry so it plays
     /// next when the current one ends (or when the user hits Next). If
     /// nothing is playing yet, behaves like `add_to_queue`.
     pub fn play_next(&self, track: Track) {
+        self.invalidate_gapless();
         let cur = *self.current_index.peek();
         let mut entries = self.entries;
         let mut updated = entries.peek().clone();
@@ -469,6 +539,8 @@ impl UseQueue {
     }
 
     pub fn toggle_shuffle(&self) {
+        // Re-ordering moves the "next" slot — any queued hand-off is stale.
+        self.invalidate_gapless();
         let next = !*self.shuffle_enabled.peek();
         let mut shuffle = self.shuffle_enabled;
         shuffle.set(next);
@@ -752,10 +824,8 @@ const GAPLESS_PREFETCH_WINDOW: Duration = Duration::from_secs(12);
 /// append its audio to the sink so the hand-off is gapless. Streaming
 /// entries get the same FLAC-first swap as a normal load. Every failure is
 /// silent — the falling-edge auto-advance handles the transition exactly as
-/// before, just with the old audible gap.
-/// ponytail: if the queue is edited between append and hand-off, the index
-/// can point one row off until the next transition; bumping the generation
-/// on queue edits would fix it if it ever bothers anyone.
+/// before, just with the old audible gap. Queue edits cancel a queued
+/// hand-off via `invalidate_gapless` (the player skips the stale audio).
 fn maybe_prefetch_gapless(queue: &UseQueue, snap: &PlayerSnapshot) {
     if snap.active != Active::Rodio || snap.is_paused {
         return;
@@ -797,7 +867,12 @@ async fn prefetch_gapless(queue: UseQueue, generation: u64, target: usize) {
     let playing = resolve_flac_first(&queue, &track)
         .await
         .unwrap_or_else(|| track.clone());
-    let stale = || *queue.load_generation.peek() != generation;
+    // Superseded by a newer load OR cancelled by a queue edit — bail before
+    // touching the sink.
+    let stale = || {
+        *queue.load_generation.peek() != generation
+            || *queue.gapless_prefetched.peek() != Some((generation, target))
+    };
     if stale() {
         return;
     }
@@ -833,11 +908,11 @@ async fn prefetch_gapless(queue: UseQueue, generation: u64, target: usize) {
     };
     if appended {
         tracing::info!(target_idx = target, "gapless: next track appended to sink");
-    } else if *queue.gapless_prefetched.peek() == Some((generation, target)) {
-        // Roll the marker back so the falling-edge path (or a later retry
-        // within the window) still handles the transition.
-        let mut prefetched = queue.gapless_prefetched;
-        prefetched.set(None);
+    } else {
+        // Leave the marker set: one attempt per transition. Retrying every
+        // watcher tick would re-resolve streams in a loop for the rest of
+        // the window; the falling-edge advance covers the hand-off instead.
+        tracing::debug!(target_idx = target, "gapless: prefetch not appended");
     }
 }
 

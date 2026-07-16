@@ -42,7 +42,16 @@ pub fn Home() -> Element {
     let mixes = recommendations.mixes.read().clone();
     let is_loading = *recommendations.is_loading.read();
     let error = recommendations.error.read().clone();
-    let pool = merged_recommendation_tracks(&shelves, &mixes);
+    // Memoized: the merge walks + clones every shelf/mix track, and Home
+    // re-renders far more often than the recommendation set changes.
+    let pool = use_memo({
+        let recommendations = recommendations.clone();
+        move || {
+            let shelves = recommendations.shelves.read();
+            let mixes = recommendations.mixes.read();
+            merged_recommendation_tracks(&shelves, &mixes)
+        }
+    });
 
     let spotlight = shelf_by_id(&shelves, "made-for-you");
     let because = shelf_by_id(&shelves, "because-recent");
@@ -77,7 +86,7 @@ pub fn Home() -> Element {
             } else {
                 HomeStage {
                     shelf: spotlight,
-                    pool: pool.clone(),
+                    pool,
                     recommendations: recommendations.clone(),
                     is_loading,
                 }

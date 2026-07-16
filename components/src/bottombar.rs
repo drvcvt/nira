@@ -117,14 +117,22 @@ pub fn Bottombar() -> Element {
 
     let now_active = snap.has_source && !snap.is_paused;
     let queue_len = queue.entries.read().len();
+    // With nothing loaded but a (restored) queue pointing somewhere, show
+    // that entry's identity instead of a blank "Nothing loaded" — the play
+    // button/Space will start exactly this track.
+    let idle_track = (!snap.has_source && np.is_none())
+        .then(|| current_track.clone())
+        .flatten();
     let cover_url = np
         .as_ref()
         .and_then(|n| n.cover_url.clone())
+        .or_else(|| idle_track.as_ref().and_then(|t| t.cover_url.clone()))
         .unwrap_or_default();
     let title_text = np
         .as_ref()
         .map(|n| n.title.clone())
         .filter(|s| !s.is_empty())
+        .or_else(|| idle_track.as_ref().map(|t| t.title.clone()))
         .unwrap_or_else(|| "Nothing loaded".to_string());
     let meta_text = np
         .as_ref()
@@ -562,6 +570,19 @@ fn QueueRow(track: Track, index: usize, current: bool) -> Element {
             }
             span { class: "queue-row-badge", "data-provider": "{provider}", "{badge}" }
             span { class: "queue-row-duration", "{duration}" }
+            button {
+                class: "queue-row-remove",
+                r#type: "button",
+                title: "Remove from queue",
+                onclick: {
+                    let queue = queue.clone();
+                    move |e: Event<MouseData>| {
+                        e.stop_propagation();
+                        queue.remove_at(index);
+                    }
+                },
+                i { class: "fa-solid fa-xmark" }
+            }
         }
     }
 }

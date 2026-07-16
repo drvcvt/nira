@@ -14,7 +14,9 @@ export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 cd "$PROJECT" || exit 1
 echo "Building nira desktop bundle (debug)…"
-if dx build --desktop --package nira; then
+# Capped parallelism so a rebuild never starves the running desktop.
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
+if nice -n 10 dx build --desktop --package nira; then
     # dx's asset cache sometimes ships a stale css file into the bundle
     # (seen after a failed build in between). Verify and repair by hand —
     # one hashed bundle file per source file under nira/assets/css/.

@@ -153,6 +153,9 @@ pub struct Player {
     /// One-shot "the sink slid into the prefetched track" flag; the queue
     /// watcher consumes it via [`Player::take_gapless_advanced`].
     gapless_advanced: Arc<std::sync::atomic::AtomicBool>,
+    /// Set by [`Player::cancel_next`]: the appended next source is stale
+    /// (queue was edited) and must be skipped the moment it starts.
+    skip_stale_next: Arc<std::sync::atomic::AtomicBool>,
     /// Outbound side of the transport bus. Sends `Next`/`Previous` from
     /// MPRIS (and future media-key surfaces) to whatever consumer the queue
     /// install path wired up. Unbounded so an off-thread MPRIS request never
@@ -222,6 +225,7 @@ impl Player {
             pending_next: Arc::new(Mutex::new(None)),
             last_rodio_pos: Arc::new(Mutex::new(Duration::ZERO)),
             gapless_advanced: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            skip_stale_next: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             transport_tx,
             transport_rx: Arc::new(Mutex::new(Some(transport_rx))),
         })
@@ -294,6 +298,25 @@ impl Player {
         }
         self.gapless_advanced
             .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.skip_stale_next
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Cancel a queued gapless hand-off after a queue edit: forget the
+    /// metadata and mark the already-appended audio (rodio can't un-append)
+    /// to be skipped the moment it starts — the sink then empties and the
+    /// queue's falling-edge advance loads the real next entry.
+    pub fn cancel_next(&self) {
+        let had = self
+            .pending_next
+            .lock()
+            .ok()
+            .and_then(|mut p| p.take())
+            .is_some();
+        if had {
+            self.skip_stale_next
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// ReplayGain track gain (album gain as fallback) from a local file's
@@ -534,9 +557,14 @@ impl Player {
     {
         // Only valid while rodio is actively rendering — appending onto an
         // idle sink would start the next track early, and a Spotify-active
-        // player has nothing to hand off from.
+        // player has nothing to hand off from. Also refuse while a cancelled
+        // hand-off's audio is still queued: stacking a second source behind
+        // it would confuse the boundary detector.
         if *self.active.read().unwrap_or_else(|p| p.into_inner()) != Active::Rodio
             || self.rodio.empty()
+            || self
+                .skip_stale_next
+                .load(std::sync::atomic::Ordering::Relaxed)
         {
             return false;
         }
@@ -568,12 +596,15 @@ impl Player {
     /// one funnel every UI/MPRIS tick already goes through. User seeks
     /// can't fake the jump: `seek` keeps `last_rodio_pos` in sync.
     fn commit_gapless_if_crossed(&self) {
-        if self
+        let has_pending = self
             .pending_next
             .lock()
-            .map(|p| p.is_none())
-            .unwrap_or(true)
-        {
+            .map(|p| p.is_some())
+            .unwrap_or(false);
+        let stale = self
+            .skip_stale_next
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if !has_pending && !stale {
             return;
         }
         if *self.active.read().unwrap_or_else(|p| p.into_inner()) != Active::Rodio {
@@ -589,6 +620,16 @@ impl Player {
             prev
         };
         if pos + Duration::from_secs(2) >= prev {
+            return;
+        }
+        if stale {
+            // The source that just started belongs to a cancelled hand-off —
+            // skip it so the sink empties and the queue's normal falling-edge
+            // advance loads whatever is actually next now.
+            self.skip_stale_next
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            self.rodio.skip_one();
+            tracing::info!("gapless: skipped cancelled hand-off audio");
             return;
         }
         let Some(next) = self.pending_next.lock().ok().and_then(|mut p| p.take()) else {

@@ -392,14 +392,24 @@ pub fn use_recommendations(
     // Hydrate from disk once on mount so Home shows the previous dashboard
     // before the SoundCloud round-trips finish. Stale cache still renders;
     // the effect below will quietly auto-refresh when older than the TTL.
+    // The read+parse (tens of KB of JSON) runs off-thread — it used to run
+    // synchronously inside the first render and block the first frame.
+    // `cache_checked` gates the mount decision below until the attempt
+    // finished, hit or miss.
+    let mut cache_checked = use_signal(|| false);
     use_hook(move || {
-        if let Some(cache) = load_cache() {
-            let fresh = (Utc::now() - cache.saved_at) < chrono::Duration::hours(CACHE_TTL_HOURS);
-            shelves.set(cache.shelves);
-            mixes.set(cache.mixes);
-            tiles.set(cache.tiles);
-            cache_fresh.set(fresh);
-        }
+        spawn(async move {
+            let loaded = tokio::task::spawn_blocking(load_cache).await.ok().flatten();
+            if let Some(cache) = loaded {
+                let fresh =
+                    (Utc::now() - cache.saved_at) < chrono::Duration::hours(CACHE_TTL_HOURS);
+                shelves.set(cache.shelves);
+                mixes.set(cache.mixes);
+                tiles.set(cache.tiles);
+                cache_fresh.set(fresh);
+            }
+            cache_checked.set(true);
+        });
     });
 
     let handle = UseRecommendations {
@@ -423,6 +433,13 @@ pub fn use_recommendations(
             let history_len = history_entries.read().len();
             let spotify_len = library.liked.read().len();
             let local_len = local_likes.items.read().len();
+            // Wait for the async cache hydrate — deciding before it lands
+            // would trigger a network refresh even when a fresh cache is
+            // about to populate the signals. (Subscribed read: the effect
+            // re-runs when the hydrate finishes.)
+            if !*cache_checked.read() {
+                return;
+            }
             let in_flight = *handle.is_loading.peek();
             if *did_initial_load.peek() || in_flight {
                 return;

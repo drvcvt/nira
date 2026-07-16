@@ -118,6 +118,13 @@ fn track_from_file(
     covers_dir: Option<&Path>,
     covers: &mut HashMap<String, String>,
 ) -> Option<(SortKey, String, Track)> {
+    // A non-UTF-8 path can't round-trip through the string track URI —
+    // `display()` would lossy-replace bytes and playback would then miss
+    // the file. Skip it loudly instead of producing a dead entry.
+    if path.to_str().is_none() {
+        tracing::warn!(path = %path.display(), "local scan: non-UTF-8 path skipped");
+        return None;
+    }
     let tagged = match lofty::read_from_path(path) {
         Ok(t) => t,
         Err(e) => {

@@ -10,7 +10,9 @@ use crate::parts::TrackCtx;
 #[component]
 pub(super) fn HomeStage(
     shelf: Option<RecommendationShelf>,
-    pool: Vec<Track>,
+    /// Memoized merged pool — a Memo prop so Home's frequent re-renders
+    /// don't clone the full track vector every frame.
+    pool: Memo<Vec<Track>>,
     recommendations: UseRecommendations,
     is_loading: bool,
 ) -> Element {
@@ -26,7 +28,8 @@ pub(super) fn HomeStage(
     let seed = shelf.as_ref().map(|s| s.seed_label.clone()).unwrap_or_default();
     let error = shelf.as_ref().and_then(|s| s.error.clone());
     let lead = tracks.first().cloned();
-    let has_pool = !pool.is_empty();
+    let pool_len = pool.read().len();
+    let has_pool = pool_len > 0;
 
     rsx! {
         section { class: "home-stage",
@@ -59,7 +62,7 @@ pub(super) fn HomeStage(
                     } else if !has_pool {
                         "Play or like a few tracks — nira builds your Home here."
                     } else {
-                        "{pool.len()} tracks across mixes, related picks and scenes."
+                        "{pool_len} tracks across mixes, related picks and scenes."
                     }
                 }
                 div { class: "home-stage-actions",
@@ -83,8 +86,7 @@ pub(super) fn HomeStage(
                         disabled: !has_pool,
                         on_click: {
                             let queue = queue.clone();
-                            let pool = pool.clone();
-                            move |_| queue.play_context(pool.clone(), 0)
+                            move |_| queue.play_context(pool(), 0)
                         },
                     }
                     Button {
@@ -95,15 +97,15 @@ pub(super) fn HomeStage(
                         disabled: !has_pool,
                         on_click: {
                             let queue = queue.clone();
-                            let pool = pool.clone();
                             move |_| {
+                                let pool = pool();
                                 if pool.is_empty() {
                                     return;
                                 }
                                 let idx = (chrono::Utc::now().timestamp_millis().unsigned_abs()
                                     as usize)
                                     % pool.len();
-                                queue.play_context(pool.clone(), idx);
+                                queue.play_context(pool, idx);
                             }
                         },
                     }
