@@ -3,9 +3,9 @@
 A desktop music player written in Rust, built around the lesson that a
 single global state object is the easiest way to ruin a reactive UI.
 
-**Status:** usable. Plays from SoundCloud and Spotify, cross-platform
-discovery works, library/likes/scrobbling are wired. Local file
-playback and Jellyfin are the next big gaps.
+**Status:** daily-driven. Plays from SoundCloud, Spotify, the hi-res provider
+downloads and local files; cross-platform discovery works,
+library/likes/scrobbling are wired. Jellyfin is the next big gap.
 
 ---
 
@@ -39,9 +39,10 @@ picked.
 | SoundCloud        | Public `client_id` auto-detected from the web player. Search, track resolve, related-tracks feed. No login. |
 | Spotify           | OAuth PKCE (user brings their own Developer Client ID). Search, liked songs, artist/album detail. Playback via librespot — **requires Spotify Premium**. |
 | the hi-res provider             | Hi-res FLAC search + **download-to-library**: whole albums, single tracks, and any SC/Spotify track via strict the hi-res provider match. Delta downloads — re-running an album only fetches the missing tracks; album pages track how much is already on disk. Tags + cover art are embedded at download time (the CDN streams arrive untagged; the API payload is the metadata source). Token auth: paste your `auth token` from the logged-in the provider web player session (the hi-res provider disabled 3rd-party email/password login). FLAC-first, MP3 only as a last resort; Library → Local badges + filters lossless vs lossy. **Requires a the hi-res provider Studio subscription.** Details: [docs/hires-provider.md](docs/hires-provider.md). |
+| Local files       | `provider-local` scans `library_root` (tags via lofty), feeds the Library page's Local tab with lossless/lossy badges + filters. Rescan after every download; no filesystem watcher yet. |
 | Discovery         | Cross-provider candidate merge from SoundCloud's `/related` and ListenBrainz's similarity graph, optional Last.fm third source. Dedup by (artist, title), provider badges per row. |
-| Queue             | Auto-advance watcher (polls `has_source` falling-edge). Manual next/prev/stop. |
-| Pages             | Home (activity feed), Discover, Search, Library, Settings, Album detail, Artist detail with tabs. |
+| Queue             | Auto-advance watcher (polls `has_source` falling-edge). Manual next/prev/stop. FLAC-first swap: a queued lossy track with a strict the hi-res provider match plays the FLAC instead. |
+| Pages             | Home (For You shelves, Daily Mixes, activity rails), Discover, Search + global search overlay (Ctrl+F / Alt+Space), Library (Saved/Local/Spotify tabs), Settings (tabbed), Album detail, Artist detail with tabs. |
 | Likes             | Local cross-provider liked-tracks store, persisted as JSON. Anything `Heart`-able lands here regardless of source. |
 | Scrobbling        | ListenBrainz outbound, background watcher. No-op until a token + username are set. |
 | MPRIS (Linux)     | Play/pause/next/prev/seek + now-playing exposed to the desktop environment. Media keys work. |
@@ -51,14 +52,12 @@ picked.
 
 ## What's still missing
 
-- **Local file playback.** `AppConfig::library_root` is plumbed through
-  but nothing walks it yet. No tag reader, no on-disk index, no
-  filesystem watcher. The Library page currently shows Spotify-Liked
-  only.
+- **Filesystem watcher.** The local index rescans on demand (and after
+  downloads) but doesn't watch `library_root` for out-of-band changes
+  (`notify` is the plan).
 - **Jellyfin provider.** Crate-shaped slot exists in the workspace
   layout; no implementation.
-- **Polish.** Themes, density modes, mini-player, system media keys
-  beyond MPRIS, Discord rich presence.
+- **Polish.** Density modes, mini-player, Discord rich presence.
 
 ---
 
@@ -87,15 +86,17 @@ nira makes that bug structurally impossible:
 ```
 nira/
 ├── nira/                 shell (window, root component, section dispatch, MPRIS bridge)
-│   └── assets/           main.css + future themes (Dioxus requires assets in the binary crate)
+│   └── assets/css/       split stylesheets (base, home, player, settings, …) — Dioxus requires assets in the binary crate
 ├── components/           sidebar, bottombar, global context menu
-├── pages/                home, discover, search, library, settings, album, artist
-├── hooks/                per-domain reactivity (use_player, use_library, use_discovery, …)
+├── pages/                discover, search + overlay, library, album, artist; home/ and settings/ are module dirs
+├── hooks/                per-domain reactivity (use_player, use_library, use_downloads, …) + queue + matching
 ├── player/               rodio + librespot, history log, transport bus
 ├── config/               AppConfig load/save under XDG dirs
 ├── provider-api/         common Provider trait + DTOs
 ├── provider-spotify/     OAuth PKCE + Web API + librespot wiring
 ├── provider-soundcloud/  client_id scrape + search + streams
+├── provider-hires-provider/       token auth, hi-res FLAC downloads (docs/hires-provider.md)
+├── provider-local/       library_root scan, tag read via lofty
 ├── discovery/            cross-platform candidate merge
 └── enrichment/           MusicBrainz / ListenBrainz / Last.fm clients + TTL cache
 ```
@@ -120,10 +121,12 @@ nira/
 
 ## Running it
 
-> **⚠ Do NOT build nira through anvil.** The local zsh `cargo` wrapper
-> mangles `--manifest-path` and breaks the Dioxus `asset!` macro. Use
-> `command cargo …` (or `dx` directly) so the real cargo binary
-> handles the workspace.
+> **anvil offload:** `anvil cargo -- check/test/build …` works for this
+> repo since 2026-07-16 (see `anvil.toml`; the old symlinked-target sync
+> bug is fixed). Keep `dx` bundling **local** — the worker has no dx
+> install; an ephemeral nix-shell task for that is prepared in
+> `anvil.toml` but unproven. Avoid legacy zsh `cargo`→`acargo` wrapper
+> functions; invoke `anvil` or `command cargo` directly.
 
 ### Hot-reload dev loop
 
@@ -176,6 +179,10 @@ without any login. To unlock the rest, open **Settings**:
 - **Last.fm** — optional API key for a third discovery signal. Either
   paste it in Settings or set `NIRA_LASTFM_API_KEY` in the environment
   at launch.
+- **the hi-res provider** — paste your `auth token` from a logged-in
+  the provider web player session to enable hi-res FLAC downloads into your
+  library (the hi-res provider Studio subscription required — see
+  [docs/hires-provider.md](docs/hires-provider.md)).
 
 All state lives under XDG dirs:
 
@@ -197,21 +204,21 @@ mega-state failure mode:
   props to components. State lives in hooks, not page-locals.
 - **No `Rc<RefCell<MegaState>>`.** If a struct contains "almost
   everything," it's wrong. Split it.
-- **One stylesheet for the shell.** Pages contribute their own
-  classes but don't ship their own CSS bundles.
+- **One CSS system for the shell.** Stylesheets are split by area under
+  `nira/assets/css/`, all loaded by the shell; pages contribute classes
+  but never ship their own CSS bundles.
 
 ---
 
 ## Roadmap (what's next)
 
-1. **Local library** — walk `library_root`, read tags via `lofty` or
-   symphonia metadata, persist an index. Background re-scan on focus +
-   on-disk watcher (`notify`). Lift the Library page to a real
-   tracks/albums/artists view, virtual-scrolled.
+1. **Library watcher + depth** — `notify`-based re-scan of
+   `library_root`, richer albums/artists views over the local index,
+   virtual scrolling at scale.
 2. **Jellyfin provider** — read-only first, same `Provider` trait as
    SC/SP so the UI doesn't need new branches.
-3. **Polish** — themes (token-based CSS), density modes, mini-player,
-   Discord rich presence, global hotkeys beyond MPRIS.
+3. **Polish** — density modes, mini-player, Discord rich presence,
+   global hotkeys beyond MPRIS.
 
 ---
 
