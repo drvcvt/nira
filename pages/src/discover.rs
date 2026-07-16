@@ -12,7 +12,7 @@ use hooks::{
     use_queue,
 };
 
-use crate::parts::{ArtistLinks, PlayableButton, open_track_context};
+use crate::parts::{ArtistLinks, PlayableButton, TrackCtx, open_track_context};
 
 #[component]
 pub fn Discover() -> Element {
@@ -511,7 +511,7 @@ fn BridgeTargetCard(track: Track, badge_class: String, badge_label: String) -> E
     rsx! {
         PlayableButton {
             track: track.clone(),
-            tracks: vec![track.clone()],
+            tracks: TrackCtx::new(vec![track.clone()]),
             index: 0,
             class: "bridge-target-btn".to_string(),
             div { class: "bridge-track-card",

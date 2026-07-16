@@ -5,6 +5,7 @@ use dioxus::prelude::*;
 use hooks::{RecommendationShelf, Track, UseRecommendations, use_queue};
 
 use super::TrackCard;
+use crate::parts::TrackCtx;
 
 #[component]
 pub(super) fn HomeStage(
@@ -16,6 +17,7 @@ pub(super) fn HomeStage(
     let queue = use_queue();
 
     let tracks = shelf.as_ref().map(|s| s.tracks.clone()).unwrap_or_default();
+    let tracks_ctx = TrackCtx::new(tracks.clone());
     let title = shelf
         .as_ref()
         .map(|s| s.title.clone())
@@ -30,7 +32,7 @@ pub(super) fn HomeStage(
         section { class: "home-stage",
             div { class: "home-stage-art",
                 if let Some(track) = lead.clone() {
-                    TrackCard { track: track.clone(), tracks: tracks.clone(), index: 0 }
+                    TrackCard { track: track.clone(), tracks: tracks_ctx.clone(), index: 0 }
                 } else {
                     div { class: "cover-card",
                         div { class: "cover-card-art",
@@ -125,7 +127,7 @@ pub(super) fn HomeStage(
                             TrackCard {
                                 key: "{track.uri.0}",
                                 track: track.clone(),
-                                tracks: tracks.clone(),
+                                tracks: tracks_ctx.clone(),
                                 index: idx,
                             }
                         }

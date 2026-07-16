@@ -44,6 +44,7 @@ mpris-server = "0.9"
 librespot = { version = "0.8", default-features = false, features = ["rodio-backend", "rustls-tls-webpki-roots"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 lofty = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # Local crate dependencies — keep these in sync with workspace members.
 components = { path = "./components" }

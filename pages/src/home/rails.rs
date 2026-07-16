@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 use hooks::{RecommendationMix, RecommendationShelf, Track, UseRecommendations, use_queue};
 
 use super::TrackCard;
+use crate::parts::TrackCtx;
 
 /// Monotonic id so each rail's header arrows can address exactly its own
 /// scroll row via a DOM selector. Never reset — uniqueness is all we need.
@@ -83,6 +84,7 @@ pub(super) fn Rail(
 #[component]
 pub(super) fn ShelfRail(shelf: RecommendationShelf, recommendations: UseRecommendations) -> Element {
     let tracks = shelf.tracks.clone();
+    let tracks_ctx = TrackCtx::new(tracks.clone());
     let reroll_id = if shelf.rerollable {
         Some(shelf.id.clone())
     } else {
@@ -109,7 +111,7 @@ pub(super) fn ShelfRail(shelf: RecommendationShelf, recommendations: UseRecommen
                         TrackCard {
                             key: "{track.uri.0}",
                             track: track.clone(),
-                            tracks: tracks.clone(),
+                            tracks: tracks_ctx.clone(),
                             index: idx,
                         }
                     }

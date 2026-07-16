@@ -17,6 +17,34 @@ pub fn format_duration(d: std::time::Duration) -> String {
     format!("{m}:{s:02}")
 }
 
+/// Shared playback context for a list of rows. Every row's click handler
+/// needs the surrounding track vector (the queue takes it as upcoming
+/// items), but handing each row its own `Vec<Track>` clone made an N-row
+/// list cost O(N²) track clones per render — plus a full O(N) PartialEq
+/// walk per row prop on every diff. `Arc` + pointer-equality makes the
+/// share free; build it ONCE per list render and pass `ctx.clone()` to
+/// each row.
+#[derive(Clone)]
+pub struct TrackCtx(std::sync::Arc<Vec<Track>>);
+
+impl PartialEq for TrackCtx {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl TrackCtx {
+    pub fn new(tracks: Vec<Track>) -> Self {
+        Self(std::sync::Arc::new(tracks))
+    }
+
+    /// Materialize for the queue — the one place that needs ownership,
+    /// and only on click, not per render.
+    pub fn to_vec(&self) -> Vec<Track> {
+        (*self.0).clone()
+    }
+}
+
 pub fn provider_badge_class(provider: ProviderId) -> &'static str {
     match provider {
         ProviderId::Spotify => "track-badge spotify",
@@ -79,7 +107,7 @@ pub fn open_track_context(ctx: UseCtxMenu, e: Event<MouseData>, track: Track) {
 #[component]
 pub fn PlayableLi(
     track: Track,
-    tracks: Vec<Track>,
+    tracks: TrackCtx,
     index: usize,
     class: String,
     #[props(default)] title: String,
@@ -102,14 +130,14 @@ pub fn PlayableLi(
             tabindex: "0",
             role: "button",
             onclick: move |_| {
-                queue.play_context(play_tracks.clone(), index);
+                queue.play_context(play_tracks.to_vec(), index);
                 if let Some(cb) = on_played.as_ref() {
                     cb.call(());
                 }
             },
             onkeydown: move |e: KeyboardEvent| {
                 if e.key() == Key::Enter {
-                    key_queue.play_context(key_tracks.clone(), index);
+                    key_queue.play_context(key_tracks.to_vec(), index);
                     if let Some(cb) = on_played.as_ref() {
                         cb.call(());
                     }
@@ -124,7 +152,7 @@ pub fn PlayableLi(
 #[component]
 pub fn PlayableButton(
     track: Track,
-    tracks: Vec<Track>,
+    tracks: TrackCtx,
     index: usize,
     class: String,
     #[props(default)] title: String,
@@ -142,7 +170,7 @@ pub fn PlayableButton(
             title: "{title}",
             r#type: "button",
             onclick: move |_| {
-                queue.play_context(play_tracks.clone(), index);
+                queue.play_context(play_tracks.to_vec(), index);
                 if let Some(cb) = on_played.as_ref() {
                     cb.call(());
                 }

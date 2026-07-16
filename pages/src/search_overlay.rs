@@ -8,7 +8,9 @@ use components::SearchBar;
 use dioxus::prelude::*;
 use hooks::{Track, use_queue, use_search};
 
-use crate::parts::{ArtistLinks, ArtistResults, PlayableLi, format_duration, provider_badge_class};
+use crate::parts::{
+    ArtistLinks, ArtistResults, PlayableLi, TrackCtx, format_duration, provider_badge_class,
+};
 
 #[component]
 pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
@@ -21,6 +23,7 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
     let is_searching = *search.is_searching.read();
     let error = search.error.read().clone();
     let has_query = !query.trim().is_empty();
+    let row_ctx = TrackCtx::new(results.clone());
 
     let overlay_class = if is_open {
         "search-overlay open"
@@ -106,7 +109,7 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
                                 OverlayTrackRow {
                                     key: "{track.uri.0}",
                                     track: track.clone(),
-                                    tracks: results.clone(),
+                                    tracks: row_ctx.clone(),
                                     index: idx,
                                     on_played: move |_| open.set(false),
                                 }
@@ -122,7 +125,7 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
 #[component]
 fn OverlayTrackRow(
     track: Track,
-    tracks: Vec<Track>,
+    tracks: TrackCtx,
     index: usize,
     on_played: EventHandler<()>,
 ) -> Element {

@@ -14,7 +14,7 @@ use hooks::{
     AlbumBrief, ArtistUri, RelatedArtist, Track, is_long_play, use_artist, use_detail, use_queue,
 };
 
-use crate::parts::PlayableLi;
+use crate::parts::{PlayableLi, TrackCtx};
 
 #[component]
 pub fn ArtistPage(uri: ArtistUri) -> Element {
@@ -279,13 +279,14 @@ fn TopTracksList(tracks: Vec<Track>) -> Element {
             }
         };
     }
+    let row_ctx = TrackCtx::new(tracks.clone());
     rsx! {
         ul { class: "track-list",
             for (i, t) in tracks.iter().enumerate() {
                 PlayableLi {
                     key: "{t.uri.0}",
                     track: t.clone(),
-                    tracks: tracks.clone(),
+                    tracks: row_ctx.clone(),
                     index: i,
                     class: "track-row top-track-row".to_string(),
                     span { class: "track-index", "{i + 1:02}" }

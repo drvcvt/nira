@@ -11,6 +11,7 @@ use hooks::{
 
 use super::rails::{Rail, SkeletonRow};
 use super::{EmptyState, TrackCard, badge_class_for, badge_glyph_for, format_relative};
+use crate::parts::TrackCtx;
 
 #[component]
 pub(super) fn RecentlyPlayedRail(entries: Vec<HistoryEntry>) -> Element {
@@ -51,6 +52,7 @@ fn HistoryCard(entry: HistoryEntry, entries: Vec<HistoryEntry>, index: usize) ->
     let badge = badge_glyph_for(&entry.provider);
     let title = entry.title.clone();
     let artist = entry.artist.clone();
+    let clicked_title = title.clone();
     let played_label = format_relative(entry.played_at);
     let providers_for_click = (sc.clone(), sp.clone(), qz.clone());
     let providers_for_context = (sc, sp, qz);
@@ -64,21 +66,34 @@ fn HistoryCard(entry: HistoryEntry, entries: Vec<HistoryEntry>, index: usize) ->
                 let (sc, sp, qz) = providers_for_click.clone();
                 let local_tracks = local.tracks.peek().clone();
                 let entries = entries.clone();
+                let clicked_title = clicked_title.clone();
                 spawn(async move {
+                    // Resolve the whole strip concurrently — serially this
+                    // was up to ~2 network round trips per entry before any
+                    // audio started.
+                    let resolved = futures_util::future::join_all(entries.iter().map(|row| {
+                        resolve_history_entry(sc.clone(), sp.clone(), qz.clone(), &local_tracks, row)
+                    }))
+                    .await;
                     let mut tracks = Vec::<Track>::new();
                     let mut start_idx = None::<usize>;
-                    for (i, row) in entries.iter().enumerate() {
-                        if let Some(track) = resolve_history_entry(
-                            sc.clone(), sp.clone(), qz.clone(), &local_tracks, row,
-                        ).await {
+                    for (i, track) in resolved.into_iter().enumerate() {
+                        if let Some(track) = track {
                             if i == index {
                                 start_idx = Some(tracks.len());
                             }
                             tracks.push(track);
                         }
                     }
-                    if let Some(start) = start_idx {
-                        queue.play_context(tracks, start);
+                    match start_idx {
+                        Some(start) => queue.play_context(tracks, start),
+                        // The clicked entry didn't resolve (provider gone,
+                        // token expired, deleted upload) — say so instead of
+                        // silently doing nothing.
+                        None => {
+                            let mut error = queue.error;
+                            error.set(Some(format!("Couldn't load “{clicked_title}” from its provider.")));
+                        }
                     }
                 });
             },
@@ -170,7 +185,7 @@ pub(super) fn RecentlyLikedRail(library: UseLibrary) -> Element {
     let tracks = library.recently_liked.read().clone();
     let is_loading = *library.is_loading.read();
     let error = library.error.read().clone();
-    let context_tracks = tracks.clone();
+    let context_ctx = TrackCtx::new(tracks.clone());
 
     rsx! {
         Rail { eyebrow: "Activity".to_string(), title: "Recently liked".to_string(),
@@ -190,7 +205,7 @@ pub(super) fn RecentlyLikedRail(library: UseLibrary) -> Element {
                         TrackCard {
                             key: "{track.uri.0}",
                             track: track.clone(),
-                            tracks: context_tracks.clone(),
+                            tracks: context_ctx.clone(),
                             index: idx,
                         }
                     }

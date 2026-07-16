@@ -9,3 +9,4 @@ dioxus = { workspace = true }
 hooks = { workspace = true }
 components = { workspace = true }
 chrono = { workspace = true }
+futures-util = { workspace = true }

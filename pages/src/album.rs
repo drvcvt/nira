@@ -10,7 +10,7 @@ use hooks::{
     use_detail, use_downloads, use_local_library, use_hires-provider, use_queue,
 };
 
-use crate::parts::{PlayableLi, format_duration};
+use crate::parts::{PlayableLi, TrackCtx, format_duration};
 
 #[component]
 pub fn AlbumPage(uri: AlbumUri) -> Element {
@@ -207,13 +207,14 @@ fn AlbumTrackList(tracks: Vec<Track>) -> Element {
     // per render, O(1) per row below.
     let owned: HashSet<(String, String)> =
         local.tracks.read().iter().map(track_match_key).collect();
+    let row_ctx = TrackCtx::new(tracks.clone());
     rsx! {
         ul { class: "track-list",
             for (i, t) in tracks.iter().enumerate() {
                 PlayableLi {
                     key: "{t.uri.0}",
                     track: t.clone(),
-                    tracks: tracks.clone(),
+                    tracks: row_ctx.clone(),
                     index: i,
                     class: "track-row album-track-row".to_string(),
                     span { class: "track-index", "{i + 1:02}" }

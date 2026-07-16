@@ -2,7 +2,9 @@ use components::SearchBar;
 use dioxus::prelude::*;
 use hooks::{Track, use_queue, use_search};
 
-use crate::parts::{ArtistLinks, ArtistResults, PlayableLi, format_duration, provider_badge_class};
+use crate::parts::{
+    ArtistLinks, ArtistResults, PlayableLi, TrackCtx, format_duration, provider_badge_class,
+};
 
 #[component]
 pub fn Search() -> Element {
@@ -15,6 +17,7 @@ pub fn Search() -> Element {
     let search_error = search.error.read().clone();
     let query_value = search.query.read().clone();
     let has_query = !query_value.trim().is_empty();
+    let row_ctx = TrackCtx::new(results.clone());
 
     rsx! {
         section { class: "page search-page",
@@ -65,7 +68,7 @@ pub fn Search() -> Element {
                     TrackRow {
                         key: "{track.uri.0}",
                         track: track.clone(),
-                        tracks: results.clone(),
+                        tracks: row_ctx.clone(),
                         index: idx,
                     }
                 }
@@ -75,7 +78,7 @@ pub fn Search() -> Element {
 }
 
 #[component]
-fn TrackRow(track: Track, tracks: Vec<Track>, index: usize) -> Element {
+fn TrackRow(track: Track, tracks: TrackCtx, index: usize) -> Element {
     let duration = format_duration(track.duration);
     let cover = track.cover_url.clone().unwrap_or_default();
     let badge_class = provider_badge_class(track.provider);

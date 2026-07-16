@@ -49,9 +49,18 @@ pub fn use_history() -> UseHistory {
             deep_sig.set(deep);
             let player = player.clone();
             spawn(async move {
+                // Dedupe against the last published value (same pattern as
+                // the player-snapshot poll): Signal::set notifies subscribers
+                // unconditionally, and an unchanged tick used to re-render
+                // all of Home every 30 s — colliding with scroll/animations.
+                let mut prev = deep_sig.peek().clone();
                 loop {
                     tokio::time::sleep(REFRESH_EVERY).await;
                     let deep = player.history().recent(RECOMMENDATION_DEPTH);
+                    if deep == prev {
+                        continue;
+                    }
+                    prev = deep.clone();
                     let shallow: Vec<_> = deep.iter().take(RECENTLY_PLAYED_ROW).cloned().collect();
                     entries_sig.set(shallow);
                     deep_sig.set(deep);

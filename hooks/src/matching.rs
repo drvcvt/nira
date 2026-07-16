@@ -3,17 +3,20 @@
 //!
 //! Strict on purpose: a wrong match plays the wrong audio, so we only accept
 //! candidates whose normalized first artist AND title are equal, and whose
-//! duration agrees within 3 s (when both sides know their duration). Live
-//! versions, remixes and karaoke covers differ in at least one of those.
+//! durations are both known AND agree within 3 s — an unverifiable duration
+//! must not confirm a swap. Live versions, remixes and karaoke covers differ
+//! in at least one of those.
 
 use provider_api::Track;
 
 /// Lowercase, strip everything non-alphanumeric, collapse whitespace.
 /// "Mystic Dream (feat. X)" and "mystic dream feat x" compare equal.
+/// Unicode-aware: Cyrillic/CJK titles keep their letters — ASCII-only
+/// stripping used to normalize them to "" and made every guard vacuous.
 pub fn match_key(s: &str) -> String {
     s.to_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' })
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -42,8 +45,11 @@ pub fn find_strict_match<'a>(target: &Track, candidates: &'a [Track]) -> Option<
             return false;
         }
         let (a, b) = (target.duration.as_secs(), c.duration.as_secs());
-        // Unknown duration on either side can't veto a title+artist match.
-        a == 0 || b == 0 || a.abs_diff(b) <= 3
+        // Both durations must be known and agree. A 0 ("unknown") duration
+        // used to skip this veto — the hi-res provider tracks without a duration field
+        // deserialize to 0, and the veto is the only guard separating
+        // same-titled versions (edit vs. re-recording), so unknown = reject.
+        a > 0 && b > 0 && a.abs_diff(b) <= 3
     })
 }
 
@@ -85,8 +91,22 @@ mod tests {
         let found = find_strict_match(&target, &candidates).unwrap();
         assert_eq!(found.uri, hit.uri);
 
-        // Unknown duration on the target side falls back to name-only.
+        // Unknown duration on either side can't confirm a match — strict
+        // means a candidate we can't length-verify is rejected.
         let no_dur = track("Shiro Tanaka", "Mystic Dream (feat. Yuki)", 0);
-        assert!(find_strict_match(&no_dur, &[hit]).is_some());
+        assert!(find_strict_match(&no_dur, &[hit.clone()]).is_none());
+        assert!(find_strict_match(&hit, &[no_dur]).is_none());
+    }
+
+    #[test]
+    fn match_key_keeps_non_ascii() {
+        // Cyrillic/CJK must survive normalization — ASCII-only stripping
+        // normalized these to "" and made every downstream guard vacuous.
+        assert_eq!(match_key("Группа крови"), "группа крови");
+        assert_eq!(match_key("残酷な天使のテーゼ"), "残酷な天使のテーゼ");
+        assert!(!match_key("Кино").is_empty());
+        // Pure-symbol titles still normalize to empty — callers must treat
+        // an empty key as unmatchable, not as match-everything.
+        assert_eq!(match_key("!!!"), "");
     }
 }

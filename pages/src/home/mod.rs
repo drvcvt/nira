@@ -24,7 +24,7 @@ use hooks::{
     use_listenbrainz_feed, use_recommendations,
 };
 
-use crate::parts::{PlayableButton, provider_badge_class};
+use crate::parts::{PlayableButton, TrackCtx, provider_badge_class};
 
 use activity::{RecentlyLikedRail, RecentlyPlayedRail};
 use feed::ListenedLately;
@@ -112,7 +112,7 @@ pub fn Home() -> Element {
 // ─── Shared bits used across the submodules ────────────────────────────────
 
 #[component]
-fn TrackCard(track: Track, tracks: Vec<Track>, index: usize) -> Element {
+fn TrackCard(track: Track, tracks: TrackCtx, index: usize) -> Element {
     let cover = track.cover_url.clone().unwrap_or_default();
     let title = track.title.clone();
     let artist = track
