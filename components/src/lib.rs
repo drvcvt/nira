@@ -11,6 +11,7 @@ pub mod download_toast;
 pub mod hotkeys;
 pub mod searchbar;
 pub mod sidebar;
+pub mod visualizer;
 
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use download_toast::DownloadToast;

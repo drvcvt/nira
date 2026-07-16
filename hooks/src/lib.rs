@@ -64,7 +64,7 @@ pub use discovery::{
     CrossPlatformMatch, DiscoveryEngine, DiscoveryResult, DiscoverySourcePrefs, SimilarToSeed,
 };
 pub use enrichment::Listen;
-pub use player::{HistoryEntry, NowPlaying, Player, PlayerError, PlayerSnapshot};
+pub use player::{Active, HistoryEntry, NowPlaying, Player, PlayerError, PlayerSnapshot, VizFrame};
 pub use provider_hires-provider::{DownloadSummary, FLAC_QUALITIES, the hi-res providerProvider};
 pub use provider_api::{
     AlbumBrief, AlbumDetail, AlbumRef, AlbumType, AlbumUri, Artist, ArtistRef, ArtistUri, Provider,

@@ -41,8 +41,12 @@ picked.
 | the hi-res provider             | Hi-res FLAC search + **download-to-library**: whole albums, single tracks, and any SC/Spotify track via strict the hi-res provider match. Delta downloads — re-running an album only fetches the missing tracks; album pages track how much is already on disk. Tags + cover art are embedded at download time (the CDN streams arrive untagged; the API payload is the metadata source). Token auth: paste your `auth token` from the logged-in the provider web player session (the hi-res provider disabled 3rd-party email/password login). FLAC-first, MP3 only as a last resort; Library → Local badges + filters lossless vs lossy. **Requires a the hi-res provider Studio subscription.** Details: [docs/hires-provider.md](docs/hires-provider.md). |
 | Local files       | `provider-local` scans `library_root` (tags via lofty), feeds the Library page's Local tab with lossless/lossy badges + filters. Rescan after every download; no filesystem watcher yet. |
 | Discovery         | Cross-provider candidate merge from SoundCloud's `/related` and ListenBrainz's similarity graph, optional Last.fm third source. Dedup by (artist, title), provider badges per row. |
-| Queue             | Auto-advance watcher (polls `has_source` falling-edge). Manual next/prev/stop. FLAC-first swap: a queued lossy track with a strict the hi-res provider match plays the FLAC instead. |
-| Pages             | Home (For You shelves, Daily Mixes, activity rails), Discover, Search + global search overlay (Ctrl+F / Alt+Space), Library (Saved/Local/Spotify tabs), Settings (tabbed), Album detail, Artist detail with tabs. |
+| Queue             | Auto-advance watcher (polls `has_source` falling-edge). Manual next/prev/stop, per-row remove. FLAC-first swap: a queued lossy track with a strict the hi-res provider match plays the FLAC instead. **Gapless** on the rodio side (next track appended to the sink, boundary detected via per-source position). Queue + in-track position persist — a restart resumes where you stopped. |
+| Playlists         | Local cross-provider playlists (JSON, likes-tier). Tracks add as rows; whole albums embed as expandable widgets (right-click an album card/banner). Rename, reorder, play/shuffle across both. |
+| Loudness          | ReplayGain track gain applied on rodio playback; the hi-res provider downloads get measured (EBU R128) and tagged at download time; librespot normalisation on. |
+| Keybinds          | Space play/pause, Ctrl+←/→ prev/next, Ctrl+↑/↓ volume, S/R/L shuffle/repeat/like, V visualizer, Ctrl+/ shortcut sheet. |
+| Visualizer        | Fullscreen grayscale spectrum + beat-driven particles (V or the wave button). DSP in Rust (FFT, log bands, beat detection); canvas renders. Rodio sources only — librespot is its own engine. |
+| Pages             | Home (For You shelves, Daily Mixes, activity rails), Discover, Search + global search overlay (Ctrl+F / Alt+Space), Library (Saved/Local/Playlists/Spotify tabs), Settings (tabbed), Album detail, Artist detail with tabs. |
 | Likes             | Local cross-provider liked-tracks store, persisted as JSON. Anything `Heart`-able lands here regardless of source. |
 | Scrobbling        | ListenBrainz outbound, background watcher. No-op until a token + username are set. |
 | MPRIS (Linux)     | Play/pause/next/prev/seek + now-playing exposed to the desktop environment. Media keys work. |
@@ -57,7 +61,8 @@ picked.
   (`notify` is the plan).
 - **Jellyfin provider.** Crate-shaped slot exists in the workspace
   layout; no implementation.
-- **Polish.** Density modes, mini-player, Discord rich presence.
+- **Polish.** Density modes, Discord rich presence. (The mini-player idea
+  became the fullscreen visualizer instead.)
 
 ---
 
@@ -217,8 +222,7 @@ mega-state failure mode:
    virtual scrolling at scale.
 2. **Jellyfin provider** — read-only first, same `Provider` trait as
    SC/SP so the UI doesn't need new branches.
-3. **Polish** — density modes, mini-player, Discord rich presence,
-   global hotkeys beyond MPRIS.
+3. **Polish** — density modes, Discord rich presence, visualizer presets.
 
 ---
 

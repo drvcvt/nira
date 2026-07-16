@@ -52,6 +52,7 @@ const CSS_ALL: &str = concat!(
     include_str!("../assets/css/library.css"),
     include_str!("../assets/css/buttons.css"),
     include_str!("../assets/css/binds.css"),
+    include_str!("../assets/css/viz.css"),
     include_str!("../assets/css/responsive.css"),
 );
 // FontAwesome utility classes (6.5.1, @font-face blocks stripped at vendor
@@ -139,6 +140,11 @@ fn App() -> Element {
         )
     });
     AppContext::install(player.clone(), sc.clone(), sp, qz, app_cfg);
+
+    // Visualizer open-state — shared by the bottombar button, the V-key
+    // bridge and the overlay itself.
+    let viz_open = use_signal(|| false);
+    use_context_provider(|| components::visualizer::VizOpen(viz_open));
 
     // Background prewarm — SC needs a client_id from the public web player.
     // Doing it now means the first search/Discovery call is ~1 s faster.
@@ -298,6 +304,11 @@ fn App() -> Element {
                                 press('nira-key-binds-close');\
                                 return;\
                             }}\
+                            if (document.querySelector('.viz-overlay')) {{\
+                                e.preventDefault();\
+                                press('nira-key-viz-close');\
+                                return;\
+                            }}\
                             if (document.querySelector('.search-overlay.open')) {{\
                                 e.preventDefault();\
                                 press('nira-search-close-hotkey');\
@@ -316,6 +327,7 @@ fn App() -> Element {
                             else if (key === 's') {{ press('nira-key-shuffle'); acted = true; }}\
                             else if (key === 'r') {{ press('nira-key-repeat'); acted = true; }}\
                             else if (key === 'l') {{ press('nira-key-like'); acted = true; }}\
+                            else if (key === 'v') {{ press('nira-key-viz'); acted = true; }}\
                         }}\
                         if (acted) {{\
                             e.preventDefault();\
@@ -408,6 +420,8 @@ fn App() -> Element {
             components::ctx_menu::ContextMenu {}
             // Media-key bridges + the Ctrl+/ shortcut sheet.
             components::hotkeys::Hotkeys {}
+            // Fullscreen audio visualizer (V / bottombar wave button).
+            components::visualizer::Visualizer {}
             // Bottom-left toast for the hi-res provider download progress/result.
             components::download_toast::DownloadToast {}
         }

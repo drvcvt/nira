@@ -127,6 +127,11 @@ impl UsePlayer {
         self.player.clear_history()
     }
 
+    /// Latest visualizer analysis frame (rodio backend only).
+    pub fn viz_frame(&self) -> Option<player::VizFrame> {
+        self.player.viz_frame()
+    }
+
     /// Convenience for the transport-bar play button. Reads the *live*
     /// engine snapshot, not the polled signal — that one can lag by up to
     /// 500 ms, long enough to pause a paused player or treat a just-committed

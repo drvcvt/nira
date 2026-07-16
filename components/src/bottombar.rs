@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use dioxus::prelude::*;
 use hooks::{RadioStatus, RepeatMode, Track, use_ctx_menu, use_detail, use_likes, use_player, use_queue};
 
+use crate::visualizer::use_viz_open;
+
 #[component]
 pub fn Bottombar() -> Element {
     let player = use_player();
@@ -14,6 +16,7 @@ pub fn Bottombar() -> Element {
     let likes = use_likes();
     let detail = use_detail();
     let mut queue_open = use_signal(|| false);
+    let mut viz_open = use_viz_open().0;
     // Track corresponding to the current queue index (full Track with
     // URI), needed for the heart toggle in the player-right cluster.
     let current_track = {
@@ -384,6 +387,15 @@ pub fn Bottombar() -> Element {
             }
 
             div { class: "player-right",
+                button {
+                    class: if *viz_open.read() { "player-viz-btn open" } else { "player-viz-btn" },
+                    title: "Visualizer (V)",
+                    onclick: move |_| {
+                        let now = *viz_open.peek();
+                        viz_open.set(!now);
+                    },
+                    i { class: "fa-solid fa-wave-square" }
+                }
                 button {
                     class: if queue_is_open { "player-queue-btn open" } else { "player-queue-btn" },
                     title: "Queue",

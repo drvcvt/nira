@@ -15,9 +15,11 @@
 
 mod history;
 mod spotify_backend;
+mod viz;
 
 pub use history::{History, HistoryEntry};
 pub use spotify_backend::{SpotifyBackend, SpotifyBackendError};
+pub use viz::VizFrame;
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -156,6 +158,9 @@ pub struct Player {
     /// Set by [`Player::cancel_next`]: the appended next source is stale
     /// (queue was edited) and must be skipped the moment it starts.
     skip_stale_next: Arc<std::sync::atomic::AtomicBool>,
+    /// Visualizer analysis bus — every rodio source is wrapped in a
+    /// sample tap feeding it; the UI polls [`Player::viz_frame`].
+    viz: Arc<viz::VizBus>,
     /// Outbound side of the transport bus. Sends `Next`/`Previous` from
     /// MPRIS (and future media-key surfaces) to whatever consumer the queue
     /// install path wired up. Unbounded so an off-thread MPRIS request never
@@ -226,6 +231,7 @@ impl Player {
             last_rodio_pos: Arc::new(Mutex::new(Duration::ZERO)),
             gapless_advanced: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             skip_stale_next: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            viz: viz::VizBus::new(),
             transport_tx,
             transport_rx: Arc::new(Mutex::new(Some(transport_rx))),
         })
@@ -336,6 +342,16 @@ impl Player {
             .unwrap_or(1.0)
     }
 
+    /// Latest visualizer analysis frame. `None` while the rodio side isn't
+    /// the active backend (librespot has no tap) or before enough audio
+    /// flowed through the ring.
+    pub fn viz_frame(&self) -> Option<VizFrame> {
+        if *self.active.read().unwrap_or_else(|p| p.into_inner()) != Active::Rodio {
+            return None;
+        }
+        self.viz.frame()
+    }
+
     /// Read-only handle to the play log so hooks can subscribe to it.
     pub fn history(&self) -> &History {
         &self.history
@@ -365,7 +381,7 @@ impl Player {
             .amplify(0.2);
         self.rodio
             .set_volume(Self::slider_to_gain(self.current_volume()));
-        self.rodio.append(tone);
+        self.rodio.append(viz::Tap::new(tone, self.viz.clone()));
         self.rodio.play();
         if let Ok(mut d) = self.duration.write() {
             *d = Some(Duration::from_secs(30));
@@ -398,7 +414,7 @@ impl Player {
         // periodic_access tick runs on the first poll, which happens at
         // append time.
         self.rodio.set_volume(gain);
-        self.rodio.append(decoder);
+        self.rodio.append(viz::Tap::new(decoder, self.viz.clone()));
         self.rodio.play();
         if let Ok(mut d) = self.duration.write() {
             *d = dur;
@@ -441,7 +457,7 @@ impl Player {
         // Re-assert log-curved gain before append — same first-5ms unity-gain
         // leak guard as play_bytes.
         self.rodio.set_volume(gain);
-        self.rodio.append(decoder);
+        self.rodio.append(viz::Tap::new(decoder, self.viz.clone()));
         self.rodio.play();
         if let Ok(mut d) = self.duration.write() {
             *d = dur;
@@ -485,7 +501,7 @@ impl Player {
         self.rodio.clear();
         // Same first-5ms unity-gain leak guard as play_bytes.
         self.rodio.set_volume(gain);
-        self.rodio.append(decoder);
+        self.rodio.append(viz::Tap::new(decoder, self.viz.clone()));
         self.rodio.play();
         if let Ok(mut d) = self.duration.write() {
             *d = duration;
@@ -585,7 +601,7 @@ impl Player {
         if let Ok(mut l) = self.last_rodio_pos.lock() {
             *l = self.rodio.get_pos();
         }
-        self.rodio.append(decoder);
+        self.rodio.append(viz::Tap::new(decoder, self.viz.clone()));
         true
     }
 
@@ -927,7 +943,7 @@ impl Player {
         self.rodio.clear();
         // Same first-5ms unity-gain leak guard as play_bytes.
         self.rodio.set_volume(gain);
-        self.rodio.append(decoder);
+        self.rodio.append(viz::Tap::new(decoder, self.viz.clone()));
         if let Err(e) = self.rodio.try_seek(target) {
             tracing::warn!("forward seek into fresh decoder failed: {e}");
         }

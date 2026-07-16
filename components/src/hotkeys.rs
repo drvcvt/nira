@@ -9,6 +9,8 @@
 use dioxus::prelude::*;
 use hooks::{use_config, use_likes, use_player, use_queue};
 
+use crate::visualizer::use_viz_open;
+
 /// Volume step per Ctrl+↑/↓ press, in slider units (0..1).
 const VOLUME_STEP: f32 = 0.05;
 
@@ -28,6 +30,7 @@ const BINDS_VOLUME: BindRows = &[
 ];
 const BINDS_APP: BindRows = &[
     (&["Ctrl + F", "Alt + Space"], "Search"),
+    (&["V"], "Visualizer"),
     (&["Ctrl + /"], "Keyboard shortcuts"),
     (&["Esc"], "Close overlays"),
 ];
@@ -38,6 +41,7 @@ pub fn Hotkeys() -> Element {
     let queue = use_queue();
     let likes = use_likes();
     let config = use_config();
+    let mut viz_open = use_viz_open().0;
     let mut open = use_signal(|| false);
     let is_open = *open.read();
 
@@ -153,6 +157,23 @@ pub fn Hotkeys() -> Element {
                     player.set_volume(v - VOLUME_STEP);
                 }
             },
+        }
+        button {
+            id: "nira-key-viz",
+            class: "hotkey-bridge",
+            r#type: "button",
+            tabindex: "-1",
+            onclick: move |_| {
+                let now = *viz_open.peek();
+                viz_open.set(!now);
+            },
+        }
+        button {
+            id: "nira-key-viz-close",
+            class: "hotkey-bridge",
+            r#type: "button",
+            tabindex: "-1",
+            onclick: move |_| viz_open.set(false),
         }
         button {
             id: "nira-key-binds",
