@@ -46,11 +46,15 @@ type HttpReader = StreamDownload<TempStorageProvider>;
 /// keys, future global hotkeys) needs to drive next/previous on the queue.
 /// Sent via `Player::request_next/request_prev`, received once by the queue
 /// install path via `Player::take_transport_rx`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum TransportCmd {
     Next,
     Previous,
     Stop,
+    /// A user-initiated seek could not be completed (e.g. the signed stream
+    /// URL expired mid-session). Carried to the queue so the bottombar can
+    /// toast it instead of the seek silently no-opping.
+    SeekFailed(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -583,13 +587,16 @@ impl Player {
                         // The user may have switched tracks or stopped during
                         // the ~1 s rebuild — swapping in regardless would play
                         // the OLD track over whatever is current. Only commit
-                        // if this URL is still the retained rodio source.
-                        let still_current = player
-                            .rodio_source
-                            .read()
-                            .ok()
+                        // if this URL is still the retained rodio source, and
+                        // hold the read guard across the swap: every play path
+                        // updates `rodio_source` BEFORE touching the sink, so
+                        // a concurrent track change blocks on the write lock
+                        // until our swap is done and then cleanly overwrites it.
+                        let guard = player.rodio_source.read().ok();
+                        let still_current = guard
+                            .as_deref()
                             .map(|s| {
-                                matches!(s.as_ref(), Some(RodioSource::Http { url: u }) if *u == url)
+                                matches!(s, Some(RodioSource::Http { url: u }) if *u == url)
                             })
                             .unwrap_or(false);
                         if still_current {
@@ -598,7 +605,12 @@ impl Player {
                             tracing::info!("http seek rebuild superseded by a track change");
                         }
                     }
-                    Err(e) => tracing::warn!("http seek rebuild failed: {e}"),
+                    Err(e) => {
+                        tracing::warn!("http seek rebuild failed: {e}");
+                        let _ = player.transport_tx.send(TransportCmd::SeekFailed(
+                            "Seek failed — the stream link expired. Restart the track.".into(),
+                        ));
+                    }
                 }
             });
             return;
@@ -617,6 +629,9 @@ impl Player {
         };
         if let Err(e) = outcome {
             tracing::warn!("seek rebuild failed, keeping current position: {e}");
+            let _ = self
+                .transport_tx
+                .send(TransportCmd::SeekFailed(format!("Seek failed: {e}")));
         }
     }
 

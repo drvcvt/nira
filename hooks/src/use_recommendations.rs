@@ -235,12 +235,22 @@ impl UseRecommendations {
             *generation.peek()
         };
 
+        // Selective rerolls of the SAME shelf can overlap (double-click on
+        // Reroll); the shelf's offset counter is bumped before each load, so
+        // it doubles as a per-shelf generation. A load only merges if the
+        // offset it was started with is still current — otherwise the older
+        // in-flight load would overwrite the newer one's results.
+        let reroll_offset = only
+            .as_ref()
+            .map(|id| offsets.get(id).copied().unwrap_or(0));
+
         let mut shelves_sig = self.shelves;
         let mut mixes_sig = self.mixes;
         let mut tiles_sig = self.tiles;
         let mut loading_sig = self.is_loading;
         let mut error_sig = self.error;
         let generation_sig = self.generation;
+        let offsets_sig = self.offsets;
         let engine = self.engine.clone();
         let sc = self.sc.clone();
         let only_id = only.clone();
@@ -272,6 +282,13 @@ impl UseRecommendations {
                 // repaints them, and a stuck flag disables their buttons.
                 clear_shelf_loading_flags(&mut shelves_sig, &marked_shelf_ids);
                 clear_mix_loading_flags(&mut mixes_sig, &marked_mix_ids);
+                return;
+            }
+            if let (Some(id), Some(started_offset)) = (only_id.as_deref(), reroll_offset)
+                && offsets_sig.peek().get(id).copied().unwrap_or(0) != started_offset
+            {
+                // A newer reroll of this shelf superseded us. It re-marked the
+                // loading flags and will merge its own results — just drop ours.
                 return;
             }
 

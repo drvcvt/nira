@@ -788,10 +788,12 @@ fn sp_to_track(sp: SpTrack) -> Track {
 /// rows render covers at ~170 px, so the middle size decodes ~4× cheaper
 /// than the 640 px original with no visible loss. Detail heroes keep the
 /// full-size first entry.
-fn sp_mid_image(images: Vec<SpImage>) -> Option<String> {
-    let mut it = images.into_iter();
-    let first = it.next();
-    it.next().or(first).map(|i| i.url)
+fn sp_mid_image(mut images: Vec<SpImage>) -> Option<String> {
+    if images.is_empty() {
+        return None;
+    }
+    let mid = images.len() / 2;
+    Some(images.swap_remove(mid).url)
 }
 
 fn sp_to_artist(raw: SpArtist) -> Artist {

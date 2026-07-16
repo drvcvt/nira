@@ -4,7 +4,7 @@ use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
 use hooks::{FLAC_QUALITIES, use_config, use_hires-provider, use_soundcloud, use_spotify};
 
-use super::SettingsCard;
+use super::{SettingsCard, StatusPill};
 
 #[component]
 pub(super) fn ConnectionsSettings() -> Element {
@@ -29,6 +29,10 @@ pub(super) fn ConnectionsSettings() -> Element {
     let mut lb_token_draft = use_signal(move || initial_token);
     let mut lb_user_draft = use_signal(move || initial_user);
     let mut lb_status = use_signal(|| None::<String>);
+    // Active state (what config actually holds), not the drafts — the pills
+    // flip when Save lands, not while typing.
+    let lb_token_active = config.read().listenbrainz_token.is_some();
+    let lb_user_active = config.read().listenbrainz_username.is_some();
 
     let mut sc_status = use_signal(|| None::<String>);
     let mut sc_refreshing = use_signal(|| false);
@@ -351,6 +355,16 @@ pub(super) fn ConnectionsSettings() -> Element {
                                 Err(e) => lb_status.set(Some(format!("Save failed: {e}"))),
                             }
                         },
+                    }
+                }
+                div { class: "settings-meta-grid",
+                    StatusPill {
+                        label: if lb_token_active { "Scrobbling on".to_string() } else { "Scrobbling off".to_string() },
+                        ok: lb_token_active,
+                    }
+                    StatusPill {
+                        label: if lb_user_active { "Home feed on".to_string() } else { "Home feed off".to_string() },
+                        ok: lb_user_active,
                     }
                 }
                 if let Some(msg) = lb_status.read().as_ref() {

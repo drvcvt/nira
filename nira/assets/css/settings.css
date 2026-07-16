@@ -556,3 +556,41 @@ select.settings-input option {
   font-size: 0.72rem;
   color: var(--sub);
 }
+
+/* ── Status pills: active-state chips under card inputs ── */
+
+.settings-meta-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.settings-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.settings-pill.ok {
+  border-color: var(--line-strong);
+  background: color-mix(in oklab, var(--surface) 55%, transparent);
+}
+
+.settings-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--text-dim);
+}
+
+.settings-pill.ok .settings-dot {
+  background: color-mix(in oklab, var(--progress) 70%, var(--text-muted));
+}

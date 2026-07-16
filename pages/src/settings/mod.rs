@@ -88,3 +88,20 @@ fn SettingsCard(title: String, icon: String, children: Element) -> Element {
         }
     }
 }
+
+/// Small dot+label pill reflecting the *active* state of a feature (as
+/// opposed to the drafts sitting in the inputs above it).
+#[component]
+fn StatusPill(label: String, ok: bool) -> Element {
+    let class = if ok {
+        "settings-pill ok"
+    } else {
+        "settings-pill"
+    };
+    rsx! {
+        span { class: "{class}",
+            span { class: "settings-dot" }
+            "{label}"
+        }
+    }
+}

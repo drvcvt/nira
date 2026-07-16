@@ -918,6 +918,10 @@ pub fn install(
                         TransportCmd::Next => queue.next(),
                         TransportCmd::Previous => queue.previous(),
                         TransportCmd::Stop => queue.stop(),
+                        TransportCmd::SeekFailed(msg) => {
+                            let mut error = queue.error;
+                            error.set(Some(msg));
+                        }
                     }
                 }
             });

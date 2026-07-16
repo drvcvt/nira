@@ -191,6 +191,10 @@ fn badge_class_for(s: &str) -> &'static str {
         "track-badge spotify"
     } else if lower.contains("soundcloud") {
         "track-badge soundcloud"
+    } else if lower.contains("hires-provider") {
+        "track-badge hires-provider"
+    } else if lower.contains("local") {
+        "track-badge local"
     } else {
         "track-badge"
     }
@@ -202,6 +206,10 @@ fn badge_glyph_for(s: &str) -> &'static str {
         "S"
     } else if lower.contains("soundcloud") {
         "SC"
+    } else if lower.contains("hires-provider") {
+        "Q"
+    } else if lower.contains("local") {
+        "L"
     } else {
         "·"
     }

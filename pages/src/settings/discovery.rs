@@ -10,7 +10,7 @@ use hooks::{
     use_enrichment,
 };
 
-use super::SettingsCard;
+use super::{SettingsCard, StatusPill};
 
 #[component]
 pub(super) fn DiscoverySettings() -> Element {
@@ -81,6 +81,13 @@ pub(super) fn DiscoverySettings() -> Element {
                                 Err(e) => status.set(Some(e)),
                             }
                         },
+                    }
+                }
+                // The toggle above says "on", but without a key the Last.fm
+                // source silently contributes nothing — surface that gap.
+                if lf_source_on && !lastfm_on {
+                    div { class: "settings-meta-grid",
+                        StatusPill { label: "Last.fm needs an API key — add it below.".to_string(), ok: false }
                     }
                 }
             }

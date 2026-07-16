@@ -85,17 +85,17 @@ fn scan_into(state: UseLocalLibrary) {
 /// Install the singleton and kick the boot-time scan. Called once from
 /// `AppContext::install`, after the config signal exists.
 pub fn install_local_library(config: Signal<AppConfig>) {
-    let tracks = use_signal(Vec::<Track>::new);
-    let is_scanning = use_signal(|| false);
-    let error = use_signal(|| None::<String>);
-    let total_bytes = use_signal(|| 0u64);
-    let state = UseLocalLibrary {
-        tracks,
-        is_scanning,
-        error,
-        total_bytes,
+    // Root-owned signals (not use_signal): scan_into writes them from a
+    // spawn_forever task, which runs on ScopeId::ROOT — an ancestor of the
+    // App scope. Component-owned signals written from there trip Dioxus's
+    // "used in a non-descendant scope" warning and risk a dropped-value read.
+    let state = use_hook(|| UseLocalLibrary {
+        tracks: Signal::new_in_scope(Vec::new(), ScopeId::ROOT),
+        is_scanning: Signal::new_in_scope(false, ScopeId::ROOT),
+        error: Signal::new_in_scope(None, ScopeId::ROOT),
+        total_bytes: Signal::new_in_scope(0, ScopeId::ROOT),
         config,
-    };
+    });
     use_context_provider(move || state);
     use_hook(move || scan_into(state));
 }

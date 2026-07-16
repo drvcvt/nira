@@ -219,6 +219,12 @@
   background-repeat: no-repeat;
 }
 
+/* Empty/loading mixes render as disabled buttons — dim them and suppress
+   the clickable hover lift. */
+.mix-card:disabled { opacity: 0.62; cursor: default; }
+.mix-card:disabled:hover { transform: none; }
+.mix-card:disabled:hover .cover-card-art { filter: none; }
+
 /* ── Listened lately: the one dense timeline ── */
 
 .home-feed .home-rail-head {
