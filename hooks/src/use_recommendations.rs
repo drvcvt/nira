@@ -14,15 +14,43 @@ use discovery::{DiscoveryEngine, SimilarToSeed};
 use player::HistoryEntry;
 use provider_api::{ArtistUri, Provider, Query, Track, TrackUri};
 use provider_soundcloud::SoundCloudProvider;
+use rand::Rng;
+use rand::seq::{IndexedRandom, SliceRandom};
 use serde::{Deserialize, Serialize};
 
 use crate::UseLibrary;
+use crate::taste::{play_weight, weighted_sample};
 use crate::use_likes::LikedTrack;
 
 const SHELF_LIMIT: usize = 14;
 const MADE_FOR_YOU_SEEDS: usize = 10;
+/// Of the made-for-you seeds, how many are "explore" picks drawn uniformly
+/// from outside the heaviest-rotation artists. This is what keeps the row
+/// from collapsing into whatever was played last.
+const MADE_FOR_YOU_EXPLORE: usize = 3;
+/// Related tracks fetched per seed for the aggregate row. Small on purpose:
+/// the row interleaves seeds round-robin, so every seed contributes instead
+/// of the first two flooding it.
+const PER_SEED_RELATED: usize = 4;
 const DAILY_MIX_COUNT: usize = 4;
 const DAILY_MIX_LIMIT: usize = 18;
+/// Daily-mix clusters are sampled from this many top-weighted artists, not
+/// taken as a fixed top-4.
+const MIX_CANDIDATE_POOL: usize = 12;
+/// Artists ranked above this count as the "head" of the taste profile;
+/// explore picks deliberately come from below it.
+const HEAD_ARTISTS: usize = 5;
+/// Base weight of a like relative to a just-played track (1.0). Likes are
+/// timeless but shouldn't outshout actual listening.
+const LIKE_WEIGHT: f64 = 0.25;
+/// SoundCloud-native seeds skip the search round-trip and hit the exact
+/// related-tracks endpoint, so they're worth a bit more.
+const SC_SEED_BONUS: f64 = 1.5;
+/// Max tracks one artist contributes to the aggregate "Made for you" row.
+const SHELF_ARTIST_CAP: usize = 2;
+/// Max tracks one artist contributes to a single-seed row or daily mix —
+/// those orbit one artist's neighbourhood, so a little repetition is fine.
+const MIX_ARTIST_CAP: usize = 3;
 
 const SHELF_MADE_FOR_YOU: &str = "made-for-you";
 const SHELF_BECAUSE: &str = "because-recent";
@@ -153,6 +181,7 @@ enum ShelfKind {
     },
     Related {
         seed: RecommendationSeed,
+        exclude_keys: HashSet<String>,
     },
     ArtistUploads {
         artists: Vec<ArtistUri>,
@@ -200,8 +229,23 @@ impl UseRecommendations {
         let local_likes = self.local_likes.read().clone();
         let offsets = self.offsets.read().clone();
         let liked_tracks = combined_likes(&local_likes, &spotify_liked);
-        let shelf_plans = build_shelf_plans(&history, &liked_tracks, &offsets);
-        let mix_plans = build_mix_plans(&history, &liked_tracks, &offsets);
+        // Everything currently on the personalised rows counts as "already
+        // shown": the next load down-ranks it so Refresh/Reroll actually
+        // surfaces new tracks instead of replaying the same related-feed.
+        // ponytail: one generation of memory (the visible dashboard); a
+        // persisted ring buffer only if repeats still annoy in practice.
+        let prev_keys = shown_track_keys(&self.shelves.peek(), &self.mixes.peek());
+        let mut rng = rand::rng();
+        let mut used_artists = HashSet::new();
+        let shelf_plans = build_shelf_plans(
+            &history,
+            &liked_tracks,
+            &prev_keys,
+            &mut used_artists,
+            &mut rng,
+        );
+        let mix_plans =
+            build_mix_plans(&history, &liked_tracks, &prev_keys, &used_artists, &mut rng);
 
         let selected_shelves: Vec<ShelfPlan> = match only.as_ref() {
             Some(id) => shelf_plans.into_iter().filter(|p| &p.id == id).collect(),
@@ -426,7 +470,11 @@ async fn load_shelf(
             seeds,
             exclude_keys,
         } => related_aggregate(sc, engine, &seeds, &exclude_keys, SHELF_LIMIT).await,
-        ShelfKind::Related { seed } => related_for_seed(sc, engine, &seed, SHELF_LIMIT).await,
+        ShelfKind::Related { seed, exclude_keys } => {
+            related_for_seed(sc, engine, &seed, SHELF_LIMIT * 2)
+                .await
+                .map(|tracks| curate_tracks(tracks, &exclude_keys, MIX_ARTIST_CAP, SHELF_LIMIT))
+        }
         ShelfKind::ArtistUploads { artists } => artist_uploads(sc, &artists, SHELF_LIMIT).await,
         ShelfKind::StaticTracks { tracks } => Ok(dedupe_tracks(tracks)
             .into_iter()
@@ -480,15 +528,11 @@ async fn load_mix(
     engine: Arc<DiscoveryEngine>,
     plan: MixPlan,
 ) -> RecommendationMix {
-    let result = related_for_seed(sc, engine, &plan.seed, DAILY_MIX_LIMIT)
+    // Fetch double so the exclusion filter (likes + already-shown) still
+    // leaves a full mix.
+    let result = related_for_seed(sc, engine, &plan.seed, DAILY_MIX_LIMIT * 2)
         .await
-        .map(|tracks| {
-            tracks
-                .into_iter()
-                .filter(|t| !plan.exclude_keys.contains(&track_key(t)))
-                .take(DAILY_MIX_LIMIT)
-                .collect::<Vec<_>>()
-        });
+        .map(|tracks| curate_tracks(tracks, &plan.exclude_keys, MIX_ARTIST_CAP, DAILY_MIX_LIMIT));
 
     match result {
         Ok(tracks) => RecommendationMix {
@@ -517,6 +561,63 @@ async fn load_mix(
     }
 }
 
+/// Collapse same-song duplicates (different uploader, cover, other platform)
+/// by noise-stripped title. Only used on recommendation feeds — a user's own
+/// likes keep deliberate duplicates.
+fn dedupe_canonical(tracks: Vec<Track>) -> Vec<Track> {
+    let mut seen = HashSet::<String>::new();
+    tracks
+        .into_iter()
+        .filter(|t| {
+            let canon = discovery::canonical_title(&t.title);
+            canon.is_empty() || seen.insert(canon)
+        })
+        .collect()
+}
+
+/// Curate a raw related feed into a row: dedupe (exact + canonical title),
+/// drop excluded tracks, cap how many tracks one artist contributes. Never
+/// starves the row — if filtering leaves too little, dropped tracks are
+/// backfilled rather than showing a gap.
+fn curate_tracks(
+    tracks: Vec<Track>,
+    exclude_keys: &HashSet<String>,
+    max_per_artist: usize,
+    limit: usize,
+) -> Vec<Track> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut kept = Vec::new();
+    let mut spare = Vec::new();
+    for track in dedupe_canonical(dedupe_tracks(tracks)) {
+        if exclude_keys.contains(&track_key(&track)) {
+            spare.push(track);
+            continue;
+        }
+        let artist = normalise_key(
+            track
+                .artists
+                .first()
+                .map(|a| a.name.as_str())
+                .unwrap_or_default(),
+        );
+        let count = counts.entry(artist).or_insert(0);
+        if *count < max_per_artist {
+            *count += 1;
+            kept.push(track);
+        } else {
+            spare.push(track);
+        }
+    }
+    if kept.len() < limit.div_ceil(2) {
+        kept.extend(spare);
+    }
+    kept.into_iter().take(limit).collect()
+}
+
+/// Fetch related tracks for every seed in parallel, then interleave them
+/// round-robin. The old sequential fill let the first two seeds flood the
+/// whole row — which is exactly why two plays of one artist used to turn
+/// "Made for you" into that artist's radio.
 async fn related_aggregate(
     sc: Arc<SoundCloudProvider>,
     engine: Arc<DiscoveryEngine>,
@@ -524,19 +625,78 @@ async fn related_aggregate(
     exclude_keys: &HashSet<String>,
     limit: usize,
 ) -> Result<Vec<Track>, String> {
+    let fetches = seeds.iter().take(MADE_FOR_YOU_SEEDS).map(|seed| {
+        related_for_seed(sc.clone(), engine.clone(), seed, PER_SEED_RELATED)
+    });
+    let results = futures_util::future::join_all(fetches).await;
+    let mut last_err = None;
+    let mut pools: Vec<std::vec::IntoIter<Track>> = Vec::new();
+    for r in results {
+        match r {
+            Ok(tracks) => pools.push(tracks.into_iter()),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    if pools.is_empty() {
+        return Err(last_err.unwrap_or_else(|| "no seeds to aggregate".into()));
+    }
+
+    let mut seen_uri = HashSet::new();
+    let mut seen_key = HashSet::new();
+    let mut seen_canon = HashSet::new();
+    let mut artist_counts: HashMap<String, usize> = HashMap::new();
     let mut out = Vec::new();
-    for seed in seeds.iter().take(MADE_FOR_YOU_SEEDS) {
-        let tracks = related_for_seed(sc.clone(), engine.clone(), seed, 8).await?;
-        for track in tracks {
-            if !exclude_keys.contains(&track_key(&track)) {
-                out.push(track);
+    let mut spare = Vec::new();
+    'rounds: loop {
+        let mut any = false;
+        for pool in &mut pools {
+            let Some(track) = pool.next() else { continue };
+            any = true;
+            let key = track_key(&track);
+            if !seen_uri.insert(track.uri.0.clone()) || !seen_key.insert(key.clone()) {
+                continue;
+            }
+            // Same song under a different uploader/cover: hard-drop, never
+            // even as backfill — ten copies of one track is not a mix.
+            let canon = discovery::canonical_title(&track.title);
+            if !canon.is_empty() && !seen_canon.insert(canon) {
+                continue;
+            }
+            if exclude_keys.contains(&key) {
+                spare.push(track);
+                continue;
+            }
+            let artist = normalise_key(
+                track
+                    .artists
+                    .first()
+                    .map(|a| a.name.as_str())
+                    .unwrap_or_default(),
+            );
+            let count = artist_counts.entry(artist).or_insert(0);
+            if *count >= SHELF_ARTIST_CAP {
+                spare.push(track);
+                continue;
+            }
+            *count += 1;
+            out.push(track);
+            if out.len() >= limit {
+                break 'rounds;
             }
         }
-        if dedupe_tracks(out.clone()).len() >= limit {
+        if !any {
             break;
         }
     }
-    Ok(dedupe_tracks(out).into_iter().take(limit).collect())
+    // Short row (niche seeds, heavy exclusion): pad with excluded tracks
+    // rather than rendering half a shelf.
+    for track in spare {
+        if out.len() >= limit {
+            break;
+        }
+        out.push(track);
+    }
+    Ok(out)
 }
 
 async fn related_for_seed(
@@ -550,10 +710,18 @@ async fn related_for_seed(
         .as_ref()
         .filter(|uri| is_soundcloud_track(uri))
     {
+        // Fetch double: the variant/reupload filter and canonical dedupe eat
+        // into the raw feed. SC caps the endpoint at ~50.
+        let fetch = (limit * 2).min(50) as u32;
         return sc
-            .related_tracks(uri, limit as u32)
+            .related_tracks(uri, fetch)
             .await
-            .map(dedupe_tracks)
+            .map(|tracks| {
+                dedupe_canonical(dedupe_tracks(filter_seed_variants(tracks, seed)))
+                    .into_iter()
+                    .take(limit)
+                    .collect()
+            })
             .map_err(|e| e.to_string());
     }
 
@@ -578,6 +746,26 @@ async fn related_for_seed(
             .collect()
         })
         .map_err(|e| e.to_string())
+}
+
+/// Hygiene for raw SoundCloud related feeds, mirroring what the discovery
+/// engine does on its own paths: drop reuploads/covers of the seed itself
+/// and low-quality variants (sped up, nightcore, …) the seed isn't one of.
+fn filter_seed_variants(tracks: Vec<Track>, seed: &RecommendationSeed) -> Vec<Track> {
+    let seed_canon = discovery::canonical_title(&seed.title);
+    let seed_ref = SimilarToSeed {
+        artist: seed.artist.clone(),
+        title: seed.title.clone(),
+        mbid: None,
+    };
+    tracks
+        .into_iter()
+        .filter(|t| {
+            let canon = discovery::canonical_title(&t.title);
+            (canon.is_empty() || canon != seed_canon)
+                && !discovery::is_low_quality_variant(&t.title, &seed_ref)
+        })
+        .collect()
 }
 
 async fn artist_uploads(
@@ -778,24 +966,21 @@ fn skeleton_mix(plan: &MixPlan) -> RecommendationMix {
 fn build_shelf_plans(
     history: &[HistoryEntry],
     liked: &[Track],
-    offsets: &HashMap<String, usize>,
+    prev_keys: &HashSet<String>,
+    used_artists: &mut HashSet<String>,
+    rng: &mut impl Rng,
 ) -> Vec<ShelfPlan> {
     let mut out = Vec::new();
+    let now = Utc::now();
     let liked_keys = liked.iter().map(track_key).collect::<HashSet<_>>();
-    let all_seeds = seed_pool(history, liked);
-    let recent_seeds = history_seeds(history);
+    let exclude_keys: HashSet<String> = liked_keys.union(prev_keys).cloned().collect();
+    let pool = weighted_seed_pool(history, liked, now);
 
-    if !all_seeds.is_empty() {
-        // Cap two seeds per artist so a heavy-rotation artist can't monopolise
-        // the row; we still rotate the full pool first so reroll cycles
-        // through the long tail.
-        let made_for_you_seeds = diverse_seeds(
-            rotate_seeds(&all_seeds, offset_for(offsets, SHELF_MADE_FOR_YOU)),
-            2,
-        )
-        .into_iter()
-        .take(MADE_FOR_YOU_SEEDS)
-        .collect();
+    if !pool.is_empty() {
+        // Weighted random seeds (recency-decayed, likes included) plus a few
+        // explore picks from the long tail; max two seeds per artist.
+        let made_for_you_seeds =
+            sample_seeds_with_explore(&pool, MADE_FOR_YOU_SEEDS, MADE_FOR_YOU_EXPLORE, rng);
         out.push(ShelfPlan {
             id: SHELF_MADE_FOR_YOU.to_string(),
             eyebrow: "Personal".into(),
@@ -806,12 +991,16 @@ fn build_shelf_plans(
             rerollable: true,
             kind: ShelfKind::RelatedAggregate {
                 seeds: made_for_you_seeds,
-                exclude_keys: liked_keys.clone(),
+                exclude_keys: exclude_keys.clone(),
             },
         });
     }
 
-    if let Some(seed) = pick_seed(&recent_seeds, offset_for(offsets, SHELF_BECAUSE)) {
+    // A weighted draw over the recent plays — usually something fresh, but
+    // not tautologically "the last track you touched".
+    let recent_pool = recent_play_pool(history, now, 30);
+    if let Some(seed) = weighted_sample(recent_pool, 1, rng).into_iter().next() {
+        used_artists.insert(normalise_key(&seed.artist));
         out.push(ShelfPlan {
             id: SHELF_BECAUSE.to_string(),
             eyebrow: "Because you played".into(),
@@ -819,24 +1008,26 @@ fn build_shelf_plans(
             subtitle: format!("by {}", seed.artist),
             seed_label: seed.label.clone(),
             rerollable: true,
-            kind: ShelfKind::Related { seed },
+            kind: ShelfKind::Related {
+                seed,
+                exclude_keys: exclude_keys.clone(),
+            },
         });
     }
 
-    let artist_uris = soundcloud_artist_uris(liked);
+    let mut artist_uris = soundcloud_artist_uris(liked);
     if !artist_uris.is_empty() {
+        let count = artist_uris.len();
+        artist_uris.shuffle(rng);
         out.push(ShelfPlan {
             id: SHELF_NEW_FROM_ARTISTS.to_string(),
             eyebrow: "New releases".into(),
             title: "From your artists".into(),
             subtitle: "Recent uploads from SoundCloud artists you saved.".into(),
-            seed_label: format!("{} SoundCloud artists", artist_uris.len()),
+            seed_label: format!("{count} SoundCloud artists"),
             rerollable: true,
             kind: ShelfKind::ArtistUploads {
-                artists: rotate_artist_uris(
-                    &artist_uris,
-                    offset_for(offsets, SHELF_NEW_FROM_ARTISTS),
-                ),
+                artists: artist_uris,
             },
         });
     }
@@ -850,7 +1041,7 @@ fn build_shelf_plans(
             seed_label: format!("{} saved tracks", liked.len()),
             rerollable: true,
             kind: ShelfKind::StaticTracks {
-                tracks: rotating_tracks(liked, SHELF_LIMIT, offset_for(offsets, SHELF_FROM_LIKES)),
+                tracks: liked.choose_multiple(rng, SHELF_LIMIT).cloned().collect(),
             },
         });
     }
@@ -883,15 +1074,64 @@ fn build_shelf_plans(
 fn build_mix_plans(
     history: &[HistoryEntry],
     liked: &[Track],
-    offsets: &HashMap<String, usize>,
+    prev_keys: &HashSet<String>,
+    used_artists: &HashSet<String>,
+    rng: &mut impl Rng,
 ) -> Vec<MixPlan> {
-    let clusters = cluster_seeds(history, liked);
+    let now = Utc::now();
+    let mut clusters = cluster_seeds(history, liked, now);
+    // Keep the Because-you-played artist from also fronting a mix — unless
+    // the profile is so small that dropping it would leave mixes empty.
+    if clusters.len() > DAILY_MIX_COUNT {
+        let filtered: Vec<_> = clusters
+            .iter()
+            .filter(|(_, s)| !used_artists.contains(&normalise_key(&s.artist)))
+            .cloned()
+            .collect();
+        if filtered.len() >= DAILY_MIX_COUNT {
+            clusters = filtered;
+        }
+    }
     if clusters.is_empty() {
         return Vec::new();
     }
     let liked_keys = liked.iter().map(track_key).collect::<HashSet<_>>();
-    let rotated = rotate_seeds(&clusters, offset_for(offsets, MIXES_GROUP));
-    rotated
+    let exclude_keys: HashSet<String> = liked_keys.union(prev_keys).cloned().collect();
+
+    // Three weighted draws from the profile's head, one uniform explore draw
+    // from beyond it — one mix is always a "you forgot about this" lane.
+    // Clusters are one-per-artist, so sampling without replacement already
+    // guarantees four distinct artists.
+    let head: Vec<(f64, RecommendationSeed)> = clusters
+        .iter()
+        .take(MIX_CANDIDATE_POOL)
+        .cloned()
+        .collect();
+    let mut picked = weighted_sample(head, DAILY_MIX_COUNT - 1, rng);
+    let picked_artists: HashSet<String> =
+        picked.iter().map(|s| normalise_key(&s.artist)).collect();
+    let tail: Vec<(f64, RecommendationSeed)> = clusters
+        .iter()
+        .skip(HEAD_ARTISTS)
+        .filter(|(_, s)| !picked_artists.contains(&normalise_key(&s.artist)))
+        .map(|(_, s)| (1.0, s.clone()))
+        .collect();
+    picked.extend(weighted_sample(tail, 1, rng));
+    if picked.len() < DAILY_MIX_COUNT {
+        // Small profile: top up from whatever clusters remain.
+        let remaining: Vec<(f64, RecommendationSeed)> = clusters
+            .iter()
+            .filter(|(_, s)| {
+                let key = normalise_key(&s.artist);
+                picked.iter().all(|p| normalise_key(&p.artist) != key)
+            })
+            .cloned()
+            .collect();
+        let need = DAILY_MIX_COUNT - picked.len();
+        picked.extend(weighted_sample(remaining, need, rng));
+    }
+
+    picked
         .into_iter()
         .take(DAILY_MIX_COUNT)
         .enumerate()
@@ -902,7 +1142,7 @@ fn build_mix_plans(
             seed_label: seed.label.clone(),
             seed,
             accent_index: slot,
-            exclude_keys: liked_keys.clone(),
+            exclude_keys: exclude_keys.clone(),
         })
         .collect()
 }
@@ -989,64 +1229,178 @@ fn combined_likes(local: &[LikedTrack], spotify: &[Track]) -> Vec<Track> {
     dedupe_tracks(tracks)
 }
 
-fn seed_pool(history: &[HistoryEntry], liked: &[Track]) -> Vec<RecommendationSeed> {
-    // History first so recent plays survive dedupe; likes fill the tail.
-    let mut seeds = history_seeds(history);
-    seeds.extend(liked_seeds(liked));
-    dedupe_seeds(seeds)
+/// A seed with its taste-profile weight: decayed play mass plus like mass.
+#[derive(Clone, Debug)]
+struct WeightedSeed {
+    weight: f64,
+    seed: RecommendationSeed,
 }
 
-fn history_seeds(entries: &[HistoryEntry]) -> Vec<RecommendationSeed> {
-    entries
+fn seed_key(seed: &RecommendationSeed) -> String {
+    format!(
+        "{}|{}",
+        normalise_key(&seed.artist),
+        normalise_key(&seed.title)
+    )
+}
+
+fn sc_seed_bonus(seed: &RecommendationSeed) -> f64 {
+    if seed.track_uri.as_ref().is_some_and(is_soundcloud_track) {
+        SC_SEED_BONUS
+    } else {
+        1.0
+    }
+}
+
+/// Every known seed with an accumulated weight: each play adds its decayed
+/// weight, each like adds a flat base. History runs first so a seed's URI
+/// identity comes from the most recent play, not an old like.
+fn weighted_seed_pool(
+    history: &[HistoryEntry],
+    liked: &[Track],
+    now: DateTime<Utc>,
+) -> Vec<WeightedSeed> {
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut out: Vec<WeightedSeed> = Vec::new();
+    let mut upsert = |seed: RecommendationSeed, weight: f64| match index.get(&seed_key(&seed)) {
+        Some(&i) => out[i].weight += weight,
+        None => {
+            index.insert(seed_key(&seed), out.len());
+            out.push(WeightedSeed { weight, seed });
+        }
+    };
+    for e in history {
+        let Some(seed) = seed_from_parts(&e.artist, &e.title, e.track_uri.clone().map(TrackUri))
+        else {
+            continue;
+        };
+        let weight = play_weight(now, e.played_at) * sc_seed_bonus(&seed);
+        upsert(seed, weight);
+    }
+    for track in liked {
+        let Some(seed) = seed_from_track(track) else {
+            continue;
+        };
+        let weight = LIKE_WEIGHT * sc_seed_bonus(&seed);
+        upsert(seed, weight);
+    }
+    out
+}
+
+/// The most recent plays, deduped, each weighted by decay — the pool the
+/// "Because you played" seed is drawn from.
+fn recent_play_pool(
+    history: &[HistoryEntry],
+    now: DateTime<Utc>,
+    cap: usize,
+) -> Vec<(f64, RecommendationSeed)> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for e in history {
+        let Some(seed) = seed_from_parts(&e.artist, &e.title, e.track_uri.clone().map(TrackUri))
+        else {
+            continue;
+        };
+        if !seen.insert(seed_key(&seed)) {
+            continue;
+        }
+        out.push((play_weight(now, e.played_at), seed));
+        if out.len() >= cap {
+            break;
+        }
+    }
+    out
+}
+
+/// Draw `n` seeds from the pool: `n - explore` weighted by the taste
+/// profile, plus `explore` uniform picks from outside the top artists.
+/// The per-artist cap of 2 still applies to the combined result.
+fn sample_seeds_with_explore(
+    pool: &[WeightedSeed],
+    n: usize,
+    explore: usize,
+    rng: &mut impl Rng,
+) -> Vec<RecommendationSeed> {
+    let mut by_artist: HashMap<String, f64> = HashMap::new();
+    for ws in pool {
+        *by_artist
+            .entry(normalise_key(&ws.seed.artist))
+            .or_default() += ws.weight;
+    }
+    let mut ranked: Vec<(String, f64)> = by_artist.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let head: HashSet<String> = ranked
+        .into_iter()
+        .take(HEAD_ARTISTS)
+        .map(|(artist, _)| artist)
+        .collect();
+
+    let exploit = weighted_sample(
+        pool.iter().map(|ws| (ws.weight, ws.seed.clone())).collect(),
+        n.saturating_sub(explore),
+        rng,
+    );
+    let picked: HashSet<String> = exploit.iter().map(seed_key).collect();
+    let tail: Vec<(f64, RecommendationSeed)> = pool
         .iter()
-        .filter_map(|e| seed_from_parts(&e.artist, &e.title, e.track_uri.clone().map(TrackUri)))
+        .filter(|ws| !head.contains(&normalise_key(&ws.seed.artist)))
+        .filter(|ws| !picked.contains(&seed_key(&ws.seed)))
+        .map(|ws| (1.0, ws.seed.clone()))
+        .collect();
+    let mut seeds = exploit;
+    seeds.extend(weighted_sample(tail, explore, rng));
+    diverse_seeds(seeds, 2).into_iter().take(n).collect()
+}
+
+/// Track keys of everything the personalised rows currently display, so the
+/// next load can avoid repeating them. Chart/genre rows are left out — they
+/// show what SoundCloud serves, not what we picked.
+fn shown_track_keys(
+    shelves: &[RecommendationShelf],
+    mixes: &[RecommendationMix],
+) -> HashSet<String> {
+    shelves
+        .iter()
+        .filter(|s| s.id == SHELF_MADE_FOR_YOU || s.id == SHELF_BECAUSE)
+        .flat_map(|s| s.tracks.iter().map(track_key))
+        .chain(mixes.iter().flat_map(|m| m.tracks.iter().map(track_key)))
         .collect()
 }
 
-fn liked_seeds(tracks: &[Track]) -> Vec<RecommendationSeed> {
-    tracks.iter().filter_map(seed_from_track).collect()
-}
-
-fn cluster_seeds(history: &[HistoryEntry], liked: &[Track]) -> Vec<RecommendationSeed> {
-    let mut clusters: HashMap<String, (usize, RecommendationSeed)> = HashMap::new();
-
-    // History first so the cluster's seed identity is the most recent play
-    // for that artist, not a like saved months ago. Recent positions get a
-    // larger weight bump so a play from this morning outranks an old like.
-    let history_iter = history_seeds(history)
-        .into_iter()
-        .enumerate()
-        .map(|(i, s)| (s, recency_bonus(i)));
-    let liked_iter = liked_seeds(liked).into_iter().map(|s| (s, 0));
-
-    for (seed, recency) in history_iter.chain(liked_iter) {
-        let key = normalise_key(&seed.artist);
+/// One cluster per artist, weighted by decayed play/like mass, sorted
+/// heaviest first. The sqrt makes the weight sublinear so a one-day binge on
+/// a single artist can't own every daily-mix draw.
+fn cluster_seeds(
+    history: &[HistoryEntry],
+    liked: &[Track],
+    now: DateTime<Utc>,
+) -> Vec<(f64, RecommendationSeed)> {
+    let mut clusters: HashMap<String, (f64, RecommendationSeed)> = HashMap::new();
+    for ws in weighted_seed_pool(history, liked, now) {
+        let key = normalise_key(&ws.seed.artist);
         if key.is_empty() {
             continue;
         }
-        let entry = clusters.entry(key).or_insert((0, seed.clone()));
-        let sc_bonus = if seed.track_uri.as_ref().is_some_and(is_soundcloud_track) {
-            3
-        } else {
-            1
-        };
-        entry.0 += sc_bonus + recency;
+        let entry = clusters.entry(key).or_insert((0.0, ws.seed.clone()));
+        entry.0 += ws.weight;
+        // Prefer a SoundCloud-native track as the cluster's seed identity:
+        // it hits the exact related-tracks endpoint instead of a text search.
+        if !entry.1.track_uri.as_ref().is_some_and(is_soundcloud_track)
+            && ws.seed.track_uri.as_ref().is_some_and(is_soundcloud_track)
+        {
+            entry.1 = ws.seed;
+        }
     }
-
-    let mut ranked: Vec<(usize, RecommendationSeed)> = clusters.into_values().collect();
-    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.artist.cmp(&b.1.artist)));
-    ranked.into_iter().map(|(_, seed)| seed).collect()
-}
-
-/// Newer history entries are more representative of current taste. The
-/// step function is intentionally coarse — a smooth decay would over-fit
-/// the noise in a small log.
-fn recency_bonus(idx: usize) -> usize {
-    match idx {
-        0..=9 => 5,
-        10..=29 => 2,
-        _ => 0,
-    }
+    let mut ranked: Vec<(f64, RecommendationSeed)> = clusters
+        .into_values()
+        .map(|(weight, seed)| (weight.sqrt(), seed))
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.artist.cmp(&b.1.artist))
+    });
+    ranked
 }
 
 /// Cap the number of seeds drawn from any single artist while preserving
@@ -1111,46 +1465,6 @@ fn soundcloud_artist_uris(tracks: &[Track]) -> Vec<ArtistUri> {
     out
 }
 
-fn offset_for(offsets: &HashMap<String, usize>, id: &str) -> usize {
-    *offsets.get(id).unwrap_or(&0)
-}
-
-fn pick_seed(seeds: &[RecommendationSeed], offset: usize) -> Option<RecommendationSeed> {
-    if seeds.is_empty() {
-        return None;
-    }
-    seeds.get(offset % seeds.len()).cloned()
-}
-
-fn rotate_seeds(seeds: &[RecommendationSeed], offset: usize) -> Vec<RecommendationSeed> {
-    if seeds.is_empty() {
-        return Vec::new();
-    }
-    (0..seeds.len())
-        .map(|i| seeds[(i + offset) % seeds.len()].clone())
-        .collect()
-}
-
-fn rotate_artist_uris(artists: &[ArtistUri], offset: usize) -> Vec<ArtistUri> {
-    if artists.is_empty() {
-        return Vec::new();
-    }
-    (0..artists.len())
-        .map(|i| artists[(i + offset) % artists.len()].clone())
-        .collect()
-}
-
-fn rotating_tracks(tracks: &[Track], limit: usize, offset: usize) -> Vec<Track> {
-    if tracks.is_empty() {
-        return Vec::new();
-    }
-    let hour = (Utc::now().timestamp().max(0) as usize) / 3600;
-    let start = (hour + offset * limit) % tracks.len();
-    (0..tracks.len().min(limit))
-        .map(|i| tracks[(start + i) % tracks.len()].clone())
-        .collect()
-}
-
 fn dedupe_tracks(tracks: Vec<Track>) -> Vec<Track> {
     let mut seen_uri = HashSet::<String>::new();
     let mut seen_key = HashSet::<String>::new();
@@ -1164,27 +1478,16 @@ fn dedupe_tracks(tracks: Vec<Track>) -> Vec<Track> {
     out
 }
 
-fn dedupe_seeds(seeds: Vec<RecommendationSeed>) -> Vec<RecommendationSeed> {
-    let mut seen = HashSet::<String>::new();
-    let mut out = Vec::new();
-    for seed in seeds {
-        let key = format!(
-            "{}|{}",
-            normalise_key(&seed.artist),
-            normalise_key(&seed.title)
-        );
-        if seen.insert(key) {
-            out.push(seed);
-        }
-    }
-    out
-}
-
 fn dedupe_across_mixes(mixes: &mut [RecommendationMix]) {
     let mut seen = HashSet::<String>::new();
+    let mut seen_canon = HashSet::<String>::new();
     for mix in mixes {
-        mix.tracks
-            .retain(|track| seen.insert(track.uri.0.clone()) && seen.insert(track_key(track)));
+        mix.tracks.retain(|track| {
+            let canon = discovery::canonical_title(&track.title);
+            seen.insert(track.uri.0.clone())
+                && seen.insert(track_key(track))
+                && (canon.is_empty() || seen_canon.insert(canon))
+        });
     }
 }
 
@@ -1215,7 +1518,15 @@ fn normalise_key(s: &str) -> String {
 mod tests {
     use super::*;
     use provider_api::{ArtistRef, ArtistUri, ProviderId, TrackUri};
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
     use std::time::Duration;
+
+    fn plans_for(history: &[HistoryEntry], liked: &[Track]) -> Vec<ShelfPlan> {
+        let mut rng = StdRng::seed_from_u64(1);
+        let mut used = HashSet::new();
+        build_shelf_plans(history, liked, &HashSet::new(), &mut used, &mut rng)
+    }
 
     fn track(uri: &str, artist: &str, title: &str) -> Track {
         Track {
@@ -1266,14 +1577,14 @@ mod tests {
             track("soundcloud:track:2", "Artist B", "Two"),
             track("soundcloud:track:3", "Artist B", "Three"),
         ];
-        let seeds = cluster_seeds(&[], &liked);
-        assert_eq!(seeds.first().unwrap().artist, "Artist B");
+        let seeds = cluster_seeds(&[], &liked, Utc::now());
+        assert_eq!(seeds.first().unwrap().1.artist, "Artist B");
     }
 
     #[test]
     fn build_shelf_plans_includes_aegis_chart_rows() {
         let liked = vec![track("soundcloud:track:1", "Artist A", "One")];
-        let plans = build_shelf_plans(&[], &liked, &HashMap::new());
+        let plans = plans_for(&[], &liked);
         assert!(plans.iter().any(|p| p.id == SHELF_MADE_FOR_YOU));
         assert!(plans.iter().any(|p| p.id == SHELF_TRENDING));
         assert!(plans.iter().any(|p| p.id == "genre-electronic"));
@@ -1326,30 +1637,132 @@ mod tests {
     }
 
     #[test]
-    fn seed_pool_puts_history_before_likes() {
-        // Same artist+title in both pools — recency-priority means the
-        // history entry's URI should win the dedupe.
+    fn weighted_pool_keeps_history_identity_and_sums_weight() {
+        // Same artist+title as play and like — one pool entry, the recent
+        // play's URI wins the identity and the like only adds weight.
         let liked = vec![track("spotify:track:old", "Artist", "Track")];
         let history_log = vec![history("Artist", "Track", Some("soundcloud:track:new"))];
-        let pool = seed_pool(&history_log, &liked);
+        let pool = weighted_seed_pool(&history_log, &liked, Utc::now());
         assert_eq!(pool.len(), 1);
         assert_eq!(
-            pool[0].track_uri.as_ref().map(|u| u.0.as_str()),
+            pool[0].seed.track_uri.as_ref().map(|u| u.0.as_str()),
             Some("soundcloud:track:new")
         );
+        // Fresh SC play (1.0 × 1.5) + non-SC like (0.25).
+        assert!(pool[0].weight > 1.5);
     }
 
     #[test]
     fn cluster_seeds_recent_history_beats_old_like() {
-        // A non-SC like vs a non-SC recent play. With recency_bonus the
-        // recent history artist should sort first.
+        // A non-SC like vs a non-SC recent play. With time decay the fresh
+        // play carries far more weight than a like's flat base.
         let liked = vec![track("spotify:track:l", "Old Artist", "Liked")];
         let history_log = vec![history("Recent Artist", "Played", None)];
-        let seeds = cluster_seeds(&history_log, &liked);
+        let seeds = cluster_seeds(&history_log, &liked, Utc::now());
         assert_eq!(
-            seeds.first().map(|s| s.artist.as_str()),
+            seeds.first().map(|s| s.1.artist.as_str()),
             Some("Recent Artist")
         );
+    }
+
+    #[test]
+    fn made_for_you_explores_beyond_head_artists() {
+        // A heavy-rotation artist plus a long tail of one-play artists: the
+        // explore quota must pull tail artists into the seed list.
+        let mut history_log: Vec<HistoryEntry> = (0..20)
+            .map(|i| {
+                history(
+                    "Big Artist",
+                    &format!("Hit {i}"),
+                    Some("soundcloud:track:big"),
+                )
+            })
+            .collect();
+        for i in 0..10 {
+            history_log.push(history(&format!("Tail {i}"), "Deep Cut", None));
+        }
+        let pool = weighted_seed_pool(&history_log, &[], Utc::now());
+        let mut rng = StdRng::seed_from_u64(3);
+        let seeds =
+            sample_seeds_with_explore(&pool, MADE_FOR_YOU_SEEDS, MADE_FOR_YOU_EXPLORE, &mut rng);
+        let tail_count = seeds.iter().filter(|s| s.artist.starts_with("Tail")).count();
+        assert!(tail_count >= 1, "no tail artist among seeds: {seeds:?}");
+        let big_count = seeds.iter().filter(|s| s.artist == "Big Artist").count();
+        assert!(big_count <= 2, "artist cap violated: {big_count}");
+    }
+
+    #[test]
+    fn curate_tracks_excludes_caps_and_backfills() {
+        let tracks = vec![
+            track("soundcloud:track:0", "A", "S0"),
+            track("soundcloud:track:1", "A", "S1"),
+            track("soundcloud:track:2", "A", "S2"),
+            track("soundcloud:track:3", "B", "S3"),
+            track("soundcloud:track:4", "B", "S4"),
+            track("soundcloud:track:5", "C", "S5"),
+        ];
+        let one_excluded: HashSet<String> = [track_key(&tracks[0])].into();
+        let kept = curate_tracks(tracks.clone(), &one_excluded, 2, 6);
+        // S0 excluded, artist cap 2 satisfied by the rest → 5 tracks.
+        assert_eq!(kept.len(), 5);
+        assert!(!kept.iter().any(|t| t.title == "S0"));
+
+        // Artist cap: six tracks by A alone, cap 2, leaves 2 — under half of
+        // limit 6, so the starvation backfill refills up to the limit.
+        let same_artist: Vec<Track> = (0..6)
+            .map(|i| track(&format!("soundcloud:track:a{i}"), "A", &format!("T{i}")))
+            .collect();
+        let kept = curate_tracks(same_artist, &HashSet::new(), 2, 6);
+        assert_eq!(kept.len(), 6);
+
+        // Everything excluded → backfill instead of an empty row.
+        let all: HashSet<String> = tracks.iter().map(track_key).collect();
+        let kept = curate_tracks(tracks, &all, 2, 4);
+        assert_eq!(kept.len(), 4);
+    }
+
+    #[test]
+    fn curate_tracks_collapses_same_song_from_different_uploaders() {
+        let tracks = vec![
+            track("soundcloud:track:1", "Original", "Cool Song"),
+            track("soundcloud:track:2", "Reupload Guy", "Cool Song (Official Audio)"),
+            track("spotify:track:3", "Original", "Cool Song"),
+            track("soundcloud:track:4", "Other", "Different Song"),
+        ];
+        let kept = curate_tracks(tracks, &HashSet::new(), 3, 10);
+        assert_eq!(kept.len(), 2, "duplicate song copies survived: {kept:?}");
+    }
+
+    #[test]
+    fn filter_seed_variants_drops_reuploads_and_variants() {
+        let seed = seed_from_parts("Artist", "Drench", None).unwrap();
+        let tracks = vec![
+            track("soundcloud:track:1", "Someone Else", "Drench"),
+            track("soundcloud:track:2", "Other", "Drench (sped up)"),
+            track("soundcloud:track:3", "Other", "Fresh Song (nightcore)"),
+            track("soundcloud:track:4", "Other", "New Song"),
+        ];
+        let kept = filter_seed_variants(tracks, &seed);
+        let titles: Vec<_> = kept.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, vec!["New Song"]);
+    }
+
+    #[test]
+    fn mix_plans_pick_distinct_artists() {
+        let mut history_log = Vec::new();
+        for artist in ["A", "B", "C", "D", "E", "F", "G", "H"] {
+            for i in 0..3 {
+                history_log.push(history(artist, &format!("{artist} song {i}"), None));
+            }
+        }
+        let mut rng = StdRng::seed_from_u64(9);
+        let plans = build_mix_plans(&history_log, &[], &HashSet::new(), &HashSet::new(), &mut rng);
+        assert_eq!(plans.len(), DAILY_MIX_COUNT);
+        let artists: HashSet<String> = plans
+            .iter()
+            .map(|p| normalise_key(&p.seed.artist))
+            .collect();
+        assert_eq!(artists.len(), DAILY_MIX_COUNT, "duplicate mix artists");
     }
 
     #[test]
@@ -1403,7 +1816,7 @@ mod tests {
                 )
             })
             .collect();
-        let plans = build_shelf_plans(&[], &liked, &HashMap::new());
+        let plans = plans_for(&[], &liked);
         let made = plans.iter().find(|p| p.id == SHELF_MADE_FOR_YOU).unwrap();
         match &made.kind {
             ShelfKind::RelatedAggregate { seeds, .. } => {

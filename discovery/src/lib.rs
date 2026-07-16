@@ -546,7 +546,10 @@ fn dedupe_key(artist: &str, title: &str) -> String {
     }
 }
 
-fn canonical_title(title: &str) -> String {
+/// Noise-stripped title used to recognise the same song across uploaders,
+/// covers and platforms. Public so the recommendation rows can apply the
+/// same collapse to raw SoundCloud related feeds.
+pub fn canonical_title(title: &str) -> String {
     let mut out = title.to_lowercase();
     for sep in ['(', '[', '{'] {
         if let Some((head, _)) = out.split_once(sep) {
@@ -600,7 +603,9 @@ fn has_variant_token(title: &str) -> bool {
     .any(|needle| t.contains(needle))
 }
 
-fn is_low_quality_variant(title: &str, seed: &SimilarToSeed) -> bool {
+/// A "sped up"/nightcore/8d/… variant is only welcome when the seed itself
+/// is one. Public for the same reason as [`canonical_title`].
+pub fn is_low_quality_variant(title: &str, seed: &SimilarToSeed) -> bool {
     !has_variant_token(&seed.title) && has_variant_token(title)
 }
 
