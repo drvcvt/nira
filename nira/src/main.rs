@@ -51,6 +51,7 @@ const CSS_ALL: &str = concat!(
     include_str!("../assets/css/detail.css"),
     include_str!("../assets/css/library.css"),
     include_str!("../assets/css/buttons.css"),
+    include_str!("../assets/css/binds.css"),
     include_str!("../assets/css/responsive.css"),
 );
 // FontAwesome utility classes (6.5.1, @font-face blocks stripped at vendor
@@ -267,21 +268,58 @@ fn App() -> Element {
                         }}\
                         requestAnimationFrame(focusWhenReady);\
                     }};\
+                    var press = function(id) {{\
+                        var el = document.getElementById(id);\
+                        if (el) el.click();\
+                    }};\
+                    var typing = function(e) {{\
+                        var t = e.target;\
+                        return !!(t && t.closest && t.closest('input, textarea, select, [contenteditable=\"true\"]'));\
+                    }};\
                     document.addEventListener('keydown', function(e) {{\
                         var key = (e.key || '').toLowerCase();\
                         var isSpace = key === ' ' || key === 'space' || key === 'spacebar';\
-                        var openSearch = ((e.ctrlKey || e.metaKey) && key === 'f') || (e.altKey && isSpace);\
+                        var mod = e.ctrlKey || e.metaKey;\
+                        var openSearch = (mod && key === 'f') || (e.altKey && isSpace);\
                         if (openSearch) {{\
                             e.preventDefault();\
-                            var open = document.getElementById('nira-search-hotkey');\
-                            if (open) open.click();\
+                            press('nira-search-hotkey');\
                             window.__nira_focus_search();\
                             return;\
                         }}\
-                        if (key === 'escape' && document.querySelector('.search-overlay.open')) {{\
+                        if (mod && key === '/') {{\
                             e.preventDefault();\
-                            var close = document.getElementById('nira-search-close-hotkey');\
-                            if (close) close.click();\
+                            press('nira-key-binds');\
+                            return;\
+                        }}\
+                        if (key === 'escape') {{\
+                            if (document.querySelector('.binds-overlay.open')) {{\
+                                e.preventDefault();\
+                                press('nira-key-binds-close');\
+                                return;\
+                            }}\
+                            if (document.querySelector('.search-overlay.open')) {{\
+                                e.preventDefault();\
+                                press('nira-search-close-hotkey');\
+                            }}\
+                            return;\
+                        }}\
+                        if (typing(e)) return;\
+                        var acted = false;\
+                        if (mod && !e.altKey && !e.shiftKey) {{\
+                            if (key === 'arrowright') {{ press('nira-key-next'); acted = true; }}\
+                            else if (key === 'arrowleft') {{ press('nira-key-prev'); acted = true; }}\
+                            else if (key === 'arrowup') {{ press('nira-key-volup'); acted = true; }}\
+                            else if (key === 'arrowdown') {{ press('nira-key-voldown'); acted = true; }}\
+                        }} else if (!mod && !e.altKey && !e.shiftKey) {{\
+                            if (isSpace) {{ press('nira-key-playpause'); acted = true; }}\
+                            else if (key === 's') {{ press('nira-key-shuffle'); acted = true; }}\
+                            else if (key === 'r') {{ press('nira-key-repeat'); acted = true; }}\
+                            else if (key === 'l') {{ press('nira-key-like'); acted = true; }}\
+                        }}\
+                        if (acted) {{\
+                            e.preventDefault();\
+                            e.stopPropagation();\
                         }}\
                     }}, true);\
                 }}\
@@ -368,6 +406,8 @@ fn App() -> Element {
             // Global right-click menu — singleton, reads its own state from
             // the `use_ctx_menu` signal. Rows on any page open it.
             components::ctx_menu::ContextMenu {}
+            // Media-key bridges + the Ctrl+/ shortcut sheet.
+            components::hotkeys::Hotkeys {}
             // Bottom-left toast for the hi-res provider download progress/result.
             components::download_toast::DownloadToast {}
         }
