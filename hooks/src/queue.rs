@@ -1278,11 +1278,38 @@ pub fn install(
             // Every 10th tick (~5 s) the in-track position is persisted for
             // the next boot's mid-track resume.
             let mut save_tick: u32 = 0;
+            // Last observed playback position for dropout detection.
+            let mut last_pos: Option<Duration> = None;
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 let snap = player.snapshot();
                 let mut state = queue.advance_state;
                 let current = *state.peek();
+
+                // Dropout visibility: nominally playing but the position
+                // didn't move across a 500 ms tick → the audio thread
+                // produced nothing (underrun, blocked stream read, or a
+                // system-level stall). Lands in nira.log with position and
+                // track so reports can be correlated.
+                if current == AdvanceState::Playing && snap.has_source && !snap.is_paused {
+                    if let Some(prev) = last_pos
+                        && snap.position == prev
+                    {
+                        let title = snap
+                            .now_playing
+                            .as_ref()
+                            .map(|n| n.title.clone())
+                            .unwrap_or_default();
+                        tracing::warn!(
+                            at_secs = snap.position.as_secs(),
+                            %title,
+                            "playback stalled: position frozen across a tick"
+                        );
+                    }
+                    last_pos = Some(snap.position);
+                } else {
+                    last_pos = None;
+                }
 
                 save_tick = save_tick.wrapping_add(1);
                 if save_tick % 10 == 0

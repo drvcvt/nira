@@ -8,7 +8,7 @@
 //! the visualizer follows the rodio side only.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -54,12 +54,21 @@ struct BeatState {
     last_beat: Option<Instant>,
 }
 
+/// How long after the last [`VizBus::frame`] poll the tap keeps feeding
+/// the ring. Past this, the overlay is closed and the audio thread skips
+/// the ring mutex entirely.
+const POLL_FRESH_MS: u64 = 3_000;
+
 /// Shared analysis state, one per [`crate::Player`].
 pub struct VizBus {
     ring: Mutex<VecDeque<f32>>,
     sample_rate: AtomicU32,
     beat: Mutex<BeatState>,
     fft: Mutex<FftPlanner<f32>>,
+    /// Millis (since `created`) of the last `frame()` poll — the tap only
+    /// pushes while a renderer is actually watching.
+    last_poll_ms: AtomicU64,
+    created: Instant,
 }
 
 impl VizBus {
@@ -72,7 +81,16 @@ impl VizBus {
                 last_beat: None,
             }),
             fft: Mutex::new(FftPlanner::new()),
+            last_poll_ms: AtomicU64::new(0),
+            created: Instant::now(),
         })
+    }
+
+    /// True while a renderer polled `frame()` recently. Called from the
+    /// audio thread — atomics only, no locks.
+    fn watched(&self) -> bool {
+        let now = self.created.elapsed().as_millis() as u64;
+        now.saturating_sub(self.last_poll_ms.load(Ordering::Relaxed)) < POLL_FRESH_MS
     }
 
     fn push(&self, chunk: &[f32]) {
@@ -87,6 +105,10 @@ impl VizBus {
 
     /// Analyse the newest window. `None` until enough audio flowed through.
     pub fn frame(&self) -> Option<VizFrame> {
+        self.last_poll_ms.store(
+            self.created.elapsed().as_millis() as u64,
+            Ordering::Relaxed,
+        );
         let rate = self.sample_rate.load(Ordering::Relaxed);
         if rate == 0 {
             return None;
@@ -211,10 +233,10 @@ impl<S: Source> Iterator for Tap<S> {
 
     fn next(&mut self) -> Option<Sample> {
         let Some(s) = self.inner.next() else {
-            if !self.batch.is_empty() {
+            if !self.batch.is_empty() && self.bus.watched() {
                 self.bus.push(&self.batch);
-                self.batch.clear();
             }
+            self.batch.clear();
             return None;
         };
         if self.frame_left == 0 {
@@ -227,10 +249,14 @@ impl<S: Source> Iterator for Tap<S> {
             let ch = self.inner.channels().get() as f32;
             self.batch.push(self.frame_sum / ch);
             if self.batch.len() >= 256 {
-                self.bus
-                    .sample_rate
-                    .store(self.inner.sample_rate().get(), Ordering::Relaxed);
-                self.bus.push(&self.batch);
+                // No renderer watching → drop the batch without touching
+                // the ring mutex; the audio thread stays lock-free.
+                if self.bus.watched() {
+                    self.bus
+                        .sample_rate
+                        .store(self.inner.sample_rate().get(), Ordering::Relaxed);
+                    self.bus.push(&self.batch);
+                }
                 self.batch.clear();
             }
         }

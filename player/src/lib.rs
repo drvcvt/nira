@@ -690,7 +690,13 @@ impl Player {
         let reader = StreamDownload::from_stream(
             stream,
             TempStorageProvider::new(),
-            StreamSettings::default(),
+            // 1 MiB prefetch instead of the 256 KiB default: hi-res FLAC
+            // runs ~500 KB/s, so the default margin was ~half a second of
+            // audio — any network dip made the decoder catch up with the
+            // download and BLOCK the audio thread (audible mid-track
+            // dropout). 1 MiB is ~2s of cushion and downloads in well
+            // under a second on a normal line.
+            StreamSettings::default().prefetch_bytes(1024 * 1024),
         )
         .await
         .map_err(|e| PlayerError::Decode(format!("start stream: {e}")))?;
