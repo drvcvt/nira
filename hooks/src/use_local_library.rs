@@ -22,6 +22,7 @@ pub struct UseLocalLibrary {
     /// how much space local music is using (headroom before the external SSD).
     pub total_bytes: Signal<u64>,
     config: Signal<AppConfig>,
+    scan_generation: Signal<u64>,
 }
 
 impl UseLocalLibrary {
@@ -46,6 +47,9 @@ fn scan_into(state: UseLocalLibrary) {
     let mut scanning = state.is_scanning;
     let mut error = state.error;
     let mut total_bytes = state.total_bytes;
+    let mut scan_generation = state.scan_generation;
+    let generation = (*scan_generation.peek()).wrapping_add(1);
+    scan_generation.set(generation);
 
     let Some(root) = state.config.peek().library_root.clone() else {
         tracks.set(Vec::new());
@@ -71,6 +75,9 @@ fn scan_into(state: UseLocalLibrary) {
             (list, bytes)
         })
         .await;
+        if !is_current_scan(generation, *scan_generation.peek()) {
+            return;
+        }
         match result {
             Ok((list, bytes)) => {
                 tracks.set(list);
@@ -80,6 +87,10 @@ fn scan_into(state: UseLocalLibrary) {
         }
         scanning.set(false);
     });
+}
+
+fn is_current_scan(completed: u64, current: u64) -> bool {
+    completed == current
 }
 
 /// Install the singleton and kick the boot-time scan. Called once from
@@ -95,6 +106,7 @@ pub fn install_local_library(config: Signal<AppConfig>) {
         error: Signal::new_in_scope(None, ScopeId::ROOT),
         total_bytes: Signal::new_in_scope(0, ScopeId::ROOT),
         config,
+        scan_generation: Signal::new_in_scope(0, ScopeId::ROOT),
     });
     use_context_provider(move || state);
     use_hook(move || scan_into(state));
@@ -102,4 +114,15 @@ pub fn install_local_library(config: Signal<AppConfig>) {
 
 pub fn use_local_library() -> UseLocalLibrary {
     use_context::<UseLocalLibrary>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_current_scan;
+
+    #[test]
+    fn older_scan_result_is_stale() {
+        assert!(!is_current_scan(1, 2));
+        assert!(is_current_scan(2, 2));
+    }
 }
