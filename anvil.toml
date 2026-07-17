@@ -9,26 +9,18 @@ default_profile = "cargo"
 # nira's debug target alone runs tens of GB — give the remote workspace room.
 disk = "30G"
 
-# Build-mode tasks (`anvil dev` / `anvil release`) are specced in anvil's
-# docs/specs/2026-07-16-configured-tasks-and-dev-services-design.md but the
-# [tasks] section is not implemented yet — the strict parser rejects it.
-# Uncomment once tasks land.
-#
 # dx is not installed on mini; the worker is NixOS, so the toolchain comes
 # from an ephemeral nix-shell instead of a persistent install (store paths
 # get GC'd, nothing lands in a profile). Desktop bundles additionally need
 # the GTK/WebKit build closure. mini's nixpkgs dioxus-cli is 0.7.9, matching
 # workspace dioxus 0.7.9 (checked 2026-07-16).
 #
-# [tasks.dev]
-# command = ["nix-shell", "-p", "dioxus-cli", "pkg-config", "gtk3", "webkitgtk_4_1", "libsoup_3", "glib", "openssl", "alsa-lib", "--run", "dx build --desktop -p nira"]
-# sync = "."
-# sync_back = ["target/dx/nira/debug/linux/app"]
-#
-# [tasks.release]
-# command = ["nix-shell", "-p", "dioxus-cli", "pkg-config", "gtk3", "webkitgtk_4_1", "libsoup_3", "glib", "openssl", "alsa-lib", "--run", "dx build --desktop -p nira --release"]
-# sync = "."
-# sync_back = ["target/dx/nira/release/linux/app"]
-#
-# Works today without [tasks] via the generic build profile:
-#   anvil build -- nix-shell -p dioxus-cli pkg-config gtk3 webkitgtk_4_1 libsoup_3 glib openssl alsa-lib --run "dx build --desktop -p nira"
+[tasks.dev]
+command = ["nix-shell", "-p", "dioxus-cli", "pkg-config", "gtk3", "webkitgtk_4_1", "libsoup_3", "glib", "openssl", "alsa-lib", "--run", "dx build --desktop -p nira"]
+sync = "."
+sync_back = ["target/dx/nira/debug/linux/app"]
+
+[tasks.release]
+command = ["nix-shell", "-p", "dioxus-cli", "pkg-config", "gtk3", "webkitgtk_4_1", "libsoup_3", "glib", "openssl", "alsa-lib", "--run", "dx build --desktop -p nira --release"]
+sync = "."
+sync_back = ["target/dx/nira/release/linux/app"]
