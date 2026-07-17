@@ -1250,8 +1250,8 @@ pub fn install(
     });
 
     // Persist on every queue-shape change (entries/index/modes). The write
-    // runs off-thread and atomically; a 100-track queue is ~100 KB of JSON,
-    // cheap at human-scale mutation rates.
+    // is atomic; a 100-track queue is ~100 KB of JSON, cheap at human-scale
+    // mutation rates.
     use_effect(move || {
         let state = PersistedQueue {
             entries: entries.read().clone(),
@@ -1262,11 +1262,9 @@ pub fn install(
         let Some(path) = config::AppConfig::queue_state_path() else {
             return;
         };
-        std::thread::spawn(move || {
-            if let Err(e) = config::AppConfig::atomic_write_json(&path, &state) {
-                tracing::warn!(error = %e, "queue persist failed");
-            }
-        });
+        if let Err(e) = config::AppConfig::atomic_write_json(&path, &state) {
+            tracing::warn!(error = %e, "queue persist failed");
+        }
     });
 
     // Watcher — polls player.snapshot, drives the small state machine,
@@ -1301,11 +1299,9 @@ pub fn install(
                         uri,
                         secs: snap.position.as_secs(),
                     };
-                    std::thread::spawn(move || {
-                        if let Err(e) = config::AppConfig::atomic_write_json(&path, &pos) {
-                            tracing::debug!(error = %e, "position persist failed");
-                        }
-                    });
+                    if let Err(e) = config::AppConfig::atomic_write_json(&path, &pos) {
+                        tracing::debug!(error = %e, "position persist failed");
+                    }
                 }
 
                 // Gapless hand-off happened inside the sink — walk the

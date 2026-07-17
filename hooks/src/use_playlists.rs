@@ -228,11 +228,9 @@ impl UsePlaylists {
         let Some(path) = self.path.peek().clone() else {
             return;
         };
-        std::thread::spawn(move || {
-            if let Err(e) = AppConfig::atomic_write_json(&path, &current) {
-                tracing::warn!("playlists persist failed: {e}");
-            }
-        });
+        if let Err(e) = AppConfig::atomic_write_json(&path, &current) {
+            tracing::warn!("playlists persist failed: {e}");
+        }
     }
 }
 

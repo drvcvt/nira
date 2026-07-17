@@ -115,11 +115,9 @@ impl UsePlayer {
             }
         };
         if let Some(cfg) = to_save {
-            std::thread::spawn(move || {
-                if let Err(e) = cfg.save() {
-                    tracing::warn!(error = %e, "volume persist failed");
-                }
-            });
+            if let Err(e) = cfg.save() {
+                tracing::warn!(error = %e, "volume persist failed");
+            }
         }
     }
 

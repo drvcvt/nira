@@ -65,12 +65,9 @@ impl UseLikes {
         let Some(path) = self.path.peek().clone() else {
             return;
         };
-        // Detach from the Dioxus runtime; the writer is fully self-contained.
-        std::thread::spawn(move || {
-            if let Err(e) = AppConfig::atomic_write_json(&path, &items) {
-                tracing::warn!("likes persist failed: {e}");
-            }
-        });
+        if let Err(e) = AppConfig::atomic_write_json(&path, &items) {
+            tracing::warn!("likes persist failed: {e}");
+        }
     }
 }
 

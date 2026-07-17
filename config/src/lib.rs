@@ -4,8 +4,13 @@
 //! as a plain struct and not worry about IO or directory resolution.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
+static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 /// UI theme preference. `System` defers to the OS/portal colour scheme via
 /// CSS `prefers-color-scheme`; the explicit variants pin `data-theme` on the
@@ -217,21 +222,40 @@ impl AppConfig {
         Self::cache_dir().map(|d| d.join("position.json"))
     }
 
-    /// Atomic write helper: serialise → write to `path.tmp` → rename. Used
+    /// Atomic write helper: serialise → write to a unique temp file → rename. Used
     /// for every cache file we own so a kill-at-the-wrong-moment can't leave
     /// a half-written JSON that breaks the next launch.
     pub fn atomic_write_json<T: serde::Serialize>(
         path: &std::path::Path,
         value: &T,
     ) -> anyhow::Result<()> {
+        let raw = serde_json::to_vec(value)?;
+        Self::atomic_write(path, &raw)
+    }
+
+    pub fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+        // ponytail: one global lock keeps low-frequency persistence simple;
+        // use per-path locks only if write contention becomes measurable.
+        let _guard = WRITE_LOCK
+            .lock()
+            .map_err(|_| anyhow::anyhow!("persistence lock poisoned"))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let tmp = path.with_extension("tmp");
-        let raw = serde_json::to_string(value)?;
-        std::fs::write(&tmp, raw)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow::anyhow!("invalid persistence path: {}", path.display()))?;
+        let tmp = path.with_file_name(format!(
+            ".{file_name}.tmp-{}-{}",
+            std::process::id(),
+            TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result.map_err(Into::into)
     }
 
     pub fn load() -> anyhow::Result<Self> {
@@ -249,18 +273,25 @@ impl AppConfig {
         let Some(path) = Self::config_path() else {
             return Ok(());
         };
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let raw = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, raw)?;
-        Ok(())
+        let raw = serde_json::to_vec_pretty(self)?;
+        Self::atomic_write(&path, &raw)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "nira-config-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
 
     #[test]
     fn default_volume_is_sane() {
@@ -279,5 +310,20 @@ mod tests {
         assert!(cfg.discovery_soundcloud);
         assert!(!cfg.discovery_listenbrainz);
         assert!(cfg.discovery_lastfm);
+    }
+
+    #[test]
+    fn atomic_write_does_not_reuse_shared_temp_path() {
+        let dir = temp_dir("atomic-write");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.json");
+        std::fs::create_dir(path.with_extension("tmp")).unwrap();
+
+        AppConfig::atomic_write_json(&path, &serde_json::json!({ "version": 2 })).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["version"], 2);
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
