@@ -35,14 +35,15 @@ pub fn install(player: Player, enrichment: Arc<EnrichmentClient>, config: Signal
                 };
                 let snap = player.snapshot();
                 let Some(np) = snap.now_playing.as_ref() else {
-                    watcher.current_key = None;
+                    watcher.current_playback_id = None;
                     continue;
                 };
-                let key = format!("{}|{}", np.artist, np.title);
+                if !snap.has_source {
+                    continue;
+                }
 
                 // New track? Reset per-track state + ping playing_now.
-                if watcher.current_key.as_deref() != Some(&key) {
-                    watcher.current_key = Some(key.clone());
+                if watcher.start_if_new(snap.playback_id) {
                     watcher.started_at_unix = now_unix();
                     watcher.scrobbled = false;
                     let enrichment = enrichment.clone();
@@ -94,11 +95,21 @@ pub fn install(player: Player, enrichment: Arc<EnrichmentClient>, config: Signal
 
 #[derive(Default)]
 struct ScrobbleWatcher {
-    /// `artist|title` of the currently-tracked track. None when nothing is
-    /// loaded; cleared on stop.
-    current_key: Option<String>,
+    /// Player-assigned playback identity. Unlike artist/title or URI, this
+    /// changes when the same track repeats.
+    current_playback_id: Option<u64>,
     started_at_unix: u64,
     scrobbled: bool,
+}
+
+impl ScrobbleWatcher {
+    fn start_if_new(&mut self, playback_id: u64) -> bool {
+        if self.current_playback_id == Some(playback_id) {
+            return false;
+        }
+        self.current_playback_id = Some(playback_id);
+        true
+    }
 }
 
 fn now_unix() -> u64 {
@@ -106,4 +117,17 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScrobbleWatcher;
+
+    #[test]
+    fn repeated_track_with_new_playback_id_resets_watcher() {
+        let mut watcher = ScrobbleWatcher::default();
+        assert!(watcher.start_if_new(10));
+        assert!(!watcher.start_if_new(10));
+        assert!(watcher.start_if_new(11));
+    }
 }

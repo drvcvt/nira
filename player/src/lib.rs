@@ -23,6 +23,7 @@ pub use viz::VizFrame;
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -135,6 +136,7 @@ pub struct Player {
     active: Arc<RwLock<Active>>,
     duration: Arc<RwLock<Option<Duration>>>,
     now_playing: Arc<RwLock<Option<NowPlaying>>>,
+    playback_id: Arc<AtomicU64>,
     history: History,
     /// Canonical 0.0..1.0 volume. The bottombar slider reads/writes this; we
     /// also apply it statically as `.amplify(v)` on each source we hand to
@@ -180,6 +182,9 @@ pub struct PlayerSnapshot {
     pub duration: Option<Duration>,
     pub has_source: bool,
     pub now_playing: Option<NowPlaying>,
+    /// Monotonic identity of the committed playback, including repeats of
+    /// the same track URI.
+    pub playback_id: u64,
     /// Which backend produced this snapshot. Used by hooks for routing
     /// decisions and by the bottombar for the source dot colour.
     pub active: Active,
@@ -224,6 +229,7 @@ impl Player {
             active: Arc::new(RwLock::new(Active::None)),
             duration: Arc::new(RwLock::new(None)),
             now_playing: Arc::new(RwLock::new(None)),
+            playback_id: Arc::new(AtomicU64::new(0)),
             history: History::open(history_path),
             user_volume: Arc::new(RwLock::new(initial_volume)),
             track_gain: Arc::new(RwLock::new(1.0)),
@@ -1028,6 +1034,7 @@ impl Player {
             duration: self.duration.read().ok().and_then(|d| *d),
             has_source,
             now_playing: self.now_playing.read().ok().and_then(|n| n.clone()),
+            playback_id: self.playback_id.load(Ordering::Relaxed),
             active,
         }
     }
@@ -1062,6 +1069,7 @@ impl Player {
         if np.provider == "Local" && np.source_label == "test signal" {
             return;
         }
+        self.playback_id.fetch_add(1, Ordering::Relaxed);
         self.history.record(HistoryEntry {
             title: np.title,
             artist: np.artist,
