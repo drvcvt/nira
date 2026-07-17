@@ -126,12 +126,10 @@ nira/
 
 ## Running it
 
-> **anvil offload:** `anvil cargo -- check/test/build …` works for this
-> repo since 2026-07-16 (see `anvil.toml`; the old symlinked-target sync
-> bug is fixed). Keep `dx` bundling **local** — the worker has no dx
-> install; an ephemeral nix-shell task for that is prepared in
-> `anvil.toml` but unproven. Avoid legacy zsh `cargo`→`acargo` wrapper
-> functions; invoke `anvil` or `command cargo` directly.
+> **Anvil offload:** use `anvil tests`, `anvil check`, `anvil dev`, or
+> `anvil release` from this directory. Their complete commands and resource
+> settings live in `anvil.toml`; do not use the legacy zsh
+> `cargo`→`acargo` wrapper functions.
 
 ### Hot-reload dev loop
 
@@ -145,7 +143,7 @@ dx serve --platform desktop
 
 ```sh
 cd ~/projects/nira
-dx build --release --platform desktop --package nira
+anvil release
 ```
 
 Output lands under `target/dx/nira/release/linux/app/` (macOS/Windows
@@ -159,8 +157,7 @@ so the asset path resolves.
 command cargo run -p nira --release
 ```
 
-`command cargo check --workspace` is the fastest "did I break
-anything" feedback loop — runs in <1s incremental.
+`anvil check` is the offloaded "did I break anything" feedback loop.
 
 ---
 

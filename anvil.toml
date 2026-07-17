@@ -9,6 +9,16 @@ default_profile = "cargo"
 # nira's debug target alone runs tens of GB — give the remote workspace room.
 disk = "30G"
 
+[tasks.tests]
+command = ["cargo", "test", "--workspace"]
+sync = "."
+sync_back_if_exists = []
+
+[tasks.check]
+command = ["cargo", "check", "--workspace"]
+sync = "."
+sync_back_if_exists = []
+
 # dx is not installed on mini; the worker is NixOS, so the toolchain comes
 # from an ephemeral nix-shell instead of a persistent install (store paths
 # get GC'd, nothing lands in a profile). Desktop bundles additionally need
@@ -19,8 +29,10 @@ disk = "30G"
 command = ["nix-shell", "-p", "dioxus-cli", "pkg-config", "gtk3", "webkitgtk_4_1", "libsoup_3", "glib", "openssl", "alsa-lib", "--run", "dx build --desktop -p nira"]
 sync = "."
 sync_back = ["target/dx/nira/debug/linux/app"]
+sync_back_if_exists = []
 
 [tasks.release]
 command = ["nix-shell", "-p", "dioxus-cli", "pkg-config", "gtk3", "webkitgtk_4_1", "libsoup_3", "glib", "openssl", "alsa-lib", "--run", "dx build --desktop -p nira --release"]
 sync = "."
 sync_back = ["target/dx/nira/release/linux/app"]
+sync_back_if_exists = []
