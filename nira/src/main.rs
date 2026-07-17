@@ -358,6 +358,8 @@ fn App() -> Element {
                             else if (key === 'r') {{ press('nira-key-repeat'); acted = true; }}\
                             else if (key === 'l') {{ press('nira-key-like'); acted = true; }}\
                             else if (key === 'v') {{ press('nira-key-viz'); acted = true; }}\
+                            else if (key === 'arrowup') {{ press('nira-key-volup'); acted = true; }}\
+                            else if (key === 'arrowdown') {{ press('nira-key-voldown'); acted = true; }}\
                         }}\
                         if (acted) {{\
                             e.preventDefault();\

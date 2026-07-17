@@ -25,12 +25,14 @@ const BINDS_PLAYBACK: BindRows = &[
     (&["L"], "Like current track"),
 ];
 const BINDS_VOLUME: BindRows = &[
-    (&["Ctrl + ↑"], "Volume up"),
-    (&["Ctrl + ↓"], "Volume down"),
+    (&["↑", "Ctrl + ↑"], "Volume up"),
+    (&["↓", "Ctrl + ↓"], "Volume down"),
 ];
 const BINDS_APP: BindRows = &[
     (&["Ctrl + F", "Alt + Space"], "Search"),
     (&["V"], "Visualizer"),
+    (&["←", "→"], "Visualizer: switch preset"),
+    (&["G"], "Visualizer: toggle grayscale"),
     (&["Ctrl + /"], "Keyboard shortcuts"),
     (&["Esc"], "Close overlays"),
 ];
