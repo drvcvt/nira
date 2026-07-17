@@ -72,7 +72,14 @@ impl UseAlbum {
                 is_loading.set(false);
                 return;
             };
+            let t0 = std::time::Instant::now();
             let outcome = provider.album(&uri).await;
+            tracing::info!(
+                ms = t0.elapsed().as_millis() as u64,
+                uri = %uri.0,
+                ok = outcome.is_ok(),
+                "album detail loaded"
+            );
             if *generation.peek() != generation_at_start {
                 return; // superseded by a newer navigation
             }

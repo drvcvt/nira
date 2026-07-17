@@ -84,8 +84,18 @@ impl UseArtist {
                 return;
             };
 
-            // Banner — required.
-            let mut artist = match provider.artist(&uri).await {
+            // Banner + top tracks + albums in ONE join — the view is set
+            // once at the end anyway, so serialising the banner fetch ahead
+            // of the other two only added a full round-trip of latency.
+            // Only the banner is required; the other two can fail and the
+            // page still works with partial data.
+            let t0 = std::time::Instant::now();
+            let (artist_res, top, albums) = tokio::join!(
+                provider.artist(&uri),
+                provider.artist_top_tracks(&uri, 10),
+                provider.artist_albums(&uri, 50),
+            );
+            let mut artist = match artist_res {
                 Ok(a) => a,
                 Err(e) => {
                     if *generation.peek() == generation_at_start {
@@ -95,14 +105,6 @@ impl UseArtist {
                     return;
                 }
             };
-
-            // Top tracks + albums in parallel. Either can fail; we keep the
-            // banner regardless and surface partial data — the artist view
-            // still works with just a banner + albums if top tracks 404, etc.
-            let (top, albums) = tokio::join!(
-                provider.artist_top_tracks(&uri, 10),
-                provider.artist_albums(&uri, 50),
-            );
             let mut top_tracks = top.unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "artist_top_tracks failed");
                 Vec::new()
@@ -120,6 +122,7 @@ impl UseArtist {
             let mut via_spotify = None;
             if albums.is_empty() && artist.provider != ProviderId::Spotify {
                 if let Some(sp) = sp_aug {
+                    let t_twin = std::time::Instant::now();
                     if let Some(twin) = find_spotify_twin(&sp, &artist.name).await {
                         let (sp_top, sp_albums) = tokio::join!(
                             sp.artist_top_tracks(&twin.uri, 10),
@@ -134,12 +137,21 @@ impl UseArtist {
                         }
                         via_spotify = Some(twin.uri);
                     }
+                    tracing::info!(
+                        ms = t_twin.elapsed().as_millis() as u64,
+                        "artist spotify twin fill"
+                    );
                 }
             }
 
             if *generation.peek() != generation_at_start {
                 return; // superseded by a newer navigation
             }
+            tracing::info!(
+                ms = t0.elapsed().as_millis() as u64,
+                provider = ?artist.provider,
+                "artist page loaded"
+            );
             view.set(Some(ArtistView {
                 artist,
                 top_tracks,

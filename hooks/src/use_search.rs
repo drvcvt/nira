@@ -85,22 +85,42 @@ pub fn use_search() -> UseSearch {
                 let q_sc = q.clone();
                 let q_sp = q.clone();
                 let q_qz = q.clone();
+                // Per-provider timing so a slow search points at its culprit.
+                let t0 = std::time::Instant::now();
                 let (sc_res, sp_res, qz_res) = tokio::join!(
-                    sc.search(&q_sc),
+                    async {
+                        let t = std::time::Instant::now();
+                        let r = sc.search(&q_sc).await;
+                        (r, t.elapsed().as_millis() as u64)
+                    },
                     async move {
-                        if sp_connected {
+                        let t = std::time::Instant::now();
+                        let r = if sp_connected {
                             sp.search(&q_sp).await
                         } else {
                             Ok(SearchResults::default())
-                        }
+                        };
+                        (r, t.elapsed().as_millis() as u64)
                     },
                     async move {
-                        if qz_connected {
+                        let t = std::time::Instant::now();
+                        let r = if qz_connected {
                             qz.search(&q_qz).await
                         } else {
                             Ok(SearchResults::default())
-                        }
+                        };
+                        (r, t.elapsed().as_millis() as u64)
                     },
+                );
+                let (sc_res, sc_ms) = sc_res;
+                let (sp_res, sp_ms) = sp_res;
+                let (qz_res, qz_ms) = qz_res;
+                tracing::info!(
+                    total_ms = t0.elapsed().as_millis() as u64,
+                    sc_ms,
+                    sp_ms,
+                    qz_ms,
+                    "search completed"
                 );
 
                 if *q_sig.peek() != snapshot {

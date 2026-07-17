@@ -71,34 +71,47 @@ fn main() {
         .install_default()
         .expect("rustls crypto provider install (first call in main)");
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
+    // Instance lock BEFORE the log sink: a second instance must exit
+    // without truncating the running instance's nira.log. Failures here go
+    // to stderr — tracing isn't up yet, and these paths are terminal.
     let Some(lock_path) = AppConfig::cache_dir().map(|dir| dir.join("instance.lock")) else {
-        tracing::error!("could not resolve cache directory for instance lock");
+        eprintln!("nira: could not resolve cache directory for instance lock");
         return;
     };
     if let Some(parent) = lock_path.parent()
         && let Err(error) = std::fs::create_dir_all(parent)
     {
-        tracing::error!(%error, "could not create instance-lock directory");
+        eprintln!("nira: could not create instance-lock directory: {error}");
         return;
     }
     let _instance_lock = match acquire_instance_lock(&lock_path) {
         Ok(lock) => lock,
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-            tracing::warn!("nira is already running");
+            eprintln!("nira: already running");
             return;
         }
         Err(error) => {
-            tracing::error!(%error, "could not acquire instance lock");
+            eprintln!("nira: could not acquire instance lock: {error}");
             return;
         }
     };
+
+    // Log to stderr AND cache/nira.log (fresh file per boot). The launcher
+    // starts nira detached, so without the file sink a daily-driven session
+    // has no logs to diagnose slow loads or errors after the fact.
+    let log_file = AppConfig::cache_dir().and_then(|dir| {
+        std::fs::create_dir_all(&dir).ok()?;
+        std::fs::File::create(dir.join("nira.log")).ok()
+    });
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(move || TeeWriter {
+            file: log_file.as_ref().and_then(|f| f.try_clone().ok()),
+        })
+        .init();
 
     // Loud panic hook — Dioxus' desktop runtime sometimes swallows panics
     // from spawned tasks (the webview keeps the main thread alive, but the
@@ -140,6 +153,27 @@ fn acquire_instance_lock(path: &Path) -> std::io::Result<File> {
     let file = File::options().create(true).write(true).open(path)?;
     file.try_lock()?;
     Ok(file)
+}
+
+/// Duplicates tracing output to stderr and the boot's log file.
+struct TeeWriter {
+    file: Option<File>,
+}
+
+impl std::io::Write for TeeWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Some(f) = self.file.as_mut() {
+            let _ = f.write_all(buf);
+        }
+        std::io::stderr().write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if let Some(f) = self.file.as_mut() {
+            let _ = f.flush();
+        }
+        std::io::stderr().flush()
+    }
 }
 
 #[component]
