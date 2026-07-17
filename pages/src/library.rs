@@ -394,7 +394,9 @@ fn PlaylistsPane() -> Element {
             }
             button {
                 class: "sq-btn sq-btn-ghost sq-sm",
-                disabled: new_name.read().trim().is_empty(),
+                // Never disabled: an empty name creates "New Playlist"
+                // (create() handles the default), and a dead button with a
+                // not-allowed cursor reads as a bug.
                 onclick: move |_| {
                     playlists.create(&new_name.peek());
                     new_name.set(String::new());

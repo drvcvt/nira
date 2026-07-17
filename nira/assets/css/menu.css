@@ -158,9 +158,11 @@
   bottom: calc(var(--player-h) + var(--player-margin) * 2 + 8px);
   z-index: 60;
   display: inline-flex;
-  align-items: center;
+  /* flex-start, not center: multi-line error text keeps glyph and close
+     button pinned to the first line. */
+  align-items: flex-start;
   gap: 10px;
-  max-width: min(440px, calc(100vw - var(--sidebar-w) - 40px));
+  max-width: min(560px, calc(100vw - var(--sidebar-w) - 40px));
   padding: 10px 12px 10px 14px;
   border-radius: var(--r);
   background: var(--raise2);
@@ -177,9 +179,9 @@
 .download-toast-msg,
 .playback-toast-msg {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Errors carry reqwest chains — wrap instead of ellipsizing so the
+     whole message is always readable. */
+  overflow-wrap: anywhere;
 }
 
 .download-toast-close {
