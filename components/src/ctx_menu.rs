@@ -466,12 +466,19 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
     let playlists = use_playlists();
 
     let track_count = album.tracks.len();
-    let sub_text = format!(
-        "{} · {} {}",
-        album.artist,
-        track_count,
-        if track_count == 1 { "track" } else { "tracks" }
-    );
+    // Empty tracks = the opener is still resolving the album detail (cards
+    // open instantly); show "…" and keep track-dependent entries disabled.
+    let has_tracks = track_count > 0;
+    let sub_text = if has_tracks {
+        format!(
+            "{} · {} {}",
+            album.artist,
+            track_count,
+            if track_count == 1 { "track" } else { "tracks" }
+        )
+    } else {
+        format!("{} · …", album.artist)
+    };
     let (h_anchor, v_anchor) = anchor_style(x, y);
     let pl_open = *show_playlists.read();
     let pl_chevron = if pl_open {
@@ -510,6 +517,7 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
             div { class: "ctx-group",
                 button {
                     class: "ctx-item",
+                    disabled: !has_tracks,
                     onclick: {
                         let queue = queue.clone();
                         let tracks = album.tracks.clone();
@@ -527,6 +535,7 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
                 }
                 button {
                     class: "ctx-item",
+                    disabled: !has_tracks,
                     onclick: {
                         let queue = queue.clone();
                         let tracks = album.tracks.clone();
@@ -547,6 +556,7 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
             div { class: "ctx-group",
                 button {
                     class: "ctx-item",
+                    disabled: !has_tracks,
                     onclick: move |_| {
                         let open = *show.peek();
                         show.set(!open);

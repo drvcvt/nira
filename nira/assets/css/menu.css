@@ -83,6 +83,15 @@
   background: var(--raise3);
 }
 
+.ctx-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ctx-item:disabled:hover {
+  background: transparent;
+}
+
 .ctx-item:hover .ctx-item-sub {
   color: var(--text-muted);
 }

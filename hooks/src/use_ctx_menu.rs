@@ -85,6 +85,31 @@ impl UseCtxMenu {
         }));
     }
 
+    /// Fill in the track list of an already-open album menu. Album cards
+    /// open instantly with an empty list and resolve the detail async;
+    /// this lands the tracks without the menu jumping. No-op if the menu
+    /// closed or moved on to a different target in the meantime.
+    pub fn set_album_tracks(&self, uri: &str, tracks: Vec<Track>) {
+        let mut current = self.current;
+        let updated = match &*current.peek() {
+            Some(state) => match &state.target {
+                CtxTarget::Album(a) if a.uri == uri => {
+                    let mut a = a.clone();
+                    a.tracks = tracks;
+                    Some(CtxMenuState {
+                        target: CtxTarget::Album(a),
+                        ..state.clone()
+                    })
+                }
+                _ => None,
+            },
+            None => None,
+        };
+        if let Some(s) = updated {
+            current.set(Some(s));
+        }
+    }
+
     pub fn close(&self) {
         let mut current = self.current;
         current.set(None);

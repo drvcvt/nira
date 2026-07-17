@@ -374,30 +374,32 @@ fn AlbumCard(album: AlbumBrief, on_open: EventHandler<()>) -> Element {
             class: "album-card",
             r#type: "button",
             onclick: move |_| on_open.call(()),
-            // Album right-click needs the track list, which the brief card
-            // doesn't carry — fetch the detail first, then open the menu.
+            // The brief card doesn't carry the track list — open the menu
+            // instantly with what we have (track-dependent entries disable
+            // themselves while empty) and land the tracks async. A fetch
+            // failure leaves "Go to album" usable instead of a dead click.
             oncontextmenu: {
-                let uri = album.uri.clone();
+                let album = album.clone();
                 move |e: Event<MouseData>| {
                     e.prevent_default();
                     let pos = e.data.client_coordinates();
+                    ctx.open_album(
+                        pos.x,
+                        pos.y,
+                        AlbumCtx {
+                            uri: album.uri.0.clone(),
+                            title: album.title.clone(),
+                            artist: album.artist_name.clone(),
+                            cover_url: album.cover_url.clone(),
+                            tracks: Vec::new(),
+                        },
+                    );
                     let (sc, sp, qz) = (sc.clone(), sp.clone(), qz.clone());
-                    let uri = uri.clone();
+                    let uri = album.uri.clone();
                     spawn(async move {
-                        let Some(d) = fetch_album_detail(sc, sp, qz, local, uri).await else {
-                            return;
-                        };
-                        ctx.open_album(
-                            pos.x,
-                            pos.y,
-                            AlbumCtx {
-                                uri: d.uri.0,
-                                title: d.title,
-                                artist: d.artist.name,
-                                cover_url: d.cover_url,
-                                tracks: d.tracks,
-                            },
-                        );
+                        if let Some(d) = fetch_album_detail(sc, sp, qz, local, uri).await {
+                            ctx.set_album_tracks(&d.uri.0, d.tracks);
+                        }
                     });
                 }
             },
