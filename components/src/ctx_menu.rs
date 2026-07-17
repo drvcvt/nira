@@ -40,6 +40,14 @@ fn anchor_style(x: f64, y: f64) -> (String, String) {
     (h, v)
 }
 
+fn track_download_label(provider: ProviderId) -> &'static str {
+    if provider == ProviderId::the hi-res provider {
+        "Download (.flac)"
+    } else {
+        "Find on the hi-res provider & download"
+    }
+}
+
 #[component]
 pub fn ContextMenu() -> Element {
     let ctx = use_ctx_menu();
@@ -157,6 +165,7 @@ pub fn ContextMenu() -> Element {
     // FLAC (MP3 fallback) into the library, then rescan so it shows up
     // under Library → Local. Local tracks are already on disk — no entry.
     let is_hires-provider = track.provider == ProviderId::the hi-res provider;
+    let download_label = track_download_label(track.provider);
     let can_download = qz.is_connected() && track.provider != ProviderId::Local;
     let qz_album = track
         .album
@@ -184,7 +193,7 @@ pub fn ContextMenu() -> Element {
                 },
                 i { class: "ctx-icon fa-solid fa-download" }
                 div { class: "ctx-item-body",
-                    div { class: "ctx-item-label", "Download (.flac)" }
+                    div { class: "ctx-item-label", "{download_label}" }
                 }
             }
         }
@@ -612,5 +621,23 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cross_provider_download_label_names_hires-provider_search() {
+        assert_eq!(track_download_label(ProviderId::the hi-res provider), "Download (.flac)");
+        assert_eq!(
+            track_download_label(ProviderId::Spotify),
+            "Find on the hi-res provider & download"
+        );
+        assert_eq!(
+            track_download_label(ProviderId::SoundCloud),
+            "Find on the hi-res provider & download"
+        );
     }
 }
