@@ -13,6 +13,32 @@
   display: block;
 }
 
+/* `g` toggles this — keeps MilkDrop presets in the grayscale house style. */
+.viz-canvas.viz-mono {
+  filter: grayscale(1) contrast(1.05);
+}
+
+/* Preset name, faded in by the renderer on every switch (←/→/auto). */
+.viz-preset {
+  position: absolute;
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 70vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--sub);
+  opacity: 0;
+  transition: opacity 400ms ease;
+  pointer-events: none;
+}
+
+.viz-preset.show {
+  opacity: 1;
+}
+
 .viz-close {
   position: absolute;
   top: 18px;

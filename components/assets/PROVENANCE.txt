@@ -1,0 +1,6 @@
+butterchurn.min.js — Butterchurn 2.6.7 (MIT), jsdelivr npm butterchurn@2.6.7/lib/butterchurn.min.js
+butterchurn-extra-images.min.js — same package, lib/butterchurnExtraImages.min.js (6 base64 textures some presets sample)
+butterchurn-presets-base.min.js — butterchurn-presets 2.4.7 (MIT), lib/butterchurnPresets.min.js (100 presets)
+butterchurn-presets-extra.min.js — same package, lib/butterchurnPresetsExtra.min.js (146 presets)
+butterchurn-presets-extra2.min.js — same package, lib/butterchurnPresetsExtra2.min.js (122 presets)
+butterchurn-presets-md1.min.js — same package, lib/butterchurnPresetsMD1.min.js (87 classic MilkDrop-1-era presets)

@@ -394,7 +394,7 @@ pub fn Bottombar() -> Element {
                         let now = *viz_open.peek();
                         viz_open.set(!now);
                     },
-                    i { class: "fa-solid fa-wave-square" }
+                    i { class: "fa-solid fa-atom" }
                 }
                 button {
                     class: if queue_is_open { "player-queue-btn open" } else { "player-queue-btn" },

@@ -30,12 +30,23 @@ const BASS_HISTORY: usize = 40;
 /// Refractory gap between beats — caps at ~270 BPM.
 const BEAT_GAP: Duration = Duration::from_millis(220);
 
-/// One analysis frame for the renderer. Values are 0..1.
+/// Downsampled oscilloscope points per frame.
+const WAVE_POINTS: usize = 192;
+/// Raw PCM samples handed to Butterchurn (its `fftSize` = 512 * 2).
+const PCM_SAMPLES: usize = 1024;
+
+/// One analysis frame for the renderer. `bands`/`bass` are 0..1,
+/// `wave` is a gently-normalised -1..1 oscilloscope trace, `pcm` is the
+/// newest 1024 raw samples as unsigned bytes (silence = 128) — exactly
+/// the `getByteTimeDomainData` shape Butterchurn's `render({audioLevels})`
+/// wants, so it can run its own FFT.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VizFrame {
     pub bands: Vec<f32>,
     pub bass: f32,
     pub beat: bool,
+    pub wave: Vec<f32>,
+    pub pcm: Vec<u8>,
 }
 
 struct BeatState {
@@ -87,6 +98,29 @@ impl VizBus {
             }
             ring.iter().skip(ring.len() - FFT_SIZE).copied().collect()
         };
+
+        // Oscilloscope trace: chunk-averaged (cheap lowpass) so the drawn
+        // line is smooth, with gentle AGC so quiet passages stay visible.
+        let wave: Vec<f32> = (0..WAVE_POINTS)
+            .map(|i| {
+                let a = i * FFT_SIZE / WAVE_POINTS;
+                let b = (((i + 1) * FFT_SIZE) / WAVE_POINTS).max(a + 1);
+                window[a..b].iter().sum::<f32>() / (b - a) as f32
+            })
+            .collect();
+        let peak = wave.iter().fold(0f32, |m, s| m.max(s.abs()));
+        let wave: Vec<f32> = if peak > 0.01 {
+            let scale = (0.85 / peak).min(6.0);
+            wave.iter().map(|s| s * scale).collect()
+        } else {
+            vec![0.0; WAVE_POINTS]
+        };
+
+        // Newest 1024 raw samples as bytes for Butterchurn's own FFT.
+        let pcm: Vec<u8> = window[FFT_SIZE - PCM_SAMPLES..]
+            .iter()
+            .map(|s| (s * 127.0 + 128.0).clamp(0.0, 255.0) as u8)
+            .collect();
 
         // Hann window → FFT → normalised magnitudes.
         let n = FFT_SIZE as f32;
@@ -145,7 +179,7 @@ impl VizBus {
             }
         }
 
-        Some(VizFrame { bands, bass, beat })
+        Some(VizFrame { bands, bass, beat, wave, pcm })
     }
 }
 
