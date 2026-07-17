@@ -53,6 +53,7 @@ pub struct SpotifyBackend {
 pub struct SpotifyState {
     pub is_paused: bool,
     pub has_track: bool,
+    play_request_id: Option<u64>,
     /// Position reported by the most recent PlayerEvent. Combined with
     /// `last_position_at` it lets us extrapolate the live position between
     /// events.
@@ -170,35 +171,75 @@ fn spawn_event_listener(player: Arc<LibrespotPlayer>, state: Arc<RwLock<SpotifyS
     tokio::spawn(async move {
         while let Some(event) = events.recv().await {
             let Ok(mut s) = state.write() else { continue };
-            match event {
-                PlayerEvent::Playing { position_ms, .. } => {
-                    s.is_paused = false;
-                    s.has_track = true;
-                    s.position_ms = position_ms;
-                    s.last_position_at = Some(Instant::now());
-                }
-                PlayerEvent::Paused { position_ms, .. } => {
-                    s.is_paused = true;
-                    s.position_ms = position_ms;
-                    s.last_position_at = Some(Instant::now());
-                }
-                PlayerEvent::PositionChanged { position_ms, .. }
-                | PlayerEvent::PositionCorrection { position_ms, .. }
-                | PlayerEvent::Seeked { position_ms, .. } => {
-                    s.position_ms = position_ms;
-                    s.last_position_at = Some(Instant::now());
-                }
-                PlayerEvent::Stopped { .. }
-                | PlayerEvent::EndOfTrack { .. }
-                | PlayerEvent::Unavailable { .. } => {
-                    s.has_track = false;
-                    s.is_paused = false;
-                    s.position_ms = 0;
-                    s.last_position_at = None;
-                }
-                _ => {}
-            }
+            apply_event(&mut s, event);
         }
         tracing::info!("librespot event channel closed");
     });
+}
+
+fn apply_event(state: &mut SpotifyState, event: PlayerEvent) {
+    if let PlayerEvent::PlayRequestIdChanged { play_request_id } = event {
+        state.play_request_id = Some(play_request_id);
+        return;
+    }
+    if event.get_play_request_id() != state.play_request_id {
+        return;
+    }
+
+    match event {
+        PlayerEvent::Playing { position_ms, .. } => {
+            state.is_paused = false;
+            state.has_track = true;
+            state.position_ms = position_ms;
+            state.last_position_at = Some(Instant::now());
+        }
+        PlayerEvent::Paused { position_ms, .. } => {
+            state.is_paused = true;
+            state.position_ms = position_ms;
+            state.last_position_at = Some(Instant::now());
+        }
+        PlayerEvent::PositionChanged { position_ms, .. }
+        | PlayerEvent::PositionCorrection { position_ms, .. }
+        | PlayerEvent::Seeked { position_ms, .. } => {
+            state.position_ms = position_ms;
+            state.last_position_at = Some(Instant::now());
+        }
+        PlayerEvent::Stopped { .. }
+        | PlayerEvent::EndOfTrack { .. }
+        | PlayerEvent::Unavailable { .. } => {
+            state.has_track = false;
+            state.is_paused = false;
+            state.position_ms = 0;
+            state.last_position_at = None;
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_stop_does_not_clear_current_track() {
+        let track_id = SpotifyUri::from_uri("spotify:track:4uLU6hMCjMI75M1A2tKUQC").unwrap();
+        let mut state = SpotifyState {
+            has_track: true,
+            ..SpotifyState::default()
+        };
+
+        apply_event(
+            &mut state,
+            PlayerEvent::PlayRequestIdChanged { play_request_id: 2 },
+        );
+        apply_event(
+            &mut state,
+            PlayerEvent::Stopped {
+                play_request_id: 1,
+                track_id,
+            },
+        );
+
+        assert!(state.has_track);
+    }
 }

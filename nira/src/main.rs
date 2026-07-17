@@ -3,6 +3,8 @@
 // `hooks/` (state) and `pages/` (rendering), so a change to one doesn't
 // force the whole app to re-render.
 
+use std::fs::File;
+use std::path::Path;
 use std::sync::Arc;
 
 use components::Section;
@@ -76,6 +78,28 @@ fn main() {
         )
         .init();
 
+    let Some(lock_path) = AppConfig::cache_dir().map(|dir| dir.join("instance.lock")) else {
+        tracing::error!("could not resolve cache directory for instance lock");
+        return;
+    };
+    if let Some(parent) = lock_path.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        tracing::error!(%error, "could not create instance-lock directory");
+        return;
+    }
+    let _instance_lock = match acquire_instance_lock(&lock_path) {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            tracing::warn!("nira is already running");
+            return;
+        }
+        Err(error) => {
+            tracing::error!(%error, "could not acquire instance lock");
+            return;
+        }
+    };
+
     // Loud panic hook — Dioxus' desktop runtime sometimes swallows panics
     // from spawned tasks (the webview keeps the main thread alive, but the
     // panicking task's stderr trace can get lost). Force a backtrace to
@@ -110,6 +134,12 @@ fn main() {
         );
 
     dioxus::LaunchBuilder::desktop().with_cfg(cfg).launch(App);
+}
+
+fn acquire_instance_lock(path: &Path) -> std::io::Result<File> {
+    let file = File::options().create(true).write(true).open(path)?;
+    file.try_lock()?;
+    Ok(file)
 }
 
 #[component]
@@ -425,6 +455,30 @@ fn App() -> Element {
             // Bottom-left toast for the hi-res provider download progress/result.
             components::download_toast::DownloadToast {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn second_instance_lock_is_rejected_until_first_is_dropped() {
+        let path = std::env::temp_dir().join(format!(
+            "nira-instance-lock-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        let first = acquire_instance_lock(&path).unwrap();
+        assert!(acquire_instance_lock(&path).is_err());
+        drop(first);
+        assert!(acquire_instance_lock(&path).is_ok());
+
+        let _ = std::fs::remove_file(path);
     }
 }
 
