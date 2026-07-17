@@ -21,13 +21,13 @@ sync = "."
 sync_back_if_exists = []
 
 [tasks.dev]
-command = ["dx", "build", "--desktop", "-p", "nira"]
+command = ["scripts/build-desktop.sh", "debug"]
 sync = "."
-sync_back = ["target/dx/nira/debug/linux/app"]
+sync_back = ["target/dx/nira/debug/linux"]
 sync_back_if_exists = []
 
 [tasks.release]
-command = ["dx", "build", "--desktop", "-p", "nira", "--release"]
+command = ["scripts/build-desktop.sh", "release"]
 sync = "."
-sync_back = ["target/dx/nira/release/linux/app"]
+sync_back = ["target/dx/nira/release/linux"]
 sync_back_if_exists = []
