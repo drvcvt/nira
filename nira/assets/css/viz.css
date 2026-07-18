@@ -83,16 +83,6 @@
   color: var(--sub);
 }
 
-.viz-hint {
-  position: absolute;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  color: var(--faint);
-  font-size: 12.5px;
-  pointer-events: none;
-}
-
 /* Bottombar toggle — same look as the queue button, no counter. */
 .player-viz-btn {
   appearance: none;

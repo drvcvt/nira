@@ -15,7 +15,7 @@
 //!
 //! Preset nav: ←/→ switch, auto-cycles every ~24 s, `g` toggles grayscale.
 //! librespot is its own audio engine with no tap — while Spotify plays the
-//! overlay shows a hint instead of fake motion.
+//! visualizer simply idles (no data frames, no fake motion).
 
 use dioxus::document;
 use dioxus::prelude::*;
@@ -99,7 +99,6 @@ pub fn Visualizer() -> Element {
     let np = snap.now_playing.clone();
     let title = np.as_ref().map(|n| n.title.clone()).unwrap_or_default();
     let artist = np.as_ref().map(|n| n.artist.clone()).unwrap_or_default();
-    let spotify_active = snap.active == hooks::Active::Spotify;
 
     rsx! {
         div { class: "viz-overlay",
@@ -117,11 +116,6 @@ pub fn Visualizer() -> Element {
                 div { class: "viz-np",
                     span { class: "viz-np-title", "{title}" }
                     span { class: "viz-np-artist", "{artist}" }
-                }
-            }
-            if spotify_active {
-                div { class: "viz-hint",
-                    "Spotify plays in its own engine — the visualizer follows local/SoundCloud/the hi-res provider audio."
                 }
             }
         }
