@@ -429,7 +429,7 @@ pub fn Bottombar() -> Element {
             }
 
             if queue_is_open {
-                QueuePopover {}
+                QueuePopover { on_close: move |_| queue_open.set(false) }
             }
 
             // Track-load / radio status, rendered globally: the bar is the
@@ -475,7 +475,7 @@ pub fn Bottombar() -> Element {
 }
 
 #[component]
-fn QueuePopover() -> Element {
+fn QueuePopover(on_close: EventHandler<()>) -> Element {
     let queue = use_queue();
     let entries = queue.entries.read().clone();
     let current = *queue.current_index.read();
@@ -501,6 +501,8 @@ fn QueuePopover() -> Element {
                     }
                     span { class: if repeat_mode == RepeatMode::Off { "queue-chip" } else { "queue-chip on" }, "{repeat_label}" }
                     span { class: "queue-total", "{total} tracks" }
+                    // Destructive action gets a WORD, not an icon — the old
+                    // xmark here read as "close panel" and ate whole queues.
                     button {
                         class: "queue-clear-btn",
                         title: "Clear upcoming (keeps the playing track)",
@@ -509,6 +511,12 @@ fn QueuePopover() -> Element {
                             let queue = queue.clone();
                             move |_| queue.clear_upcoming()
                         },
+                        "clear"
+                    }
+                    button {
+                        class: "queue-close-btn",
+                        title: "Close",
+                        onclick: move |_| on_close.call(()),
                         i { class: "fa-solid fa-xmark" }
                     }
                 }

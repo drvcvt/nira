@@ -427,14 +427,21 @@
   flex-wrap: wrap;
 }
 
+/* Chips, track count and the clear button share one type size and
+   line-height so the whole meta row sits on the same visual line. */
 .queue-chip {
   padding: 2px 6px;
   border-radius: var(--r-sm);
   color: var(--text-faint);
   font-family: inherit;
-  font-size: 0.64rem;
+  font-size: 0.68rem;
+  line-height: 1;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.queue-total {
+  line-height: 1;
 }
 
 .queue-chip.on {
@@ -442,17 +449,19 @@
   background: var(--chip-on);
 }
 
+/* Clear = a labelled text button (destructive, so it says what it does). */
 .queue-clear-btn {
   appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-full);
+  border: none;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-faint);
+  font-family: inherit;
+  font-size: 0.68rem;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   cursor: pointer;
 }
 
@@ -464,6 +473,26 @@
 .queue-clear-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+/* Close = the icon button; the xmark belongs to closing, never clearing. */
+.queue-close-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.queue-close-btn:hover {
+  color: var(--text);
+  background: var(--raise3);
 }
 
 .queue-list {
