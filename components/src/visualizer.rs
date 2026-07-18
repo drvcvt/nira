@@ -122,24 +122,17 @@ pub fn Visualizer() -> Element {
     }
 }
 
-/// Butterchurn (MilkDrop-in-WebGL2) + every MilkDrop preset pack the npm
-/// package ships + the texture images some presets sample; the renderer
-/// then narrows to the curated ~140 in assets/curated-presets.json.
+/// Butterchurn (MilkDrop-in-WebGL2), its 100-preset base pack and the
+/// texture images some presets sample.
 /// Injected once into the webview on the first overlay open; UMD bundles
 /// that attach `window.butterchurn*` globals.
 // ponytail: inlined via include_str! — simplest robust load path; cost is a
-// one-time ~2.8 MB parse on first open. Serve as assets only if that parse
+// one-time ~1 MB parse on first open. Serve as assets only if that parse
 // ever shows up as jank.
 const BUTTERCHURN_JS: &str = concat!(
     include_str!("../assets/butterchurn.min.js"),
     "\n;\n",
     include_str!("../assets/butterchurn-presets-base.min.js"),
-    "\n;\n",
-    include_str!("../assets/butterchurn-presets-extra.min.js"),
-    "\n;\n",
-    include_str!("../assets/butterchurn-presets-extra2.min.js"),
-    "\n;\n",
-    include_str!("../assets/butterchurn-presets-md1.min.js"),
     "\n;\n",
     include_str!("../assets/butterchurn-extra-images.min.js"),
 );
@@ -187,25 +180,11 @@ const RENDERER_JS: &str = concat!(
       const lib = un(window.butterchurn);
       if (lib && lib.createVisualizer) {
         bc = lib;
-        // Merge every bundled pack; first pack wins on duplicate names.
-        // Sorted so left/right walks alphabetically through all ~440.
-        const merged = {};
-        for (const g of ['butterchurnPresets', 'butterchurnPresetsMD1',
-                         'butterchurnPresetsExtra', 'butterchurnPresetsExtra2']) {
-          const pmod = un(window[g]);
-          if (!pmod || !pmod.getPresets) continue;
-          const map = pmod.getPresets();
-          for (const name of Object.keys(map)) {
-            if (!(name in merged)) merged[name] = map[name];
-          }
-        }
-        // Curated cut: the ~140 best-known presets (full showcase pack +
-        // five-star MD1 classics + five-star extras) — see
-        // assets/curated-presets.json. Falls back to everything if the
-        // list somehow matches nothing.
-        const names = CURATED.filter(n => n in merged);
-        presets = (names.length ? names : Object.keys(merged).sort((a, b) => a.localeCompare(b)))
-          .map(name => ({ name, preset: merged[name] }));
+        const pmod = un(window.butterchurnPresets);
+        const map = pmod && pmod.getPresets ? pmod.getPresets() : {};
+        const names = CURATED.filter(n => n in map);
+        presets = (names.length ? names : Object.keys(map).sort((a, b) => a.localeCompare(b)))
+          .map(name => ({ name, preset: map[name] }));
         const imod = un(window.butterchurnExtraImages);
         if (imod && imod.getImages) extraImages = imod.getImages();
       }
@@ -256,13 +235,25 @@ const RENDERER_JS: &str = concat!(
       };
       window.addEventListener('keydown', onKey, true);
       const ta = new Uint8Array(1024);
-      const draw = () => {
+      const frameMs = 1000 / 30;
+      let lastRender = 0;
+      const draw = (now) => {
         if (retired()) {
           window.removeEventListener('resize', fit);
           window.removeEventListener('keydown', onKey, true);
+          // A replacement renderer on the SAME still-mounted canvas shares
+          // this WebGL2 context (repeat getContext returns the existing one)
+          // — only lose it once the canvas actually left the DOM, or a
+          // restart-while-open would blank the new renderer.
+          if (!cv.isConnected) {
+            try { cv.getContext('webgl2').getExtension('WEBGL_lose_context')?.loseContext(); } catch (e) {}
+          }
+          try { audioCtx.close(); } catch (e) {}
           return;
         }
         requestAnimationFrame(draw);
+        if (now - lastRender < frameMs) return;
+        lastRender = now - ((now - lastRender) % frameMs);
         if (cv.width !== cv.clientWidth * dpr || cv.height !== cv.clientHeight * dpr) {
           fit(); viz.setRendererSize(cv.width, cv.height);
         }
@@ -437,3 +428,24 @@ const RENDERER_JS: &str = concat!(
   }
 "#,
 );
+
+#[cfg(test)]
+mod tests {
+    use super::{BUTTERCHURN_JS, RENDERER_JS};
+
+    #[test]
+    fn butterchurn_renderer_is_resource_bounded() {
+        assert!(BUTTERCHURN_JS.len() < 1_100_000);
+        assert!(RENDERER_JS.contains("const frameMs = 1000 / 30;"));
+        assert!(RENDERER_JS.contains("textureRatio: 1"));
+    }
+
+    #[test]
+    fn renderer_releases_webgl_resources_when_retired() {
+        assert!(RENDERER_JS.contains("loseContext()"));
+        assert!(RENDERER_JS.contains("audioCtx.close()"));
+        // Restart-while-open shares the canvas' WebGL2 context — the retired
+        // loop must not lose it while the canvas is still in the DOM.
+        assert!(RENDERER_JS.contains("if (!cv.isConnected)"));
+    }
+}

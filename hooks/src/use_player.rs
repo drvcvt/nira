@@ -2,9 +2,9 @@
 //!
 //! Pattern: the shell provisions a single `Player` + a single
 //! `Signal<PlayerSnapshot>` into Dioxus context via [`PlayerContext::install`].
-//! A background tick task polls the player's snapshot every 100 ms and writes
-//! it into the signal — components subscribe to that signal and re-render
-//! only when transport state actually changes.
+//! A background tick task polls the player's snapshot at an adaptive rate and
+//! writes it into the signal — components subscribe to that signal and
+//! re-render only when transport state actually changes.
 
 use std::time::Duration;
 
@@ -30,7 +30,7 @@ impl PlayerContext {
 
         // One global polling task — every consumer reads the same signal.
         //
-        // Adaptive tempo: 120 ms while playback is active so the progress
+        // Adaptive tempo: 200 ms while playback is active so the progress
         // bar stays smooth, 500 ms otherwise. Most of nira's lifetime is
         // spent idle, and at 100 ms unconditional we re-rendered the
         // bottombar 10×/s on a paused player for no UI delta.
@@ -58,7 +58,7 @@ impl PlayerContext {
                             snapshot.set(snap.clone());
                             prev = Some(snap);
                         }
-                        let delay = if active { 120 } else { 500 };
+                        let delay = if active { 200 } else { 500 };
                         tokio::time::sleep(Duration::from_millis(delay)).await;
                     }
                 });

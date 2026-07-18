@@ -34,9 +34,9 @@ const FONT_FA_SOLID: Asset = asset!("../assets/fonts/fa-solid-900.woff2");
 const FONT_FA_REGULAR: Asset = asset!("../assets/fonts/fa-regular-400.woff2");
 const FONT_FA_BRANDS: Asset = asset!("../assets/fonts/fa-brands-400.woff2");
 
-// All app CSS inlined into one <style> tag that ships with the very first
-// DOM patch. As separate <link> stylesheets the webview painted the raw DOM
-// for ~half a second before the 13 css fetches landed (startup FOUC).
+// All app CSS inlined into the initial document head. Dioxus' runtime head
+// insertion uses a queued effect after the body patch, which lets WebKit
+// paint the raw DOM first (startup FOUC).
 // ORDER MATTERS — it reproduces the cascade of the old link order (base
 // first, page-specific later, responsive overrides last). Add new page
 // styles as a new file + entry here.
@@ -60,6 +60,24 @@ const CSS_ALL: &str = concat!(
 // FontAwesome utility classes (6.5.1, @font-face blocks stripped at vendor
 // time — the faces are declared below against the bundled woff2s instead).
 const CSS_FONTAWESOME: &str = include_str!("../assets/fontawesome/fontawesome.css");
+
+fn initial_head() -> String {
+    format!(
+        r#"<style>
+@font-face {{ font-family: "Geist"; src: url("{FONT_GEIST}") format("truetype"); font-weight: 100 900; font-style: normal; font-display: block; }}
+@font-face {{ font-family: "Geist"; src: url("{FONT_GEIST_ITALIC}") format("truetype"); font-weight: 100 900; font-style: italic; font-display: block; }}
+@font-face {{ font-family: "Geist Mono"; src: url("{FONT_GEIST_MONO}") format("truetype"); font-weight: 100 900; font-style: normal; font-display: block; }}
+@font-face {{ font-family: "Geist Mono"; src: url("{FONT_GEIST_MONO_ITALIC}") format("truetype"); font-weight: 100 900; font-style: italic; font-display: block; }}
+@font-face {{ font-family: "Charter"; src: url("{FONT_CHARTER}") format("truetype"); font-weight: 400; font-style: normal; font-display: block; }}
+@font-face {{ font-family: "Charter"; src: url("{FONT_CHARTER_BOLD}") format("truetype"); font-weight: 700; font-style: normal; font-display: block; }}
+@font-face {{ font-family: "Font Awesome 6 Free"; src: url("{FONT_FA_SOLID}") format("woff2"); font-weight: 900; font-style: normal; font-display: block; }}
+@font-face {{ font-family: "Font Awesome 6 Free"; src: url("{FONT_FA_REGULAR}") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }}
+@font-face {{ font-family: "Font Awesome 6 Brands"; src: url("{FONT_FA_BRANDS}") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }}
+{CSS_ALL}
+{CSS_FONTAWESOME}
+</style>"#
+    )
+}
 
 fn main() {
     // The dependency graph enables BOTH rustls 0.23 crypto providers
@@ -135,6 +153,7 @@ fn main() {
 
     let cfg = dioxus::desktop::Config::new()
         .with_background_color(bg)
+        .with_custom_head(initial_head())
         // Drop tao's "Window / Edit / Help" default menu bar — it sits below
         // the OS titlebar and clashes with the app's own chrome.
         .with_menu(None)
@@ -304,23 +323,6 @@ fn App() -> Element {
     });
 
     rsx! {
-        document::Style {
-            {format!(
-                r#"
-@font-face {{ font-family: "Geist"; src: url("{FONT_GEIST}") format("truetype"); font-weight: 100 900; font-style: normal; font-display: block; }}
-@font-face {{ font-family: "Geist"; src: url("{FONT_GEIST_ITALIC}") format("truetype"); font-weight: 100 900; font-style: italic; font-display: block; }}
-@font-face {{ font-family: "Geist Mono"; src: url("{FONT_GEIST_MONO}") format("truetype"); font-weight: 100 900; font-style: normal; font-display: block; }}
-@font-face {{ font-family: "Geist Mono"; src: url("{FONT_GEIST_MONO_ITALIC}") format("truetype"); font-weight: 100 900; font-style: italic; font-display: block; }}
-@font-face {{ font-family: "Charter"; src: url("{FONT_CHARTER}") format("truetype"); font-weight: 400; font-style: normal; font-display: block; }}
-@font-face {{ font-family: "Charter"; src: url("{FONT_CHARTER_BOLD}") format("truetype"); font-weight: 700; font-style: normal; font-display: block; }}
-@font-face {{ font-family: "Font Awesome 6 Free"; src: url("{FONT_FA_SOLID}") format("woff2"); font-weight: 900; font-style: normal; font-display: block; }}
-@font-face {{ font-family: "Font Awesome 6 Free"; src: url("{FONT_FA_REGULAR}") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }}
-@font-face {{ font-family: "Font Awesome 6 Brands"; src: url("{FONT_FA_BRANDS}") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }}
-"#
-            )}
-        }
-        document::Style { {CSS_ALL} }
-        document::Style { {CSS_FONTAWESOME} }
         document::Script {
             "(function(){{\
                 if (!window.__nira_hotkeys_installed) {{\
@@ -515,6 +517,20 @@ mod tests {
         assert!(acquire_instance_lock(&path).is_ok());
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn critical_css_is_in_the_initial_document_head() {
+        let head = initial_head();
+        let source = include_str!("main.rs");
+        assert!(head.starts_with("<style>"));
+        assert!(head.contains(".shell {"));
+        assert!(head.contains(".fa-solid"));
+        assert!(head.ends_with("</style>"));
+        // Needle built at runtime so this assert's own source line can't
+        // satisfy it — only the real builder call site matches.
+        let needle = format!(".with_custom_head({}())", "initial_head");
+        assert!(source.contains(&needle));
     }
 }
 

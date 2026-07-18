@@ -199,7 +199,6 @@ body {
 .content,
 .player {
   transition: transform 150ms ease, opacity 150ms ease;
-  will-change: transform, opacity;
 }
 
 .shell.search-open .sidebar,
@@ -243,4 +242,3 @@ body {
   color: var(--faint);
   margin-bottom: 10px;
 }
-
