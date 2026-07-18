@@ -19,6 +19,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use discovery::{DiscoveryEngine, DiscoveryResult, SimilarToSeed, canonical_title};
 use player::{Active, NowPlaying, Player, PlayerSnapshot, TransportCmd};
@@ -227,9 +228,11 @@ impl UseQueue {
         current.set(Some(0));
         self.player.stop();
         // The queue ran out naturally — a stale mid-track position would
-        // otherwise resurface on the next boot's "play it again".
+        // otherwise resurface on the next boot's "play it again". Routed
+        // through the writer queue so a position write enqueued seconds ago
+        // can't land after this delete and resurrect the file.
         if let Some(p) = config::AppConfig::playback_position_path() {
-            let _ = std::fs::remove_file(p);
+            let _ = config::AppConfig::remove_bg(p);
         }
     }
 
@@ -464,7 +467,9 @@ impl UseQueue {
         // load generation — a changed generation means the radio result must
         // be dropped instead of wiping whatever the user chose to play.
         let generation_at_start = *self.load_generation.peek();
-        spawn(async move {
+        // Root-scoped like load_current: radio starts from page/ctx-menu
+        // scopes, and an unmount mid-lookup would strand RadioStatus::Loading.
+        spawn_forever(async move {
             let s = SimilarToSeed {
                 artist: seed
                     .artists
@@ -765,7 +770,12 @@ fn load_current(queue: UseQueue) {
     let mut error = queue.error;
     let mut is_loading = queue.is_loading_track;
 
-    spawn(async move {
+    // Root-scoped on purpose: track clicks spawn this from detail-page
+    // scopes, and a scope-tied `spawn` dies with the page — Back during the
+    // load left the queue stranded in Loading with the audio already
+    // silenced. Staleness is handled by the generation checks, not by
+    // cancellation.
+    spawn_forever(async move {
         is_loading.set(true);
         error.set(None);
         player.set_now_playing(Some(now_playing_from(&track)));

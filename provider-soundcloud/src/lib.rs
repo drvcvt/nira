@@ -45,6 +45,10 @@ impl SoundCloudProvider {
     pub fn new() -> ProviderResult<Self> {
         let http = Client::builder()
             .user_agent(UA)
+            // read_timeout, NOT a total timeout — HLS segment fetches and
+            // full-track buffering may legitimately run long.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .read_timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| ProviderError::Other(format!("http client: {e}")))?;
         // Pick up the last-known client_id from disk so the first search

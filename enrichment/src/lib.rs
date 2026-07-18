@@ -76,6 +76,10 @@ impl EnrichmentClient {
             .user_agent(
                 "nira/0.1.0 (https://github.com/dracut/nira; cross-platform music discovery)",
             )
+            // Metadata lookups must never hang a discovery run on a
+            // half-open connection.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .read_timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| EnrichmentError::Network(e.to_string()))?;
         let lastfm_key = normalise_lastfm_key(key);

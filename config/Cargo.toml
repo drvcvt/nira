@@ -10,3 +10,6 @@ serde_json = { workspace = true }
 directories = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+# atexit registration for the persistence-writer drain — the desktop event
+# loop exits via process::exit, so Rust-side Drop never runs.
+libc = "0.2"

@@ -683,7 +683,15 @@ impl Player {
         let parsed = url
             .parse()
             .map_err(|e| PlayerError::Decode(format!("bad stream url: {e}")))?;
-        let stream = HttpStream::new(HttpClient::new(), parsed)
+        // connect/read timeouts (no total timeout — the stream lives for the
+        // whole track): without them a black-holed CDN connection left the
+        // queue in Loading forever with no error surfaced.
+        let http = HttpClient::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .read_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| PlayerError::Decode(format!("http client: {e}")))?;
+        let stream = HttpStream::new(http, parsed)
             .await
             .map_err(|e| PlayerError::Decode(format!("open stream: {e}")))?;
         let byte_len = stream.content_length();

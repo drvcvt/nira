@@ -89,6 +89,12 @@ impl SpotifyProvider {
     pub fn new(client_id: String, tokens_path: Option<PathBuf>) -> ProviderResult<Self> {
         let http = Client::builder()
             .user_agent("nira/0.1.0")
+            // Fail instead of wedging: a half-open connection here used to
+            // hang the token refresh_lock and with it every Spotify call.
+            // read_timeout (not a total timeout) so slow-but-flowing large
+            // responses survive.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .read_timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| ProviderError::Other(format!("http: {e}")))?;
         let token = tokens_path
