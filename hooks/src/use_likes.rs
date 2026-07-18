@@ -65,7 +65,7 @@ impl UseLikes {
         let Some(path) = self.path.peek().clone() else {
             return;
         };
-        if let Err(e) = AppConfig::atomic_write_json(&path, &items) {
+        if let Err(e) = AppConfig::atomic_write_json_bg(path, &items) {
             tracing::warn!("likes persist failed: {e}");
         }
     }

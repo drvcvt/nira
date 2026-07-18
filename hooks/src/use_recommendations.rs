@@ -474,7 +474,7 @@ fn save_cache(cache: &RecommendationsCache) -> anyhow::Result<()> {
     let Some(path) = AppConfig::recommendations_cache_path() else {
         return Ok(());
     };
-    AppConfig::atomic_write_json(&path, cache)
+    AppConfig::atomic_write_json_bg(path, cache)
 }
 
 async fn load_shelf(

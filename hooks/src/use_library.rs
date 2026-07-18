@@ -64,7 +64,7 @@ fn write_disk_cache(tracks: &[Track]) {
         fetched_at_unix: now_unix(),
         tracks: tracks.to_vec(),
     };
-    if let Err(e) = AppConfig::atomic_write_json(&path, &cache) {
+    if let Err(e) = AppConfig::atomic_write_json_bg(path, &cache) {
         tracing::warn!(error = %e, "could not persist liked-tracks cache");
     }
 }

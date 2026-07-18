@@ -496,8 +496,12 @@ impl UseQueue {
                         return;
                     }
                     status.set(RadioStatus::Error(e.to_string()));
-                    // Still play the seed so the user doesn't get nothing.
-                    queue.play_list(vec![seed_for_fallback], 0);
+                    // Seed-alone fallback ONLY into an empty queue — a
+                    // failed lookup must never eat an existing queue (that
+                    // read as "my radio songs just vanished").
+                    if queue.entries.peek().is_empty() {
+                        queue.play_list(vec![seed_for_fallback], 0);
+                    }
                     return;
                 }
             };
@@ -1249,9 +1253,11 @@ pub fn install(
         }
     });
 
-    // Persist on every queue-shape change (entries/index/modes). The write
-    // is atomic; a 100-track queue is ~100 KB of JSON, cheap at human-scale
-    // mutation rates.
+    // Persist on every queue-shape change (entries/index/modes). Serialise
+    // here (order fixed at enqueue time), write on the background persist
+    // thread — this effect runs on the UI thread, and a synchronous disk
+    // write per queue click was a visible input stall.
+    let mut persist_prev_len = use_signal(|| usize::MAX);
     use_effect(move || {
         let state = PersistedQueue {
             entries: entries.read().clone(),
@@ -1259,10 +1265,22 @@ pub fn install(
             shuffle: *shuffle_enabled.read(),
             repeat: *repeat_mode.read(),
         };
+        // Diagnosis for "queue entries vanish": every shrink is logged with
+        // both lengths so nira.log shows which mutation ate them.
+        let prev = *persist_prev_len.peek();
+        if state.entries.len() < prev && prev != usize::MAX {
+            tracing::warn!(
+                from = prev,
+                to = state.entries.len(),
+                index = ?state.current_index,
+                "queue shrank"
+            );
+        }
+        persist_prev_len.set(state.entries.len());
         let Some(path) = config::AppConfig::queue_state_path() else {
             return;
         };
-        if let Err(e) = config::AppConfig::atomic_write_json(&path, &state) {
+        if let Err(e) = config::AppConfig::atomic_write_json_bg(path, &state) {
             tracing::warn!(error = %e, "queue persist failed");
         }
     });
@@ -1326,7 +1344,7 @@ pub fn install(
                         uri,
                         secs: snap.position.as_secs(),
                     };
-                    if let Err(e) = config::AppConfig::atomic_write_json(&path, &pos) {
+                    if let Err(e) = config::AppConfig::atomic_write_json_bg(path, &pos) {
                         tracing::debug!(error = %e, "position persist failed");
                     }
                 }

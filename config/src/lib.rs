@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
+/// Sender into the single background persistence writer (see
+/// [`AppConfig::atomic_write_json_bg`]); lazily spawned on first use.
+static PERSIST_TX: std::sync::OnceLock<std::sync::mpsc::Sender<(std::path::PathBuf, Vec<u8>)>> =
+    std::sync::OnceLock::new();
 
 /// UI theme preference. `System` defers to the OS/portal colour scheme via
 /// CSS `prefers-color-scheme`; the explicit variants pin `data-theme` on the
@@ -231,6 +235,48 @@ impl AppConfig {
     ) -> anyhow::Result<()> {
         let raw = serde_json::to_vec(value)?;
         Self::atomic_write(path, &raw)
+    }
+
+    /// Like [`Self::atomic_write`], but the disk write happens on ONE
+    /// background writer thread. Serialisation stays on the caller, so the
+    /// bytes are fixed at enqueue time and the single FIFO consumer keeps
+    /// mutation order == persistence order — the same invariant as the
+    /// synchronous path, minus the UI-thread disk stalls. Use this from
+    /// event handlers and effects; keep the sync variants for shutdown-ish
+    /// paths that must not race process exit.
+    pub fn atomic_write_bg(path: std::path::PathBuf, bytes: Vec<u8>) -> anyhow::Result<()> {
+        let tx = PERSIST_TX.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<(std::path::PathBuf, Vec<u8>)>();
+            std::thread::Builder::new()
+                .name("nira-persist".into())
+                .spawn(move || {
+                    while let Ok((path, bytes)) = rx.recv() {
+                        if let Err(error) = Self::atomic_write(&path, &bytes) {
+                            tracing::warn!(%error, path = %path.display(), "background persist failed");
+                        }
+                    }
+                })
+                .expect("spawn persistence writer thread");
+            tx
+        });
+        tx.send((path, bytes))
+            .map_err(|_| anyhow::anyhow!("persistence writer thread gone"))
+    }
+
+    /// JSON convenience over [`Self::atomic_write_bg`].
+    pub fn atomic_write_json_bg<T: serde::Serialize>(
+        path: std::path::PathBuf,
+        value: &T,
+    ) -> anyhow::Result<()> {
+        Self::atomic_write_bg(path, serde_json::to_vec(value)?)
+    }
+
+    /// Background variant of [`Self::save`] for hot paths (volume drags).
+    pub fn save_bg(&self) -> anyhow::Result<()> {
+        let Some(path) = Self::config_path() else {
+            return Ok(());
+        };
+        Self::atomic_write_bg(path, serde_json::to_vec_pretty(self)?)
     }
 
     pub fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {

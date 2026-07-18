@@ -115,7 +115,7 @@ impl UsePlayer {
             }
         };
         if let Some(cfg) = to_save {
-            if let Err(e) = cfg.save() {
+            if let Err(e) = cfg.save_bg() {
                 tracing::warn!(error = %e, "volume persist failed");
             }
         }

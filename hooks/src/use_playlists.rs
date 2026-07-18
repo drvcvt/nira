@@ -228,7 +228,7 @@ impl UsePlaylists {
         let Some(path) = self.path.peek().clone() else {
             return;
         };
-        if let Err(e) = AppConfig::atomic_write_json(&path, &current) {
+        if let Err(e) = AppConfig::atomic_write_json_bg(path, &current) {
             tracing::warn!("playlists persist failed: {e}");
         }
     }
