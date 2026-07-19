@@ -348,10 +348,11 @@
   appearance: none;
   border: none;
   background: transparent;
-  color: var(--faint);
+  color: var(--sub);
   cursor: pointer;
-  width: 22px;
-  height: 22px;
+  /* 28px: comfortably above the 24px WCAG target minimum. */
+  width: 28px;
+  height: 28px;
   border-radius: var(--rs);
   display: inline-flex;
   align-items: center;

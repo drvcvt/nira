@@ -194,7 +194,8 @@
 .player-time {
   font-size: 0.72rem;
   font-weight: 500;
-  color: var(--text-faint);
+  /* muted, not faint: time readouts are data (WCAG AA at this size). */
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
   min-width: 44px;
@@ -381,8 +382,20 @@
 
 .player-queue-btn:active { transform: scale(0.96); }
 
+/* Invisible click-outside catcher behind the popover (same pattern as
+   .ctx-overlay) — a tap anywhere else dismisses the queue. */
+.queue-overlay {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  border: none;
+  cursor: default;
+  z-index: 900;
+}
+
 .queue-popover {
   position: absolute;
+  z-index: 901;
   right: 14px;
   bottom: calc(100% + 10px);
   width: min(460px, calc(100vw - var(--sidebar-w) - 42px));
@@ -475,18 +488,19 @@
   cursor: not-allowed;
 }
 
-/* Close = the icon button; the xmark belongs to closing, never clearing. */
+/* Close = the icon button; the xmark belongs to closing, never clearing.
+   28px: comfortably above the 24px WCAG target minimum. */
 .queue-close-btn {
   appearance: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border: none;
   border-radius: var(--r-full);
   background: transparent;
-  color: var(--text-faint);
+  color: var(--text-muted);
   cursor: pointer;
 }
 
@@ -520,11 +534,19 @@
   color: var(--text);
 }
 
+.queue-row:focus-visible {
+  outline: 2px solid var(--sub);
+  outline-offset: -2px;
+  background: var(--raise3);
+  color: var(--text);
+}
+
 .queue-row.current .queue-row-index { color: var(--text); }
 
 .queue-row-index,
 .queue-row-duration {
-  color: var(--text-faint);
+  /* muted, not faint: indices/durations are data (WCAG AA at this size). */
+  color: var(--text-muted);
   font-family: inherit;
   font-size: 0.68rem;
   font-variant-numeric: tabular-nums;
@@ -589,6 +611,34 @@
   color: var(--text-faint);
 }
 
+/* Window edges of the capped queue render ("N earlier tracks" note and
+   the "Show more" extender). */
+.queue-window-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.queue-window-more {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 4px 10px;
+  border-radius: var(--rs);
+  cursor: pointer;
+}
+
+.queue-window-more:hover {
+  color: var(--text);
+  background: var(--raise3);
+}
+
 .volume {
   display: flex;
   align-items: center;
@@ -636,7 +686,7 @@
 
 .vol-pct {
   font-size: 0.72rem;
-  color: var(--text-faint);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   min-width: 24px;
   text-align: right;
@@ -648,17 +698,17 @@
 
 .queue-row {
   /* 6th column for the remove button. */
-  grid-template-columns: 28px 38px minmax(0, 1fr) auto auto 24px;
+  grid-template-columns: 28px 38px minmax(0, 1fr) auto auto 28px;
 }
 
 .queue-row-remove {
   appearance: none;
   border: none;
   background: transparent;
-  color: var(--faint);
+  color: var(--sub);
   cursor: pointer;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border-radius: var(--rs);
   display: inline-flex;
   align-items: center;
@@ -667,7 +717,8 @@
   transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
 }
 
-.queue-row:hover .queue-row-remove {
+.queue-row:hover .queue-row-remove,
+.queue-row:focus-within .queue-row-remove {
   opacity: 1;
 }
 

@@ -32,6 +32,7 @@ pub fn SearchBar(
                 r#type: "text",
                 class: "searchbar-input",
                 placeholder: "{placeholder}",
+                "aria-label": "{placeholder}",
                 value: "{value}",
                 oninput: move |e| on_input.call(e.value()),
                 onkeydown: move |e: KeyboardEvent| {

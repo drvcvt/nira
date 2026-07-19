@@ -349,6 +349,7 @@ fn App() -> Element {
                         return !!(t && t.closest && t.closest('input, textarea, select, [contenteditable=\"true\"]'));\
                     }};\
                     document.addEventListener('keydown', function(e) {{\
+                        if (document.querySelector('.ctx-menu')) return;\
                         var key = (e.key || '').toLowerCase();\
                         var isSpace = key === ' ' || key === 'space' || key === 'spacebar';\
                         var mod = e.ctrlKey || e.metaKey;\
@@ -378,6 +379,11 @@ fn App() -> Element {
                             if (document.querySelector('.search-overlay.open')) {{\
                                 e.preventDefault();\
                                 press('nira-search-close-hotkey');\
+                                return;\
+                            }}\
+                            if (document.querySelector('.queue-popover')) {{\
+                                e.preventDefault();\
+                                press('nira-key-queue-close');\
                             }}\
                             return;\
                         }}\
@@ -466,6 +472,7 @@ fn App() -> Element {
             button {
                 class: "corner-search",
                 title: "Search (Ctrl+F)",
+                "aria-label": "Search",
                 onclick: {
                     let mut search_open = search_open;
                     move |_| {

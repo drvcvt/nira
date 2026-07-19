@@ -46,9 +46,11 @@
 .track-row:hover { background: var(--surface); }
 
 .track-row:focus-visible {
-  outline: none;
+  /* Outline, not box-shadow: the base.css blanket `box-shadow: none
+     !important` (mt-ui-style hard rule) silently ate the old inset ring. */
+  outline: 2px solid var(--sub);
+  outline-offset: -2px;
   background: var(--surface);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 45%, transparent);
 }
 
 .track-cover {
@@ -94,7 +96,9 @@
 }
 
 .track-duration {
-  color: var(--text-faint);
+  /* muted, not faint: durations are data, and --faint fails WCAG AA
+     contrast for text this small in both themes. */
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   font-size: 0.78em;
 }

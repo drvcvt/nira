@@ -216,6 +216,7 @@ pub fn Bottombar() -> Element {
                 button {
                     class: if liked_now { "player-like-btn liked" } else { "player-like-btn" },
                     title: if liked_now { "Remove from Liked" } else { "Save to Liked" },
+                    "aria-label": if liked_now { "Remove from Liked" } else { "Save to Liked" },
                     disabled: current_track.is_none(),
                     onclick: {
                         let track = current_track.clone();
@@ -238,6 +239,8 @@ pub fn Bottombar() -> Element {
                     button {
                         class: if shuffle_on { "player-btn active" } else { "player-btn" },
                         title: if shuffle_on { "Shuffle on" } else { "Shuffle off" },
+                        "aria-label": if shuffle_on { "Shuffle on" } else { "Shuffle off" },
+                        "aria-pressed": if shuffle_on { "true" } else { "false" },
                         disabled: queue_len < 2,
                         onclick: {
                             let queue = queue.clone();
@@ -248,6 +251,7 @@ pub fn Bottombar() -> Element {
                     button {
                         class: "player-btn",
                         title: "Previous",
+                        "aria-label": "Previous track",
                         disabled: !has_prev,
                         onclick: {
                             let queue = queue.clone();
@@ -258,6 +262,7 @@ pub fn Bottombar() -> Element {
                     button {
                         class: "player-btn play",
                         title: if now_active { "Pause" } else { "Play" },
+                        "aria-label": if now_active { "Pause" } else { "Play" },
                         onclick: {
                             let player = player.clone();
                             let queue = queue.clone();
@@ -281,6 +286,7 @@ pub fn Bottombar() -> Element {
                     button {
                         class: "player-btn",
                         title: "Next",
+                        "aria-label": "Next track",
                         disabled: !has_next,
                         onclick: {
                             let queue = queue.clone();
@@ -295,6 +301,7 @@ pub fn Bottombar() -> Element {
                             RepeatMode::One => "player-btn active repeat-one",
                         },
                         title: "{repeat_title}",
+                        "aria-label": "{repeat_title}",
                         onclick: {
                             let queue = queue.clone();
                             move |_| queue.cycle_repeat()
@@ -390,6 +397,7 @@ pub fn Bottombar() -> Element {
                 button {
                     class: if *viz_open.read() { "player-viz-btn open" } else { "player-viz-btn" },
                     title: "Visualizer (V)",
+                    "aria-label": "Visualizer",
                     onclick: move |_| {
                         let now = *viz_open.peek();
                         viz_open.set(!now);
@@ -399,9 +407,21 @@ pub fn Bottombar() -> Element {
                 button {
                     class: if queue_is_open { "player-queue-btn open" } else { "player-queue-btn" },
                     title: "Queue",
+                    "aria-label": "Queue ({queue_len} tracks)",
+                    "aria-expanded": if queue_is_open { "true" } else { "false" },
                     onclick: move |_| queue_open.set(!queue_is_open),
                     i { class: "fa-solid fa-list" }
                     span { "{queue_len}" }
+                }
+                // Bridge for the shell's Escape handler — the popover has no
+                // reliable focus, so its dismiss key lives at the document
+                // listener like every other overlay.
+                button {
+                    id: "nira-key-queue-close",
+                    class: "hotkey-bridge",
+                    r#type: "button",
+                    tabindex: "-1",
+                    onclick: move |_| queue_open.set(false),
                 }
                 div { class: "player-source",
                     span { class: "player-source-dot", "data-provider": "{provider_attr}" }
@@ -415,6 +435,7 @@ pub fn Bottombar() -> Element {
                         min: "0",
                         max: "100",
                         value: "{volume_pct}",
+                        "aria-label": "Volume",
                         oninput: {
                             let player = player.clone();
                             move |evt: FormEvent| {
@@ -443,6 +464,7 @@ pub fn Bottombar() -> Element {
                     button {
                         class: "download-toast-close",
                         title: "Dismiss",
+                        "aria-label": "Dismiss",
                         onclick: {
                             let mut error = queue.error;
                             move |_| error.set(None)
@@ -462,6 +484,7 @@ pub fn Bottombar() -> Element {
                     button {
                         class: "download-toast-close",
                         title: "Dismiss",
+                        "aria-label": "Dismiss",
                         onclick: {
                             let mut status = queue.radio_status;
                             move |_| status.set(RadioStatus::Idle)
@@ -473,6 +496,12 @@ pub fn Bottombar() -> Element {
         }
     }
 }
+
+/// Rows rendered per window step. After "shuffle all" the queue holds
+/// thousands of entries; rendering them all froze the popover open.
+// ponytail: grow-on-demand window, real virtualization if scroll-jumping
+// through 10k-row queues ever becomes a workflow.
+const QUEUE_WINDOW: usize = 250;
 
 #[component]
 fn QueuePopover(on_close: EventHandler<()>) -> Element {
@@ -487,8 +516,21 @@ fn QueuePopover(on_close: EventHandler<()>) -> Element {
         RepeatMode::All => "repeat all",
         RepeatMode::One => "repeat one",
     };
+    // Window: a little history, then QUEUE_WINDOW rows from just above the
+    // current track; "show more" extends downward.
+    let mut extra = use_signal(|| 0usize);
+    let start = current.unwrap_or(0).saturating_sub(25);
+    let end = (start + QUEUE_WINDOW + *extra.read()).min(total);
 
     rsx! {
+        // Click-outside catcher — same pattern as the ctx-menu overlay.
+        button {
+            class: "queue-overlay",
+            r#type: "button",
+            tabindex: "-1",
+            "aria-hidden": "true",
+            onclick: move |_| on_close.call(()),
+        }
         div { class: "queue-popover",
             div { class: "queue-popover-head",
                 div {
@@ -516,6 +558,7 @@ fn QueuePopover(on_close: EventHandler<()>) -> Element {
                     button {
                         class: "queue-close-btn",
                         title: "Close",
+                        "aria-label": "Close queue",
                         onclick: move |_| on_close.call(()),
                         i { class: "fa-solid fa-xmark" }
                     }
@@ -528,12 +571,27 @@ fn QueuePopover(on_close: EventHandler<()>) -> Element {
                 }
             } else {
                 ol { class: "queue-list",
-                    for (idx, track) in entries.iter().enumerate() {
+                    if start > 0 {
+                        li { class: "queue-window-note", "{start} earlier tracks" }
+                    }
+                    for (idx, track) in entries.iter().enumerate().skip(start).take(end - start) {
                         QueueRow {
                             key: "{track.uri.0}-{idx}",
                             track: track.clone(),
                             index: idx,
                             current: current == Some(idx),
+                        }
+                    }
+                    if end < total {
+                        li { class: "queue-window-note",
+                            button {
+                                class: "queue-window-more",
+                                onclick: move |_| {
+                                    let now = *extra.peek();
+                                    extra.set(now + QUEUE_WINDOW);
+                                },
+                                "Show more ({total - end} left)"
+                            }
                         }
                     }
                 }
@@ -562,11 +620,24 @@ fn QueueRow(track: Track, index: usize, current: bool) -> Element {
         li {
             class: if current { "queue-row current" } else { "queue-row" },
             title: "{title} — {artist}",
+            // Keyboard-reachable: the row acts as a play button.
+            tabindex: "0",
+            role: "button",
             // Jump within the existing queue — play_list would re-seed and,
             // with shuffle on, scramble the whole visible order per click.
             onclick: {
                 let queue = queue.clone();
                 move |_| queue.play_index(index)
+            },
+            onkeydown: {
+                let queue = queue.clone();
+                move |e: Event<KeyboardData>| {
+                    // Enter only: Space stays the global play/pause bind.
+                    if e.key() == Key::Enter {
+                        e.prevent_default();
+                        queue.play_index(index);
+                    }
+                }
             },
             oncontextmenu: {
                 let track = track.clone();
@@ -594,6 +665,7 @@ fn QueueRow(track: Track, index: usize, current: bool) -> Element {
                 class: "queue-row-remove",
                 r#type: "button",
                 title: "Remove from queue",
+                "aria-label": "Remove {title} from queue",
                 onclick: {
                     let queue = queue.clone();
                     move |e: Event<MouseData>| {

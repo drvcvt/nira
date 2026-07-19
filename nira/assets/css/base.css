@@ -120,9 +120,11 @@ body {
 * { box-shadow: none !important; text-shadow: none !important; }
 
 /* Keyboard focus — keep an indicator (a11y), but neutral gray instead of
-   the engine's blue ring. Mouse clicks never show it (focus-visible). */
+   the engine's blue ring. Mouse clicks never show it (focus-visible).
+   --sub, not --faint: the ring must clear WCAG's 3:1 non-text contrast
+   against --bg/raise surfaces in BOTH themes; --faint fails both. */
 :focus { outline: none; }
-:focus-visible { outline: 1px solid var(--faint); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--sub); outline-offset: 2px; }
 
 /* Thin themed scrollbar. Two passes:
    • Standard CSS (scrollbar-width / scrollbar-color) is what WebKitGTK 2.x

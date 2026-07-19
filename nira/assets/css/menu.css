@@ -83,6 +83,17 @@
   background: var(--raise3);
 }
 
+/* Keyboard selection mirrors hover; the roving arrow-key focus IS the
+   selection cursor, so no extra ring on top of the row highlight. */
+.ctx-item:focus-visible {
+  outline: none;
+  background: var(--raise3);
+}
+
+.ctx-item:focus-visible .ctx-icon {
+  color: var(--text);
+}
+
 .ctx-item:disabled {
   opacity: 0.45;
   cursor: default;
@@ -188,10 +199,11 @@
   appearance: none;
   border: none;
   background: transparent;
-  color: var(--faint);
+  color: var(--sub);
   cursor: pointer;
-  width: 22px;
-  height: 22px;
+  /* 28px: comfortably above the 24px WCAG target minimum. */
+  width: 28px;
+  height: 28px;
   border-radius: var(--rs);
   display: inline-flex;
   align-items: center;

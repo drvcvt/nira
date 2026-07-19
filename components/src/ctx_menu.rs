@@ -48,6 +48,36 @@ fn track_download_label(provider: ProviderId) -> &'static str {
     }
 }
 
+/// Move the roving keyboard focus over the menu's enabled items by `delta`
+/// (wraps at both ends). DOM focus is the selection cursor — the shell's JS
+/// hotkey listener stands down while a `.ctx-menu` is open, so arrow keys
+/// land here instead of on the volume binds.
+fn ctx_focus_move(delta: i32) {
+    document::eval(&format!(
+        "(function() {{\
+            var m = document.querySelector('.ctx-menu');\
+            if (!m) return;\
+            var items = Array.prototype.slice.call(m.querySelectorAll('.ctx-item:not(:disabled)'));\
+            if (!items.length) return;\
+            var i = items.indexOf(document.activeElement);\
+            var n = i < 0 ? ({delta} > 0 ? 0 : items.length - 1)\
+                          : (i + {delta} + items.length) % items.length;\
+            items[n].focus();\
+        }})();"
+    ));
+}
+
+/// Shared arrow-key handler for both menu variants.
+fn ctx_menu_keynav(e: Event<KeyboardData>) {
+    let delta = match e.key() {
+        Key::ArrowDown => 1,
+        Key::ArrowUp => -1,
+        _ => return,
+    };
+    e.prevent_default();
+    ctx_focus_move(delta);
+}
+
 #[component]
 pub fn ContextMenu() -> Element {
     let ctx = use_ctx_menu();
@@ -65,8 +95,20 @@ pub fn ContextMenu() -> Element {
     // opens/closes so every fresh right-click starts collapsed.
     let mut show_playlists = use_signal(|| false);
     use_effect(move || {
-        let _ = ctx.current.read();
+        let open = ctx.current.read().is_some();
         show_playlists.set(false);
+        if open {
+            // Seed the roving keyboard focus on the first item once the
+            // menu exists in the DOM. Mouse users don't see a ring
+            // (focus-visible heuristics), keyboard users can arrow away
+            // immediately.
+            document::eval(
+                "requestAnimationFrame(function() {\
+                    var el = document.querySelector('.ctx-menu .ctx-item');\
+                    if (el) el.focus();\
+                });",
+            );
+        }
     });
     let current = ctx.current.read().clone();
 
@@ -127,6 +169,7 @@ pub fn ContextMenu() -> Element {
         rsx! {
             button {
                 class: "ctx-item",
+                role: "menuitem",
                 onclick: move |_| {
                     detail.open_artist(uri.clone());
                     ctx.close();
@@ -144,6 +187,7 @@ pub fn ContextMenu() -> Element {
         rsx! {
             button {
                 class: "ctx-item",
+                role: "menuitem",
                 onclick: move |_| {
                     detail.open_album(uri.clone());
                     ctx.close();
@@ -183,6 +227,7 @@ pub fn ContextMenu() -> Element {
         rsx! {
             button {
                 class: "ctx-item",
+                role: "menuitem",
                 onclick: move |_| {
                     ctx.close();
                     if track.provider == ProviderId::the hi-res provider {
@@ -206,6 +251,7 @@ pub fn ContextMenu() -> Element {
         rsx! {
             button {
                 class: "ctx-item",
+                role: "menuitem",
                 onclick: move |_| {
                     ctx.close();
                     download_hires-provider_album(qz.clone(), local.clone(), downloads, root.clone(), uri.clone(), album_title.clone());
@@ -228,6 +274,7 @@ pub fn ContextMenu() -> Element {
             div { class: "ctx-group",
                 button {
                     class: "ctx-item",
+                role: "menuitem",
                     onclick: move |_| {
                         history.remove(&entry);
                         ctx.close();
@@ -253,6 +300,8 @@ pub fn ContextMenu() -> Element {
         button {
             class: "ctx-overlay",
             r#type: "button",
+            tabindex: "-1",
+            "aria-hidden": "true",
             onclick: move |_| ctx.close(),
             oncontextmenu: move |e: Event<MouseData>| {
                 e.prevent_default();
@@ -262,6 +311,8 @@ pub fn ContextMenu() -> Element {
         div {
             class: "ctx-menu",
             role: "menu",
+            "aria-label": "Track actions",
+            onkeydown: ctx_menu_keynav,
             style: "{h_anchor} {v_anchor}",
 
             div { class: "ctx-header",
@@ -272,6 +323,7 @@ pub fn ContextMenu() -> Element {
             div { class: "ctx-group",
                 button {
                     class: "ctx-item",
+                role: "menuitem",
                     onclick: {
                         let queue = queue.clone();
                         let track = track.clone();
@@ -287,6 +339,7 @@ pub fn ContextMenu() -> Element {
                 }
                 button {
                     class: "ctx-item",
+                role: "menuitem",
                     onclick: {
                         let queue = queue.clone();
                         let track = track.clone();
@@ -302,6 +355,7 @@ pub fn ContextMenu() -> Element {
                 }
                 button {
                     class: "ctx-item",
+                role: "menuitem",
                     onclick: {
                         let queue = queue.clone();
                         let engine = engine.clone();
@@ -331,6 +385,7 @@ pub fn ContextMenu() -> Element {
             div { class: "ctx-group",
                 button {
                     class: "ctx-item",
+                role: "menuitem",
                     onclick: {
                         let track = track.clone();
                         move |_| {
@@ -345,6 +400,7 @@ pub fn ContextMenu() -> Element {
                 }
                 button {
                     class: "ctx-item",
+                role: "menuitem",
                     onclick: move |_| {
                         let open = *show_playlists.peek();
                         show_playlists.set(!open);
@@ -430,6 +486,7 @@ fn PlaylistPicker(
                         button {
                             key: "{id}",
                             class: "ctx-item ctx-subitem",
+                            role: "menuitem",
                             onclick: move |_| on_pick.call((id.clone(), is_in)),
                             i { class: "{icon}" }
                             div { class: "ctx-item-body",
@@ -507,6 +564,8 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
         button {
             class: "ctx-overlay",
             r#type: "button",
+            tabindex: "-1",
+            "aria-hidden": "true",
             onclick: move |_| ctx.close(),
             oncontextmenu: move |e: Event<MouseData>| {
                 e.prevent_default();
@@ -516,6 +575,8 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
         div {
             class: "ctx-menu",
             role: "menu",
+            "aria-label": "Album actions",
+            onkeydown: ctx_menu_keynav,
             style: "{h_anchor} {v_anchor}",
 
             div { class: "ctx-header",
@@ -526,6 +587,7 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
             div { class: "ctx-group",
                 button {
                     class: "ctx-item",
+                role: "menuitem",
                     disabled: !has_tracks,
                     onclick: {
                         let queue = queue.clone();
@@ -544,6 +606,7 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
                 }
                 button {
                     class: "ctx-item",
+                role: "menuitem",
                     disabled: !has_tracks,
                     onclick: {
                         let queue = queue.clone();
@@ -565,6 +628,7 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
             div { class: "ctx-group",
                 button {
                     class: "ctx-item",
+                role: "menuitem",
                     disabled: !has_tracks,
                     onclick: move |_| {
                         let open = *show.peek();
@@ -607,6 +671,7 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
             div { class: "ctx-group",
                 button {
                     class: "ctx-item",
+                role: "menuitem",
                     onclick: {
                         let uri = album.uri.clone();
                         move |_| {
