@@ -43,10 +43,11 @@ pub struct SpotifyBackend {
     player: Arc<LibrespotPlayer>,
     mixer: Arc<dyn Mixer>,
     state: Arc<RwLock<SpotifyState>>,
-    /// Tracked so callers can decide when to drop the backend and reconnect
-    /// with a fresher OAuth token. We don't proactively refresh — the next
-    /// auth-fail at the AP will surface as a load error.
-    _session: Session,
+    /// Kept so `session_is_invalid` can detect when librespot shut the AP
+    /// connection down (suspend/resume, network loss). A `Session` cannot
+    /// reconnect once invalidated — callers drop the whole backend and build
+    /// a fresh one.
+    session: Session,
 }
 
 #[derive(Default, Clone)]
@@ -100,8 +101,16 @@ impl SpotifyBackend {
             player,
             mixer,
             state,
-            _session: session,
+            session,
         })
+    }
+
+    /// True once librespot has invalidated the session — it does that itself
+    /// when the AP transport dies (suspend/resume, network drop). From that
+    /// point every `load_and_play` is silently swallowed, so callers must
+    /// treat the backend as dead and rebuild it.
+    pub fn session_is_invalid(&self) -> bool {
+        self.session.is_invalid()
     }
 
     pub fn load_and_play(&self, spotify_uri: &str) -> Result<(), SpotifyBackendError> {

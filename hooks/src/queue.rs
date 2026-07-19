@@ -975,7 +975,16 @@ async fn play_one(
         ProviderId::Spotify => match queue.sp.access_token_for_playback().await {
             Err(e) => Err(format!("spotify auth: {e}")),
             Ok(token) => {
-                if let Err(e) = player.ensure_spotify(&token).await {
+                let mut connected = player.ensure_spotify(&token).await;
+                if connected.is_err() {
+                    // Post-suspend the AP can reject a token that hasn't
+                    // expired yet. Force one refresh and retry the connect
+                    // before surfacing an error.
+                    if let Ok(fresh) = queue.sp.refresh_playback_token(&token).await {
+                        connected = player.ensure_spotify(&fresh).await;
+                    }
+                }
+                if let Err(e) = connected {
                     Err(format!("librespot connect: {e}"))
                 } else {
                     if !is_current_load(queue, generation, idx, expected_uri) {

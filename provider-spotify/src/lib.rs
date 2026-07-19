@@ -151,6 +151,13 @@ impl SpotifyProvider {
         self.access_token().await
     }
 
+    /// Playback-path variant of the forced refresh: librespot's AP rejected
+    /// `stale_access` even though it hasn't expired (typical after suspend).
+    /// Same dedup semantics as the API-side 401 handling.
+    pub async fn refresh_playback_token(&self, stale_access: &str) -> ProviderResult<String> {
+        self.refresh_after_401(stale_access).await
+    }
+
     /// Run the OAuth PKCE handshake. Blocks until the user completes the
     /// browser flow (or the listener times out / fails).
     pub async fn connect(&self) -> ProviderResult<()> {
@@ -304,6 +311,13 @@ impl SpotifyProvider {
             .refresh_token
             .clone()
             .ok_or(ProviderError::AuthRequired)?;
+        self.refresh_with(refresh).await
+    }
+
+    /// Exchange `refresh` for a new token set and store it. Caller must hold
+    /// `refresh_lock` — Spotify rotates PKCE refresh tokens, so this consumes
+    /// the passed value.
+    async fn refresh_with(&self, refresh: String) -> ProviderResult<String> {
         let client_id = self.client_id();
         let resp = self
             .http
@@ -338,11 +352,32 @@ impl SpotifyProvider {
         let new_token = TokenSet {
             access_token: tr.access_token.clone(),
             refresh_token: tr.refresh_token.or(Some(refresh)),
-            expires_at_unix: now + tr.expires_in.unwrap_or(3600),
+            expires_at_unix: now_unix() + tr.expires_in.unwrap_or(3600),
         };
         let _ = self.persist_token(&new_token);
         *self.token.write().await = Some(new_token);
         Ok(tr.access_token)
+    }
+
+    /// A 401 on an API call despite an unexpired access token means Spotify
+    /// invalidated it early (credential rotation, suspend/resume, revocation).
+    /// Force one refresh. Deduplicated against concurrent 401s via the same
+    /// `refresh_lock`: whoever loses the race just adopts the winner's token
+    /// instead of burning the already-rotated refresh token (which would 400
+    /// and log the user out).
+    async fn refresh_after_401(&self, stale_access: &str) -> ProviderResult<String> {
+        let _refreshing = self.refresh_lock.lock().await;
+        let token = self
+            .token
+            .read()
+            .await
+            .clone()
+            .ok_or(ProviderError::AuthRequired)?;
+        if token.access_token != stale_access {
+            return Ok(token.access_token);
+        }
+        let refresh = token.refresh_token.ok_or(ProviderError::AuthRequired)?;
+        self.refresh_with(refresh).await
     }
 
     async fn fetch_json<T>(&self, url: &str) -> ProviderResult<T>
@@ -350,7 +385,7 @@ impl SpotifyProvider {
         T: for<'de> Deserialize<'de>,
     {
         let token = self.access_token().await?;
-        let resp = self
+        let mut resp = self
             .http
             .get(url)
             .bearer_auth(&token)
@@ -358,7 +393,20 @@ impl SpotifyProvider {
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))?;
         if resp.status() == StatusCode::UNAUTHORIZED {
-            return Err(ProviderError::AuthRequired);
+            // The token expired early or was invalidated server-side —
+            // without this retry the app sat bricked for up to an hour
+            // despite holding a perfectly good refresh token.
+            let fresh = self.refresh_after_401(&token).await?;
+            resp = self
+                .http
+                .get(url)
+                .bearer_auth(&fresh)
+                .send()
+                .await
+                .map_err(|e| ProviderError::Network(e.to_string()))?;
+            if resp.status() == StatusCode::UNAUTHORIZED {
+                return Err(ProviderError::AuthRequired);
+            }
         }
         if resp.status() == StatusCode::TOO_MANY_REQUESTS {
             let retry = resp
@@ -529,6 +577,8 @@ impl SpotifyProvider {
         let limit = limit.clamp(1, 50);
         let url = format!("{SP_API}/me/tracks?limit={limit}&offset={offset}");
         let raw: SpLikedPage = self.fetch_json(&url).await?;
+        // Offset math counts raw items (ghosts included) — Spotify's paging
+        // does too, so skipping ghosts must not shift subsequent pages.
         let received = raw.items.len() as u32;
         let next_offset = if raw.next.is_some() && received == limit {
             Some(offset + received)
@@ -536,15 +586,7 @@ impl SpotifyProvider {
             None
         };
         Ok(LikedTracksPage {
-            tracks: raw
-                .items
-                .into_iter()
-                .map(|i| {
-                    let mut t = sp_to_track(i.track);
-                    t.added_at = i.added_at;
-                    t
-                })
-                .collect(),
+            tracks: liked_items_to_tracks(raw.items),
             total: raw.total,
             next_offset,
         })
@@ -582,12 +624,28 @@ struct SpLikedPage {
 
 #[derive(Deserialize)]
 struct SpLikedItem {
-    track: SpTrack,
+    /// `null` for ghost items — tracks pulled from the catalog after being
+    /// saved. One such item used to fail the whole page's deserialisation
+    /// and with it the entire liked-songs sync.
+    #[serde(default)]
+    track: Option<SpTrack>,
     /// ISO-8601 timestamp Spotify attaches to each saved track. We sort
     /// Home's "Recently liked" row on this. Optional only out of paranoia —
     /// the field is documented as always present.
     #[serde(default)]
     added_at: Option<DateTime<Utc>>,
+}
+
+/// Map a liked-songs page's items to tracks, silently dropping ghost items.
+fn liked_items_to_tracks(items: Vec<SpLikedItem>) -> Vec<Track> {
+    items
+        .into_iter()
+        .filter_map(|i| {
+            let mut t = sp_to_track(i.track?);
+            t.added_at = i.added_at;
+            Some(t)
+        })
+        .collect()
 }
 
 // ── PKCE & callback helpers ────────────────────────────────────────────────
@@ -980,4 +1038,33 @@ struct SpAlbumTrack {
 struct SpRelatedArtists {
     #[serde(default)]
     artists: Vec<SpArtist>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ghost_liked_item_is_skipped_not_fatal() {
+        // Real-world shape: one saved track was pulled from the catalog and
+        // comes back as `track: null` — the page must still parse and the
+        // ghost must vanish from the mapped tracks.
+        let json = r#"{
+            "items": [
+                { "track": null, "added_at": "2026-07-01T00:00:00Z" },
+                { "track": {
+                    "id": "t1", "name": "Alive", "duration_ms": 1000,
+                    "artists": [{ "id": "a1", "name": "A" }],
+                    "album": { "id": "al1", "name": "Al", "images": [] }
+                  }, "added_at": "2026-07-02T00:00:00Z" }
+            ],
+            "total": 2
+        }"#;
+        let page: SpLikedPage = serde_json::from_str(json).expect("page with ghost parses");
+        assert_eq!(page.items.len(), 2);
+        let tracks = liked_items_to_tracks(page.items);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].title, "Alive");
+        assert!(tracks[0].added_at.is_some());
+    }
 }

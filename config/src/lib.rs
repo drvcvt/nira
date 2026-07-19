@@ -20,7 +20,7 @@ static PERSIST_TX: std::sync::OnceLock<std::sync::mpsc::Sender<PersistJob>> =
 /// (writes AND deletes) goes through this FIFO so mutation order == on-disk
 /// order; a delete enqueued after a write can never be undone by it.
 enum PersistJob {
-    Write(PathBuf, Vec<u8>),
+    Write(PathBuf, Vec<u8>, Option<u32>),
     Remove(PathBuf),
     /// Rendezvous marker: answered once everything enqueued before it hit
     /// the disk. Used by the atexit drain and tests.
@@ -35,8 +35,8 @@ fn persist_tx() -> &'static std::sync::mpsc::Sender<PersistJob> {
             .spawn(move || {
                 while let Ok(job) = rx.recv() {
                     match job {
-                        PersistJob::Write(path, bytes) => {
-                            if let Err(error) = AppConfig::atomic_write(&path, &bytes) {
+                        PersistJob::Write(path, bytes, mode) => {
+                            if let Err(error) = AppConfig::atomic_write_mode(&path, &bytes, mode) {
                                 tracing::warn!(%error, path = %path.display(), "background persist failed");
                             }
                         }
@@ -299,8 +299,25 @@ impl AppConfig {
     /// the queue.
     pub fn atomic_write_bg(path: std::path::PathBuf, bytes: Vec<u8>) -> anyhow::Result<()> {
         persist_tx()
-            .send(PersistJob::Write(path, bytes))
+            .send(PersistJob::Write(path, bytes, None))
             .map_err(|_| anyhow::anyhow!("persistence writer thread gone"))
+    }
+
+    /// [`Self::atomic_write_bg`] for secret-bearing files (tokens, auth
+    /// caches): the file lands with 0600 perms on every write — a one-time
+    /// chmod would not survive the rename-replace of the next save.
+    pub fn atomic_write_secret_bg(path: std::path::PathBuf, bytes: Vec<u8>) -> anyhow::Result<()> {
+        persist_tx()
+            .send(PersistJob::Write(path, bytes, Some(0o600)))
+            .map_err(|_| anyhow::anyhow!("persistence writer thread gone"))
+    }
+
+    /// Synchronous secret write — 0600 like [`Self::atomic_write_secret_bg`].
+    pub fn atomic_write_secret_json<T: serde::Serialize>(
+        path: &std::path::Path,
+        value: &T,
+    ) -> anyhow::Result<()> {
+        Self::atomic_write_mode(path, &serde_json::to_vec(value)?, Some(0o600))
     }
 
     /// Ordered delete: runs behind every already-enqueued write, so a
@@ -330,14 +347,26 @@ impl AppConfig {
     }
 
     /// Background variant of [`Self::save`] for hot paths (volume drags).
+    /// Secret-tier: config.json carries the the hi-res provider/ListenBrainz/Last.fm
+    /// tokens, so it gets the same 0600 treatment as the auth caches.
     pub fn save_bg(&self) -> anyhow::Result<()> {
         let Some(path) = Self::config_path() else {
             return Ok(());
         };
-        Self::atomic_write_bg(path, serde_json::to_vec_pretty(self)?)
+        Self::atomic_write_secret_bg(path, serde_json::to_vec_pretty(self)?)
     }
 
     pub fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+        Self::atomic_write_mode(path, bytes, None)
+    }
+
+    /// `mode` (Unix permission bits) is applied to the temp file *before* the
+    /// rename, so the secret is never world-readable even for an instant.
+    fn atomic_write_mode(
+        path: &std::path::Path,
+        bytes: &[u8],
+        mode: Option<u32>,
+    ) -> anyhow::Result<()> {
         // ponytail: one global lock keeps low-frequency persistence simple;
         // use per-path locks only if write contention becomes measurable.
         let _guard = WRITE_LOCK
@@ -355,7 +384,18 @@ impl AppConfig {
             std::process::id(),
             TEMP_ID.fetch_add(1, Ordering::Relaxed)
         ));
-        let result = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
+        let result = std::fs::write(&tmp, bytes)
+            .and_then(|()| {
+                #[cfg(unix)]
+                if let Some(mode) = mode {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+                }
+                #[cfg(not(unix))]
+                let _ = mode;
+                Ok(())
+            })
+            .and_then(|()| std::fs::rename(&tmp, path));
         if result.is_err() {
             let _ = std::fs::remove_file(&tmp);
         }
@@ -369,6 +409,9 @@ impl AppConfig {
         if !path.exists() {
             return Ok(Self::default());
         }
+        // Retro-tighten files written before saves went 0600; the write
+        // path keeps them that way from here on.
+        tighten_secret_perms(&path);
         let raw = std::fs::read_to_string(&path)?;
         Ok(serde_json::from_str(&raw)?)
     }
@@ -381,6 +424,19 @@ impl AppConfig {
     pub fn save(&self) -> anyhow::Result<()> {
         self.save_bg()
     }
+}
+
+/// Best-effort chmod 0600 for an existing secret file (no-op if absent or
+/// on non-Unix). Boot-time repair for files created before writes carried
+/// modes; new writes come out 0600 already.
+pub fn tighten_secret_perms(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 #[cfg(test)]
@@ -429,6 +485,26 @@ mod tests {
         AppConfig::flush_persist_queue(std::time::Duration::from_secs(10));
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"v\":2}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_writes_land_with_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("secret-mode");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secret.json");
+
+        AppConfig::atomic_write_secret_json(&path, &serde_json::json!({ "token": "x" })).unwrap();
+        let sync_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(sync_mode, 0o600);
+
+        AppConfig::atomic_write_secret_bg(path.clone(), b"{\"token\":\"y\"}".to_vec()).unwrap();
+        AppConfig::flush_persist_queue(std::time::Duration::from_secs(10));
+        let bg_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(bg_mode, 0o600);
+
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -720,13 +720,24 @@ impl Player {
             .map_err(|e| PlayerError::Decode(e.to_string()))
     }
 
-    /// Ensure a Spotify session exists. Idempotent — once a session is up we
-    /// reuse it; if it has dropped (no field exposes that today) callers can
-    /// `reset_spotify()` first to force a fresh connect on the next call.
+    /// Ensure a *live* Spotify session exists. Idempotent — once a session
+    /// is up we reuse it; a session librespot has invalidated (suspend/
+    /// resume, network drop — it cannot reconnect) is dropped and rebuilt
+    /// here, so the next play recovers instead of silently swallowing loads
+    /// until an app restart.
     pub async fn ensure_spotify(&self, access_token: &str) -> Result<(), PlayerError> {
-        // Fast path: already initialised.
-        if matches!(self.spotify.lock(), Ok(g) if g.is_some()) {
-            return Ok(());
+        let stale = {
+            let guard = self.spotify.lock().unwrap_or_else(|p| p.into_inner());
+            match guard.as_ref() {
+                // Fast path: already initialised and still connected.
+                Some(b) if !b.session_is_invalid() => return Ok(()),
+                Some(_) => true,
+                None => false,
+            }
+        };
+        if stale {
+            tracing::info!("librespot session invalid — reconnecting");
+            self.reset_spotify();
         }
         // Slow path: connect outside the mutex.
         let backend = SpotifyBackend::new(access_token).await?;
