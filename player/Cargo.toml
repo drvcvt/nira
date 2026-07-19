@@ -5,6 +5,7 @@ edition = "2024"
 license = "Apache-2.0"
 
 [dependencies]
+config = { path = "../config" }
 rodio = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

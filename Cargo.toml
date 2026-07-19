@@ -28,7 +28,9 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 directories = "6"
-rodio = { version = "0.22", default-features = false, features = ["playback", "mp3", "mp4", "flac", "vorbis", "wav", "symphonia-aac"] }
+# "tracing" routes rodio/cpal stream errors into our log file instead of
+# bare eprintln — without it "audio stream error" lines bypassed the log.
+rodio = { version = "0.22", default-features = false, features = ["playback", "mp3", "mp4", "flac", "vorbis", "wav", "symphonia-aac", "tracing"] }
 anyhow = "1"
 thiserror = "2"
 async-trait = "0.1"

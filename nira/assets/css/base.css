@@ -45,6 +45,12 @@
   --line:           transparent;
   --line-strong:    transparent;
 
+  /* On-image surfaces (overlay scrims, cover badges): fixed dark in both
+     themes on purpose — they sit on artwork, not on the canvas. */
+  --scrim:        rgba(0, 0, 0, 0.46);
+  --on-image-bg:  rgba(0, 0, 0, 0.55);
+  --on-image-fg:  #FFFFFF;
+
   --sidebar-w:        220px;
   --player-h:         84px;
   --player-margin:    14px;

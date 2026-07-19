@@ -180,7 +180,10 @@ impl SoundCloudProvider {
             .send()
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))?;
-        if resp.status() == StatusCode::UNAUTHORIZED {
+        // 403 counts as auth-dead too: SC answers FORBIDDEN (not 401) for
+        // rotated/blocked client_ids, and only AuthRequired makes
+        // with_client_id refresh + retry.
+        if resp.status() == StatusCode::UNAUTHORIZED || resp.status() == StatusCode::FORBIDDEN {
             return Err(ProviderError::AuthRequired);
         }
         if !resp.status().is_success() {
@@ -419,26 +422,34 @@ impl SoundCloudProvider {
         }
         let total = segments.len();
         let mut buf: Vec<u8> = Vec::with_capacity(1024 * 1024);
-        let mut ok = 0usize;
-        for url in &segments {
-            match self.http.get(url).send().await {
-                Ok(resp) if resp.status().is_success() => match resp.bytes().await {
-                    Ok(b) => {
-                        // Peel MPEG-TS wrapper, fall back to raw bytes if
-                        // the segment doesn't look like TS (some SC
-                        // variants ship raw ADTS/ES already).
-                        let es = demux_ts_audio_es(&b);
-                        if es.is_empty() {
-                            buf.extend_from_slice(&b);
-                        } else {
-                            buf.extend_from_slice(&es);
+        for (i, url) in segments.iter().enumerate() {
+            let bytes = match self.fetch_segment(url).await {
+                Ok(b) => b,
+                Err(first) => {
+                    tracing::warn!(segment = i + 1, total, error = %first, "SC HLS segment failed — retrying once");
+                    match self.fetch_segment(url).await {
+                        Ok(b) => b,
+                        Err(second) => {
+                            // A hole mid-stream shifts the whole timeline and
+                            // a lost tail reads as the track ending early —
+                            // error out instead of playing silently truncated
+                            // audio (the queue's auto-skip takes it from here).
+                            return Err(ProviderError::Network(format!(
+                                "SC HLS segment {}/{total} failed twice ({second})",
+                                i + 1
+                            )));
                         }
-                        ok += 1;
                     }
-                    Err(e) => tracing::warn!(error = %e, "SC HLS segment body"),
-                },
-                Ok(resp) => tracing::warn!(status = %resp.status(), "SC HLS segment status"),
-                Err(e) => tracing::warn!(error = %e, "SC HLS segment fetch"),
+                }
+            };
+            // Peel MPEG-TS wrapper, fall back to raw bytes if the segment
+            // doesn't look like TS (some SC variants ship raw ADTS/ES
+            // already).
+            let es = demux_ts_audio_es(&bytes);
+            if es.is_empty() {
+                buf.extend_from_slice(&bytes);
+            } else {
+                buf.extend_from_slice(&es);
             }
         }
         if buf.is_empty() {
@@ -446,8 +457,24 @@ impl SoundCloudProvider {
                 "SC HLS produced empty buffer".into(),
             ));
         }
-        tracing::debug!(ok, total, bytes = buf.len(), "SC HLS download complete");
+        tracing::debug!(total, bytes = buf.len(), "SC HLS download complete");
         Ok(buf)
+    }
+
+    async fn fetch_segment(&self, url: &str) -> Result<Vec<u8>, String> {
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("fetch: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("status {}", resp.status()));
+        }
+        resp.bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| format!("body: {e}"))
     }
 }
 

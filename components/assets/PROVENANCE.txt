@@ -1,6 +1,8 @@
 butterchurn.min.js — Butterchurn 2.6.7 (MIT), jsdelivr npm butterchurn@2.6.7/lib/butterchurn.min.js
 butterchurn-extra-images.min.js — same package, lib/butterchurnExtraImages.min.js (6 base64 textures some presets sample)
 butterchurn-presets-base.min.js — butterchurn-presets 2.4.7 (MIT), lib/butterchurnPresets.min.js (100 presets)
-butterchurn-presets-extra.min.js — same package, lib/butterchurnPresetsExtra.min.js (146 presets)
-butterchurn-presets-extra2.min.js — same package, lib/butterchurnPresetsExtra2.min.js (122 presets)
-butterchurn-presets-md1.min.js — same package, lib/butterchurnPresetsMD1.min.js (87 classic MilkDrop-1-era presets)
+
+The extra/extra2/md1 preset packs were dropped 2026-07-19 — the visualizer
+only injects the base pack (see components/src/visualizer.rs), and the
+curated cut is a runtime filter via curated-presets.json. Re-fetch them
+from the same npm package if the preset roster ever grows again.

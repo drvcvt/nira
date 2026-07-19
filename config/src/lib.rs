@@ -384,18 +384,7 @@ impl AppConfig {
             std::process::id(),
             TEMP_ID.fetch_add(1, Ordering::Relaxed)
         ));
-        let result = std::fs::write(&tmp, bytes)
-            .and_then(|()| {
-                #[cfg(unix)]
-                if let Some(mode) = mode {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
-                }
-                #[cfg(not(unix))]
-                let _ = mode;
-                Ok(())
-            })
-            .and_then(|()| std::fs::rename(&tmp, path));
+        let result = write_synced(&tmp, bytes, mode).and_then(|()| std::fs::rename(&tmp, path));
         if result.is_err() {
             let _ = std::fs::remove_file(&tmp);
         }
@@ -423,6 +412,64 @@ impl AppConfig {
     /// failures.
     pub fn save(&self) -> anyhow::Result<()> {
         self.save_bg()
+    }
+}
+
+/// Write the temp file, apply the optional mode, and fsync before the
+/// caller renames it into place. Without the fsync, a power loss shortly
+/// after the rename could land the *rename* on disk but not the *data* —
+/// a zero-length file where state used to be.
+fn write_synced(tmp: &std::path::Path, bytes: &[u8], mode: Option<u32>) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(tmp)?;
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(mode))?;
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+/// Remove crash-orphaned atomic-write temp files (`.<name>.tmp-<pid>-<n>`)
+/// from the config and cache dir roots. Anything not written by the
+/// current process is leftover from a crashed/killed instance — its rename
+/// never happened, so it's garbage. Call once at boot.
+pub fn sweep_stale_tmp_files() {
+    for dir in [AppConfig::config_dir(), AppConfig::cache_dir()]
+        .into_iter()
+        .flatten()
+    {
+        sweep_stale_tmp_in(&dir, std::process::id());
+    }
+}
+
+fn sweep_stale_tmp_in(dir: &std::path::Path, own_pid: u32) {
+    let own = own_pid.to_string();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let name_os = entry.file_name();
+        let Some(name) = name_os.to_str() else {
+            continue;
+        };
+        let Some(after) = name
+            .strip_prefix('.')
+            .and_then(|n| n.rsplit_once(".tmp-"))
+            .map(|(_, after)| after)
+        else {
+            continue;
+        };
+        // `after` is "<pid>-<n>"; skip our own in-flight writes.
+        if after.split('-').next() == Some(own.as_str()) {
+            continue;
+        }
+        if std::fs::remove_file(entry.path()).is_ok() {
+            tracing::info!(file = name, "removed orphaned temp file");
+        }
     }
 }
 
@@ -485,6 +532,26 @@ mod tests {
         AppConfig::flush_persist_queue(std::time::Duration::from_secs(10));
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"v\":2}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sweep_removes_foreign_tmp_keeps_own_and_real_files() {
+        let dir = temp_dir("tmp-sweep");
+        std::fs::create_dir_all(&dir).unwrap();
+        let own_pid = std::process::id();
+        let foreign = dir.join(".state.json.tmp-99999-0");
+        let own = dir.join(format!(".state.json.tmp-{own_pid}-0"));
+        let real = dir.join("state.json");
+        for p in [&foreign, &own, &real] {
+            std::fs::write(p, b"{}").unwrap();
+        }
+
+        sweep_stale_tmp_in(&dir, own_pid);
+
+        assert!(!foreign.exists(), "foreign tmp should be swept");
+        assert!(own.exists(), "own in-flight tmp must survive");
+        assert!(real.exists(), "real state file must survive");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

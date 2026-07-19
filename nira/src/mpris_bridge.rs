@@ -102,15 +102,18 @@ async fn run(player: Player) -> Result<(), Box<dyn std::error::Error>> {
         if !changes.is_empty() {
             let _ = server.properties_changed(changes).await;
         }
-        // Always emit a Seeked-style position update so progress widgets
-        // (e.g. KDE's panel) stay in sync. mpris-server has a Position
-        // signal for this; without it clients poll position themselves.
-        let pos_micros = snap.position.as_micros() as i64;
-        let _ = server
-            .emit(MprisSignal::Seeked {
-                position: Time::from_micros(pos_micros),
-            })
-            .await;
+        // Emit a Seeked-style position update so progress widgets (e.g.
+        // KDE's panel) stay in sync — but only while actually playing.
+        // Paused/stopped position doesn't move, and the unconditional
+        // 500 ms signal was pure D-Bus spam around an idle app.
+        if snap.has_source && !snap.is_paused {
+            let pos_micros = snap.position.as_micros() as i64;
+            let _ = server
+                .emit(MprisSignal::Seeked {
+                    position: Time::from_micros(pos_micros),
+                })
+                .await;
+        }
     }
 }
 

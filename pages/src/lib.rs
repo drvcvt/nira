@@ -10,6 +10,5 @@ pub mod discover;
 pub mod home;
 pub mod library;
 pub mod parts;
-pub mod search;
 pub mod search_overlay;
 pub mod settings;

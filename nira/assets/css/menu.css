@@ -191,8 +191,11 @@
 .playback-toast-msg {
   min-width: 0;
   /* Errors carry reqwest chains — wrap instead of ellipsizing so the
-     whole message is always readable. */
+     whole message is always readable, and selectable despite the app-wide
+     user-select:none so it can be copied into a bug report. */
   overflow-wrap: anywhere;
+  user-select: text;
+  cursor: text;
 }
 
 .download-toast-close {

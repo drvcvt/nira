@@ -17,6 +17,7 @@ pub fn Bottombar() -> Element {
     let detail = use_detail();
     let mut queue_open = use_signal(|| false);
     let mut viz_open = use_viz_open().0;
+    let mute_stash = crate::hotkeys::use_mute_stash().0;
     // Track corresponding to the current queue index (full Track with
     // URI), needed for the heart toggle in the player-right cluster.
     let current_track = {
@@ -182,7 +183,9 @@ pub fn Bottombar() -> Element {
                 }
                 div { class: "player-copy",
                     div { class: "player-title-row",
-                        span { class: "player-title", "{title_text}" }
+                        // Tooltip carries the full text — the span ellipsizes
+                        // on long titles.
+                        span { class: "player-title", title: "{title_text}", "{title_text}" }
                     }
                     // Render the artist line as a clickable link when the
                     // current queue entry exposes an ArtistRef with a URI.
@@ -428,7 +431,24 @@ pub fn Bottombar() -> Element {
                     span { "{source_label}" }
                 }
                 div { class: "volume",
-                    i { class: "vol-icon fa-solid fa-volume-high" }
+                    button {
+                        class: "vol-mute-btn",
+                        title: if volume_pct == 0 { "Unmute (M)" } else { "Mute (M)" },
+                        "aria-label": if volume_pct == 0 { "Unmute" } else { "Mute" },
+                        onclick: {
+                            let player = player.clone();
+                            let mut stash = mute_stash;
+                            move |_| {
+                                let v = player.snapshot().volume;
+                                crate::hotkeys::toggle_mute(&player, v, &mut stash);
+                            }
+                        },
+                        if volume_pct == 0 {
+                            i { class: "vol-icon fa-solid fa-volume-xmark" }
+                        } else {
+                            i { class: "vol-icon fa-solid fa-volume-high" }
+                        }
+                    }
                     input {
                         r#type: "range",
                         class: "vol-slider",

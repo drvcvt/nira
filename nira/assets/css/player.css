@@ -646,11 +646,33 @@
   color: var(--text-muted);
 }
 
+.vol-mute-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--rs);
+  cursor: pointer;
+}
+
+.vol-mute-btn:hover {
+  background: var(--raise2);
+}
+
+.vol-mute-btn:hover .vol-icon {
+  color: var(--text);
+}
+
 .vol-icon {
   width: 18px;
   text-align: center;
   font-size: 0.85em;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 .vol-slider {

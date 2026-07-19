@@ -162,7 +162,7 @@
   padding: 0;
   opacity: 0;
   pointer-events: none;
-  background: rgba(0, 0, 0, 0.46);
+  background: var(--scrim);
   transition: opacity 150ms ease;
 }
 

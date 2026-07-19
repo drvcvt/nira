@@ -131,6 +131,10 @@ fn main() {
         })
         .init();
 
+    // Crash hygiene: drop atomic-write temp files a previous instance left
+    // behind (its rename never happened; they're garbage forever otherwise).
+    config::sweep_stale_tmp_files();
+
     // Loud panic hook — Dioxus' desktop runtime sometimes swallows panics
     // from spawned tasks (the webview keeps the main thread alive, but the
     // panicking task's stderr trace can get lost). Force a backtrace to
@@ -228,6 +232,11 @@ fn App() -> Element {
     // bridge and the overlay itself.
     let viz_open = use_signal(|| false);
     use_context_provider(|| components::visualizer::VizOpen(viz_open));
+
+    // Pre-mute volume stash — shared by the M-key bridge and the
+    // bottombar's speaker button.
+    let mute_stash = use_signal(|| None::<f32>);
+    use_context_provider(|| components::hotkeys::MuteStash(mute_stash));
 
     // Background prewarm — SC needs a client_id from the public web player.
     // Doing it now means the first search/Discovery call is ~1 s faster.
@@ -394,12 +403,16 @@ fn App() -> Element {
                             else if (key === 'arrowleft') {{ press('nira-key-prev'); acted = true; }}\
                             else if (key === 'arrowup') {{ press('nira-key-volup'); acted = true; }}\
                             else if (key === 'arrowdown') {{ press('nira-key-voldown'); acted = true; }}\
+                        }} else if (!mod && !e.altKey && e.shiftKey) {{\
+                            if (key === 'arrowright') {{ press('nira-key-seek-fwd'); acted = true; }}\
+                            else if (key === 'arrowleft') {{ press('nira-key-seek-back'); acted = true; }}\
                         }} else if (!mod && !e.altKey && !e.shiftKey) {{\
                             if (isSpace) {{ press('nira-key-playpause'); acted = true; }}\
                             else if (key === 's') {{ press('nira-key-shuffle'); acted = true; }}\
                             else if (key === 'r') {{ press('nira-key-repeat'); acted = true; }}\
                             else if (key === 'l') {{ press('nira-key-like'); acted = true; }}\
                             else if (key === 'v') {{ press('nira-key-viz'); acted = true; }}\
+                            else if (key === 'm') {{ press('nira-key-mute'); acted = true; }}\
                             else if (key === 'arrowup') {{ press('nira-key-volup'); acted = true; }}\
                             else if (key === 'arrowdown') {{ press('nira-key-voldown'); acted = true; }}\
                         }}\

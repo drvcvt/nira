@@ -106,6 +106,11 @@ struct PersistedQueue {
     current_index: Option<usize>,
     shuffle: bool,
     repeat: RepeatMode,
+    /// Order from before shuffle was switched on. Without persisting it, a
+    /// shuffled queue restored from disk could never be un-shuffled —
+    /// toggling shuffle off just kept the scramble.
+    #[serde(default)]
+    pre_shuffle: Option<Vec<Track>>,
 }
 
 /// Companion file to [`PersistedQueue`]: where inside the current entry
@@ -1262,10 +1267,12 @@ pub fn install(
                 let mut current_sig = current_index;
                 let mut shuffle_sig = shuffle_enabled;
                 let mut repeat_sig = repeat_mode;
+                let mut pre_shuffle_sig = pre_shuffle;
                 entries_sig.set(saved.entries);
                 current_sig.set(Some(idx));
                 shuffle_sig.set(saved.shuffle);
                 repeat_sig.set(saved.repeat);
+                pre_shuffle_sig.set(saved.pre_shuffle.filter(|_| saved.shuffle));
             }
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "queue restore: parse failed; starting empty"),
@@ -1283,6 +1290,7 @@ pub fn install(
             current_index: *current_index.read(),
             shuffle: *shuffle_enabled.read(),
             repeat: *repeat_mode.read(),
+            pre_shuffle: pre_shuffle.read().clone(),
         };
         // Diagnosis for "queue entries vanish": every shrink is logged with
         // both lengths so nira.log shows which mutation ate them.
@@ -1406,9 +1414,14 @@ pub fn install(
                     AdvanceState::Playing if snap.has_source => {
                         maybe_prefetch_gapless(&queue, &snap);
                     }
-                    AdvanceState::Playing if !snap.has_source && !snap.is_paused => {
+                    AdvanceState::Playing if !snap.has_source => {
                         // Backend dropped its source while we expected it to
                         // be playing. Treat as a natural end and advance.
+                        // Deliberately ignores is_paused: a pause that lands
+                        // in the instant the sink drains applies to a source
+                        // that no longer exists, and gating on it wedged
+                        // auto-advance for the rest of the session (load
+                        // paths call rodio.play(), so advancing un-pauses).
                         let will_advance =
                             queue.has_next() || *queue.repeat_mode.peek() != RepeatMode::Off;
                         tracing::info!(
