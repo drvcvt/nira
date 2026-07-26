@@ -1,0 +1,304 @@
+//! Listen-together: publish what we play, or follow what the host plays.
+//!
+//! The `together` crate owns the connection and the clock offset. This is
+//! where the policy lives, because the policy is really a statement about the
+//! queue and it belongs next to the queue that enforces it.
+//!
+//! **Anchor, don't chase.** Two machines playing the same file from local disk
+//! drift apart only by their crystals — tens of ppm, under 10 ms over a track.
+//! So the steady state is: line up once, then leave it alone. Continuous
+//! correction would be fighting noise, because the position we can read leads
+//! the DAC by an unmodelled output buffer and arrives through a 200 ms poll.
+//!
+//! What the periodic comparison is for is *discontinuities* — a buffer
+//! underrun, a stall, a deliberate pause. Those do not decay; the sample
+//! counter simply stops while the wall clock does not, so the lag is permanent
+//! until something corrects it. Hence the thresholds below rather than no
+//! comparison at all.
+
+use std::time::Duration;
+
+use dioxus::core::spawn_forever;
+use dioxus::prelude::*;
+use provider_api::{ArtistRef, ArtistUri, ProviderId, Track, TrackUri};
+use together::{RemoteNow, Role, Together, TogetherSnapshot};
+
+use crate::queue::UseQueue;
+use crate::use_local_library::UseLocalLibrary;
+
+/// Below this, do nothing. Two peers in different rooms cannot perceive it,
+/// and every boundary that carries a gap re-anchors anyway.
+const DEAD_ZONE: Duration = Duration::from_millis(100);
+
+/// Above this, something discontinuous happened — correct now rather than
+/// waiting for a boundary that may be minutes away.
+const RESYNC: Duration = Duration::from_millis(2000);
+
+/// How often we compare. Deliberately slower than the queue watcher: this is
+/// an alarm, not a control loop.
+const COMPARE: Duration = Duration::from_secs(5);
+
+/// Loop cadence while a session is up.
+const TICK: Duration = Duration::from_millis(500);
+
+/// Loop cadence while there is no session. This task lives for the whole
+/// process and is idle for almost all of it, so the common case gets the
+/// cheap cadence.
+const IDLE_TICK: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy)]
+pub struct UseTogether {
+    together: Signal<Together>,
+    pub snapshot: Signal<TogetherSnapshot>,
+    /// True while we are following a host. The queue watcher reads this and
+    /// stops advancing on its own — otherwise both ends walk the queue at the
+    /// same track end and race each other.
+    pub following: Signal<bool>,
+}
+
+impl UseTogether {
+    pub fn handle(&self) -> Together {
+        self.together.peek().clone()
+    }
+
+    pub fn host(&self, name: String) {
+        self.handle().host(name);
+    }
+
+    pub fn join(&self, code: String, name: String) {
+        self.handle().join(code, name);
+    }
+
+    pub fn leave(&self) {
+        self.handle().leave();
+    }
+}
+
+pub fn use_together() -> UseTogether {
+    use_context::<UseTogether>()
+}
+
+/// Build the wire payload from what the player is actually doing. `None` when
+/// nothing is loaded, which reads on the guest side as "host stopped".
+fn describe(queue: &UseQueue, player: &player::Player) -> Option<RemoteNow> {
+    let idx = (*queue.current_index.peek())?;
+    let entries = queue.entries.peek();
+    // Deliberately the *queue entry*, not the player's now-playing: those can
+    // differ, and the entry is the identity the guest has to resolve against
+    // its own library.
+    let track = entries.get(idx)?.clone();
+    drop(entries);
+
+    let snap = player.snapshot();
+    let (pos, _at) = player.position_at();
+    Some(RemoteNow {
+        track_uri: track.uri.0.clone(),
+        artist: track
+            .artists
+            .first()
+            .map(|a| a.name.clone())
+            .unwrap_or_default(),
+        title: track.title.clone(),
+        duration_ns: track.duration.as_nanos() as u64,
+        pos_ns: pos.as_nanos() as u64,
+        // Overwritten at send time by the session loop; the value here would
+        // already be stale by the time it goes out.
+        at_ns: 0,
+        playing: !snap.is_paused && snap.has_source,
+        playback_id: snap.playback_id,
+    })
+}
+
+/// The host's track as something [`crate::matching::find_strict_match`] can
+/// compare — it keys on normalised (artist, title) plus duration, none of
+/// which needs a real provider identity.
+fn as_match_target(now: &RemoteNow) -> Track {
+    Track {
+        uri: TrackUri(now.track_uri.clone()),
+        provider: ProviderId::Local,
+        title: now.title.clone(),
+        artists: vec![ArtistRef {
+            uri: ArtistUri(String::new()),
+            name: now.artist.clone(),
+        }],
+        album: None,
+        duration: Duration::from_nanos(now.duration_ns),
+        cover_url: None,
+        mbid: None,
+        added_at: None,
+    }
+}
+
+/// Where the host is *now*, extrapolated from its last announcement. `at_ns`
+/// has already been translated onto our clock by the `together` crate.
+fn expected_position(t: &Together, now: &RemoteNow) -> Duration {
+    let elapsed = t.now_ns().saturating_sub(now.at_ns);
+    let pos = if now.playing {
+        now.pos_ns.saturating_add(elapsed)
+    } else {
+        now.pos_ns
+    };
+    Duration::from_nanos(pos)
+}
+
+pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocalLibrary) {
+    let together = use_signal(Together::new);
+    let mut snapshot = use_signal(|| together.peek().snapshot());
+    let mut following = use_signal(|| false);
+
+    use_context_provider(move || UseTogether {
+        together,
+        snapshot,
+        following,
+    });
+
+    // Root-scoped: the session outlives whatever page started it.
+    spawn_forever(async move {
+        // Tracks the playback we last lined ourselves up with, so a repeat of
+        // the same track (same uri, new playback_id) still re-anchors.
+        let mut anchored: Option<u64> = None;
+        let mut since_compare = Duration::ZERO;
+        // Set the moment we adopt a track, cleared once we have actually
+        // lined up with the host. `play_track` always starts at zero, so
+        // joining a host who is 90 seconds in needs one deliberate seek —
+        // without it the guest would restart the track and only converge when
+        // the periodic comparison eventually trips the resync threshold.
+        let mut pending_align = false;
+
+        let mut tick = IDLE_TICK;
+        loop {
+            tokio::time::sleep(tick).await;
+            let t = together.peek().clone();
+            let snap = t.snapshot();
+            let role = snap.role;
+            tick = if role == Role::Off { IDLE_TICK } else { TICK };
+
+            if *snapshot.peek() != snap {
+                snapshot.set(snap.clone());
+            }
+            let is_guest = role == Role::Guest;
+            if *following.peek() != is_guest {
+                following.set(is_guest);
+            }
+            // The watcher reads this every tick; setting it here keeps the
+            // gate and the role from ever disagreeing.
+            queue.set_follow_mode(is_guest);
+
+            match role {
+                Role::Host => {
+                    t.publish(describe(&queue, &player));
+                    anchored = None;
+                }
+                Role::Off => anchored = None,
+                Role::Guest => {
+                    let Some(target) = snap.target.clone() else {
+                        continue;
+                    };
+
+                    // New playback on the host — load our own copy and line up
+                    // from scratch. Position is not comparable across this.
+                    if anchored != Some(target.playback_id) {
+                        if adopt(&queue, &local, &target) {
+                            anchored = Some(target.playback_id);
+                            since_compare = Duration::ZERO;
+                            pending_align = true;
+                        }
+                        continue;
+                    }
+
+                    // Land on the host's position as soon as the decoder is
+                    // up. Until then there is nothing to seek.
+                    if pending_align {
+                        if player.snapshot().has_source {
+                            let to = expected_position(&t, &target);
+                            tracing::info!(at_ms = to.as_millis(), "together: aligning to host");
+                            player.seek(to);
+                            pending_align = false;
+                            since_compare = Duration::ZERO;
+                        }
+                        continue;
+                    }
+
+                    since_compare += TICK;
+                    if since_compare < COMPARE {
+                        continue;
+                    }
+                    since_compare = Duration::ZERO;
+                    correct(&player, &t, &target);
+                }
+            }
+        }
+    });
+}
+
+/// Start playing the host's track locally. Step 1 only handles the case where
+/// we already own it; anything else is reported and skipped rather than
+/// silently leaving the guest on the previous track.
+fn adopt(queue: &UseQueue, local: &UseLocalLibrary, target: &RemoteNow) -> bool {
+    let wanted = as_match_target(target);
+    let library = local.tracks.peek();
+    let Some(found) = crate::matching::find_strict_match(&wanted, &library).cloned() else {
+        tracing::info!(
+            title = %target.title,
+            artist = %target.artist,
+            "together: host is playing something that is not in our library"
+        );
+        return false;
+    };
+    drop(library);
+    queue.play_track(found);
+    true
+}
+
+/// Compare and, only if the gap is real, correct.
+///
+/// The two directions cost very different amounts, so they are handled
+/// differently. Falling behind is fixed with a *forward* seek, which every
+/// format supports — the expensive decoder-rebuild path in `Player::seek` is
+/// the one for backward seeks. Running ahead (which only happens when the host
+/// stalled) is fixed with a short pause instead, which costs nothing at all
+/// and never touches the decoder.
+fn correct(player: &player::Player, t: &Together, target: &RemoteNow) {
+    let snap = player.snapshot();
+    if !snap.has_source {
+        return;
+    }
+    let expected = expected_position(t, target);
+    let (mine, _) = player.position_at();
+
+    // Play/pause first: correcting a position while the transports disagree
+    // would measure a gap that is about to close on its own.
+    let we_are_playing = !snap.is_paused;
+    if target.playing != we_are_playing {
+        if target.playing {
+            player.resume();
+        } else {
+            player.pause();
+        }
+        return;
+    }
+
+    let behind = expected.checked_sub(mine);
+    let ahead = mine.checked_sub(expected);
+
+    match (behind, ahead) {
+        (Some(d), _) if d >= RESYNC => {
+            tracing::info!(behind_ms = d.as_millis(), "together: resyncing forward");
+            player.seek(expected);
+        }
+        (_, Some(d)) if d >= RESYNC => {
+            // Wait for the host to catch up to us rather than seeking back.
+            tracing::info!(ahead_ms = d.as_millis(), "together: holding for the host");
+            player.pause();
+            let p = player.clone();
+            spawn_forever(async move {
+                tokio::time::sleep(d).await;
+                p.resume();
+            });
+        }
+        (Some(d), _) if d > DEAD_ZONE => {
+            tracing::debug!(behind_ms = d.as_millis(), "together: drift, will re-anchor");
+        }
+        _ => {}
+    }
+}

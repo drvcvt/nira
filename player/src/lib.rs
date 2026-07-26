@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use rodio::source::Source;
@@ -1115,6 +1115,42 @@ impl Player {
         {
             b.set_volume(v);
         }
+    }
+
+    /// Playback position together with the instant it was sampled.
+    ///
+    /// [`PlayerSnapshot::position`] carries no timestamp, and by the time it
+    /// reaches a caller it has been through a 200 ms poll and a `PartialEq`
+    /// dedup — fine for a progress bar, useless for deciding whether two
+    /// machines are playing the same moment. Listen-together compares against
+    /// a remote clock, so it needs the pair taken together.
+    ///
+    /// Two caveats that no caller can work around from outside:
+    /// rodio's position counts *decoded* samples, so it leads what the DAC is
+    /// actually emitting by the output buffer (default `sample_rate / 20`,
+    /// i.e. 50 ms, plus whatever the server adds); and on the Spotify path it
+    /// is extrapolated from the last librespot event, which arrives at 500 ms
+    /// intervals. Both are systematic, so two peers on the same backend cancel
+    /// out — a peer on the *other* backend does not, which is what the manual
+    /// offset is for.
+    pub fn position_at(&self) -> (Duration, Instant) {
+        let active = *self.active.read().unwrap_or_else(|p| p.into_inner());
+        // Sample the clock as close to the position read as possible, and on
+        // the same side of it every time — a consistent bias cancels in the
+        // comparison, an inconsistent one does not.
+        let at = Instant::now();
+        let position = match active {
+            Active::Spotify => self
+                .spotify
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+                .map(|b| Duration::from_millis(b.snapshot().position_ms as u64))
+                .unwrap_or(Duration::ZERO),
+            Active::Rodio => self.rodio.get_pos(),
+            Active::None => Duration::ZERO,
+        };
+        (position, at)
     }
 
     pub fn snapshot(&self) -> PlayerSnapshot {

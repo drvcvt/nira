@@ -1,0 +1,18 @@
+[package]
+name = "together"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# QUIC + NAT traversal between endpoints identified by their public key.
+# Every connection is end-to-end encrypted and mutually authenticated by
+# construction, which is the whole reason this is not a hand-rolled socket.
+iroh = "1"
+# Compact, no_std-friendly framing. The wire format is ours and versioned by
+# the ALPN, so we want small and stable rather than self-describing.
+postcard = { version = "1", features = ["alloc"] }
+base64 = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util"] }

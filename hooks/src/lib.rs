@@ -31,6 +31,7 @@ pub mod use_listenbrainz_feed;
 pub mod use_player;
 pub mod use_recommendations;
 pub mod use_search;
+pub mod use_together;
 
 pub use matching::{find_strict_match, match_key, track_match_key};
 pub use queue::{RadioStatus, RepeatMode, UseQueue, use_queue};
@@ -51,6 +52,7 @@ pub use use_recommendations::{
     use_recommendations,
 };
 pub use use_search::{UseSearch, use_search};
+pub use use_together::{UseTogether, use_together};
 
 // Re-export the player- and provider-side types pages/components consume so
 // they never need to depend on those crates directly.
@@ -157,6 +159,16 @@ impl AppContext {
         // Local-file library — scans config.library_root once on boot,
         // re-scannable from Settings/Library. Empty until a folder is set.
         use_local_library::install_local_library(config_sig);
+
+        // Listen-together session. Publishes what we play while hosting and
+        // drives the player to match the host while following. Installed last
+        // because it reads the queue and library contexts the calls above
+        // just provided.
+        use_together::install_together(
+            queue::use_queue(),
+            player.clone(),
+            use_local_library::use_local_library(),
+        );
 
         // Background scrobble watcher. No-op until the user pastes a
         // ListenBrainz token in Settings.

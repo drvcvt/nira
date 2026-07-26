@@ -13,6 +13,7 @@ members = [
     "provider-local",
     "enrichment",
     "discovery",
+    "together",
 ]
 
 # Domain-split workspace. Each crate owns its own reactivity surface so a
@@ -57,6 +58,7 @@ provider-api = { path = "./provider-api" }
 provider-soundcloud = { path = "./provider-soundcloud" }
 provider-spotify = { path = "./provider-spotify" }
 provider-local = { path = "./provider-local" }
+together = { path = "./together" }
 enrichment = { path = "./enrichment" }
 discovery = { path = "./discovery" }
 

@@ -1,8 +1,10 @@
-//! Provider credentials & service status: Spotify, SoundCloud, ListenBrainz.
+//! Provider credentials & service status: Spotify, SoundCloud, ListenBrainz,
+//! plus the listen-together session.
 
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
-use hooks::{use_config, use_soundcloud, use_spotify};
+use hooks::{use_config, use_soundcloud, use_spotify, use_together};
+use together::Role;
 
 use super::{SettingsCard, StatusPill};
 
@@ -44,6 +46,8 @@ pub(super) fn ConnectionsSettings() -> Element {
         section { class: "settings-group settings-stack",
             h2 { "Connections" }
             p { class: "hint", "Provider credentials and service status." }
+
+            ListenTogetherCard {}
 
             SettingsCard {
                 title: "Spotify".to_string(),
@@ -243,6 +247,119 @@ pub(super) fn ConnectionsSettings() -> Element {
                 }
                 if let Some(msg) = lb_status.read().as_ref() {
                     p { class: "settings-status", "{msg}" }
+                }
+            }
+        }
+    }
+}
+
+/// Listen together: host a session or join one from a share code.
+///
+/// The code is the host's iroh address — an ed25519 public key plus relay and
+/// direct-address hints. It is not a secret in the "keep it safe" sense, but
+/// anyone holding it can attempt to connect, so treat it like a party invite
+/// rather than a public link.
+#[component]
+fn ListenTogetherCard() -> Element {
+    let together = use_together();
+    let config = use_config();
+    let snap = together.snapshot.read().clone();
+    let mut code_draft = use_signal(String::new);
+
+    let display_name = config
+        .read()
+        .listenbrainz_username
+        .clone()
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| "a friend".to_string());
+
+    let ticket = snap.ticket.clone();
+    let status = snap.status.clone();
+    let peers = snap.peers.join(", ");
+
+    rsx! {
+        SettingsCard {
+            title: "Listen together".to_string(),
+            icon: "fa-solid fa-user-group".to_string(),
+            p { class: "settings-card-copy",
+                "Play the same thing at the same time with a friend, peer to peer. "
+                "The connection is end-to-end encrypted and goes directly between "
+                "your machines where the network allows it. Step one syncs tracks "
+                "you both already have in your local library."
+            }
+
+            if let Some(code) = ticket {
+                div { class: "settings-row",
+                    label { r#for: "lt-code", "Your session code" }
+                    input {
+                        id: "lt-code",
+                        r#type: "text",
+                        readonly: true,
+                        value: "{code}",
+                        onclick: move |_| {
+                            dioxus::document::eval(
+                                "document.getElementById('lt-code').select();"
+                            );
+                        },
+                    }
+                }
+                p { class: "hint", "Send this to whoever should listen along." }
+            } else if snap.role == Role::Off {
+                div { class: "settings-row",
+                    label { r#for: "lt-join", "Session code" }
+                    input {
+                        id: "lt-join",
+                        r#type: "text",
+                        placeholder: "paste a code from a friend",
+                        value: "{code_draft}",
+                        oninput: move |e| code_draft.set(e.value()),
+                    }
+                }
+            }
+
+            if !peers.is_empty() {
+                p { class: "settings-status", "Connected: {peers}" }
+            }
+            if !status.is_empty() {
+                p { class: "settings-status",
+                    "{status}"
+                    if let Some(rtt) = snap.rtt_ms {
+                        " · {rtt} ms round trip"
+                    }
+                }
+            }
+
+            div { class: "settings-actions",
+                if snap.role == Role::Off {
+                    Button {
+                        label: "Host a session".to_string(),
+                        icon: Some("fa-solid fa-tower-broadcast".to_string()),
+                        variant: ButtonVariant::Primary,
+                        size: ButtonSize::Sm,
+                        on_click: {
+                            let name = display_name.clone();
+                            move |_| together.host(name.clone())
+                        },
+                    }
+                    Button {
+                        label: "Join".to_string(),
+                        icon: Some("fa-solid fa-right-to-bracket".to_string()),
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::Sm,
+                        disabled: code_draft.read().trim().is_empty(),
+                        on_click: {
+                            let name = display_name.clone();
+                            move |_| together.join(code_draft.read().trim().to_string(), name.clone())
+                        },
+                    }
+                } else {
+                    Button {
+                        label: "Leave".to_string(),
+                        icon: Some("fa-solid fa-right-from-bracket".to_string()),
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::Sm,
+                        on_click: move |_| together.leave(),
+                    }
                 }
             }
         }

@@ -68,6 +68,11 @@ pub struct UseQueue {
     /// Consumed on the first successful load; only seeks when that load is
     /// the entry the position belongs to.
     resume_hint: Signal<Option<(String, Duration)>>,
+    /// Set while we are following a listen-together host. The watcher stops
+    /// walking the queue on its own: the host announces the next track and
+    /// the follower adopts it, and two ends advancing at the same track end
+    /// race each other.
+    follow_mode: Signal<bool>,
     sc: Arc<SoundCloudProvider>,
     sp: Arc<SpotifyProvider>,
     player: Player,
@@ -167,6 +172,15 @@ impl UseQueue {
         shuffle.set(true);
         let idx = rand::rng().random_range(0..tracks.len());
         self.play_list(tracks, idx);
+    }
+
+    /// Hand the watcher its follow-mode gate. Owned here rather than in
+    /// `use_together` so the queue never has to know that crate exists.
+    pub fn set_follow_mode(&self, on: bool) {
+        let mut f = self.follow_mode;
+        if *f.peek() != on {
+            f.set(on);
+        }
     }
 
     pub fn next(&self) {
@@ -1111,6 +1125,7 @@ pub fn install(
     let advance_state = use_signal(|| AdvanceState::Idle);
     let load_generation = use_signal(|| 0u64);
     let pre_shuffle = use_signal(|| None::<Vec<Track>>);
+    let follow_mode = use_signal(|| false);
     let error = use_signal(|| None::<String>);
     let is_loading_track = use_signal(|| false);
     let radio_status = use_signal(|| RadioStatus::Idle);
@@ -1130,6 +1145,7 @@ pub fn install(
         radio_status,
         gapless_prefetched,
         resume_hint,
+        follow_mode,
         sc,
         sp,
         player: player.clone(),

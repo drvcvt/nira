@@ -7,6 +7,7 @@ license = "Apache-2.0"
 [dependencies]
 dioxus = { workspace = true }
 player = { workspace = true }
+together = { workspace = true }
 config = { workspace = true }
 provider-api = { workspace = true }
 provider-soundcloud = { workspace = true }
