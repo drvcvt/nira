@@ -220,3 +220,6 @@ mega-state failure mode:
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+Bundled fonts, icons and the visualiser engine are third-party and keep their
+own licences — see [THIRD-PARTY.md](THIRD-PARTY.md).
