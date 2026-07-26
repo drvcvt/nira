@@ -31,6 +31,13 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
         "search-overlay"
     };
 
+    // Hand focus back on close. Closing reverts the overlay to
+    // `visibility: hidden`, which blurs the focused input to <body> — and a
+    // focused body means the shell's Rust onkeydown stops receiving anything.
+    use_effect(move || {
+        components::overlay_focus(*open.read(), ".search-overlay.open .searchbar-input");
+    });
+
     rsx! {
         div {
             class: "{overlay_class}",
@@ -44,6 +51,7 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
                 class: "search-overlay-backdrop",
                 r#type: "button",
                 tabindex: "-1",
+                "aria-hidden": "true",
                 onclick: move |_| open.set(false),
             }
             div { class: "search-overlay-panel",

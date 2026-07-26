@@ -366,7 +366,18 @@ fn DiscoveryRow(result: DiscoveryResult, on_play: EventHandler<()>) -> Element {
         li {
             class: "discovery-row-v2",
             title: "{rationale}",
+            // Same keyboard path as TrackRow in parts.rs: plain <li>s need an
+            // explicit tab stop and an Enter mirror, or discovery results are
+            // unreachable without a mouse.
+            tabindex: "0",
+            role: "button",
             onclick: move |_| on_play.call(()),
+            onkeydown: move |e: KeyboardEvent| {
+                if e.key() == Key::Enter {
+                    e.prevent_default();
+                    on_play.call(());
+                }
+            },
             oncontextmenu: {
                 let ctx_target = ctx_target.clone();
                 move |e: Event<MouseData>| {

@@ -5,8 +5,12 @@
 use std::time::{Duration, Instant};
 
 use dioxus::prelude::*;
-use hooks::{RadioStatus, RepeatMode, Track, use_ctx_menu, use_detail, use_likes, use_player, use_queue};
+use hooks::{
+    RadioStatus, RepeatMode, Track, fmt_time, use_ctx_menu, use_detail, use_likes, use_player,
+    use_queue,
+};
 
+use crate::cover::use_cover_open;
 use crate::visualizer::use_viz_open;
 
 #[component]
@@ -17,7 +21,14 @@ pub fn Bottombar() -> Element {
     let detail = use_detail();
     let mut queue_open = use_signal(|| false);
     let mut viz_open = use_viz_open().0;
+    let mut cover_open = use_cover_open().0;
     let mute_stash = crate::hotkeys::use_mute_stash().0;
+    // Volume comes from config, not from the player snapshot: the snapshot is
+    // written by a 200/500 ms poller, so rendering the slider off it made the
+    // thumb fight the drag, and the mute button stashed a stale level (drag
+    // down, mute within 200 ms, unmute → jumps back to the OLD volume).
+    // `set_volume` writes config synchronously — same source the M-key uses.
+    let config = hooks::use_config();
     // Track corresponding to the current queue index (full Track with
     // URI), needed for the heart toggle in the player-right cluster.
     let current_track = {
@@ -78,7 +89,7 @@ pub fn Bottombar() -> Element {
         });
     }
     let snap = player.snapshot();
-    let volume_pct = (snap.volume * 100.0).round() as i32;
+    let volume_pct = (config.read().volume * 100.0).round() as i32;
 
     let np = snap.now_playing.clone();
     // While the next queue entry is being fetched (SC download, librespot
@@ -174,11 +185,20 @@ pub fn Bottombar() -> Element {
     rsx! {
         footer { class: "player",
             div { class: "player-left",
-                div { class: "player-art",
+                // The art doubles as the fullscreen-player trigger; hover
+                // shows the expand affordance (styles in cover.css).
+                button {
+                    class: "player-art",
+                    title: "Full-screen player",
+                    "aria-label": "Open full-screen player",
+                    onclick: move |_| cover_open.set(true),
                     if !cover_url.is_empty() {
                         img { src: "{cover_url}", alt: "", loading: "lazy", decoding: "async" }
                     } else {
                         i { class: "fa-solid fa-music" }
+                    }
+                    span { class: "player-art-expand",
+                        i { class: "fa-solid fa-expand" }
                     }
                 }
                 div { class: "player-copy",
@@ -319,11 +339,11 @@ pub fn Bottombar() -> Element {
                     }
                     div {
                         class: "player-progress",
-                        style: "--progress: {progress_pct}%;",
+                        style: "--seek-pct: {progress_pct}%;",
                         // Real <input type=range> so we get drag, click,
                         // keyboard arrows, and accessibility for free. The
-                        // track + fill + thumb are all styled in main.css
-                        // off the `--progress` custom property.
+                        // track + fill + thumb are all styled in player.css
+                        // off the `--seek-pct` custom property.
                         input {
                             r#type: "range",
                             class: "player-progress-input",
@@ -401,6 +421,7 @@ pub fn Bottombar() -> Element {
                     class: if *viz_open.read() { "player-viz-btn open" } else { "player-viz-btn" },
                     title: "Visualizer (V)",
                     "aria-label": "Visualizer",
+                    "aria-pressed": if *viz_open.read() { "true" } else { "false" },
                     onclick: move |_| {
                         let now = *viz_open.peek();
                         viz_open.set(!now);
@@ -439,7 +460,7 @@ pub fn Bottombar() -> Element {
                             let player = player.clone();
                             let mut stash = mute_stash;
                             move |_| {
-                                let v = player.snapshot().volume;
+                                let v = config.read().volume;
                                 crate::hotkeys::toggle_mute(&player, v, &mut stash);
                             }
                         },
@@ -699,8 +720,3 @@ fn QueueRow(track: Track, index: usize, current: bool) -> Element {
     }
 }
 
-fn fmt_time(secs: u64) -> String {
-    let m = secs / 60;
-    let s = secs % 60;
-    format!("{m}:{s:02}")
-}

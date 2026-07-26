@@ -225,6 +225,9 @@ fn ArtistTabs(view: hooks::ArtistView, active: Signal<ArtistTab>) -> Element {
                 button {
                     class: if *active.read() == tab { "artist-tab active" } else { "artist-tab" },
                     role: "tab",
+                    // role="tab" without aria-selected is worse than a plain
+                    // button — every tab announces identically.
+                    "aria-selected": if *active.read() == tab { "true" } else { "false" },
                     onclick: move |_| active.set(tab),
                     span { class: "artist-tab-label", "{tab.label()}" }
                     if count > 0 && tab != ArtistTab::Related {

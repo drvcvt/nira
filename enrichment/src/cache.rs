@@ -1,10 +1,15 @@
 //! TTL cache for enrichment lookups.
 //!
-//! Disk-backed: loaded once at startup, written atomically on every `put`.
-//! Cache file lives under `cache_dir()/enrichment-cache.json`. Entries past
-//! their TTL are simply skipped on read and overwritten on the next miss; we
-//! don't eagerly compact, so the file can grow a bit between launches, but
-//! it's tiny in practice (~10KB after weeks of normal use).
+//! Disk-backed: loaded once at startup, written atomically on every `put`
+//! via the background persist FIFO. Cache file lives under
+//! `cache_dir()/enrichment-cache.json`.
+//!
+//! Expired entries are dropped when the snapshot is built, so the file tracks
+//! live entries rather than growing forever. It previously only skipped them
+//! on read — since keys are per-recording they almost never recur, so the
+//! file reached 200KB+ and every `put` rewrote and fsynced all of it on the
+//! UI thread (a Home refresh is ~40 puts, i.e. ~8MB and 40 fsyncs per click,
+//! scaling O(n²) in lookups).
 //!
 //! Keys are arbitrary strings namespaced by the caller (e.g.
 //! `"mb:recording:Bowie|Heroes|3"`); values are caller-serialised JSON so the
@@ -105,20 +110,29 @@ impl TtlCache {
         }
     }
 
-    /// Write the current map atomically. Called after each `put` — the cache
-    /// is small enough (~10KB) that the cost is sub-millisecond and we get
-    /// "survives a kill at any moment" for free.
+    /// Write the current map atomically. Called after each `put`, so it goes
+    /// through the background persist FIFO (`_bg`) rather than the
+    /// fsync-on-the-caller path — `put` is awaited from Dioxus tasks polled on
+    /// the main thread, so the synchronous variant froze the UI.
+    ///
+    /// Expired entries are dropped here rather than only on read; that is the
+    /// only thing keeping the file from growing without bound.
     fn flush(&self) {
         let Some(path) = self.path.as_ref() else {
             return;
         };
+        let cutoff = now_unix().saturating_sub(self.ttl.as_secs());
         let snapshot = match self.inner.lock() {
             Ok(map) => OnDisk {
-                entries: map.clone(),
+                entries: map
+                    .iter()
+                    .filter(|(_, e)| e.inserted_at_unix >= cutoff)
+                    .map(|(k, e)| (k.clone(), e.clone()))
+                    .collect(),
             },
             Err(_) => return,
         };
-        if let Err(e) = config::AppConfig::atomic_write_json(path, &snapshot) {
+        if let Err(e) = config::AppConfig::atomic_write_json_bg(path.clone(), &snapshot) {
             tracing::warn!(error = %e, "enrichment cache flush failed");
         }
     }

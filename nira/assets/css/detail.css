@@ -130,29 +130,6 @@
   align-items: center;
 }
 
-.banner-play-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--chip-on);
-  color: var(--chip-on-fg);
-  border: none;
-  padding: 10px 18px;
-  border-radius: var(--rs);
-  font-weight: 600;
-  cursor: pointer;
-  font: inherit;
-}
-
-.banner-play-btn:hover {
-  background: color-mix(in srgb, var(--chip-on) 85%, var(--bg));
-}
-
-.banner-play-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 .banner-link {
   color: var(--text-muted);
   font-size: 12px;
@@ -216,9 +193,14 @@
   gap: 12px;
 }
 
-/* Album tracklist — no cover column, so the title gets the full width. */
+/* Album tracklist — no cover column, so the title gets the full width.
+   Needs its own `display: grid`: the base .track-row is flex (see
+   tracks.css), so the template alone was inert. */
 .album-track-row {
+  display: grid;
   grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 12px;
 }
 
 .album-page .track-list {
@@ -445,7 +427,10 @@
 .album-byline-sep { color: var(--text-faint); }
 
 .track-duration {
-  color: var(--text-faint);
+  /* No `color` here — detail.css loads after tracks.css, so re-declaring it
+     silently reverted that file's documented WCAG fix (--text-faint measures
+     2.3:1 light / 2.8:1 dark) on every page, not just detail pages. Only the
+     detail-page size override belongs here. */
   font-variant-numeric: tabular-nums;
   font-size: 12px;
 }

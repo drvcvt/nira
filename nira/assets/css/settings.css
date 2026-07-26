@@ -338,18 +338,6 @@
   letter-spacing: 0.08em;
 }
 
-.playback-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
-}
-
-.settings-info-tile {
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface);
-}
 
 .settings-info-label {
   display: block;
@@ -358,18 +346,6 @@
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.09em;
-}
-
-.settings-info-tile strong {
-  display: block;
-  margin-bottom: 4px;
-  color: var(--text);
-}
-
-.settings-info-copy {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  line-height: 1.45;
 }
 
 .settings-data-row {

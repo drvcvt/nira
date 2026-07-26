@@ -97,18 +97,11 @@ pub fn ContextMenu() -> Element {
     use_effect(move || {
         let open = ctx.current.read().is_some();
         show_playlists.set(false);
-        if open {
-            // Seed the roving keyboard focus on the first item once the
-            // menu exists in the DOM. Mouse users don't see a ring
-            // (focus-visible heuristics), keyboard users can arrow away
-            // immediately.
-            document::eval(
-                "requestAnimationFrame(function() {\
-                    var el = document.querySelector('.ctx-menu .ctx-item');\
-                    if (el) el.focus();\
-                });",
-            );
-        }
+        // Seed the roving keyboard focus on the first item once the menu
+        // exists in the DOM, and hand focus back to whatever had it when the
+        // menu closes — otherwise Escape drops focus on <body> and the next
+        // Tab restarts from the sidebar instead of the row you right-clicked.
+        crate::overlay_focus(open, ".ctx-menu .ctx-item");
     });
     let current = ctx.current.read().clone();
 
@@ -505,7 +498,7 @@ fn PlaylistPicker(
                     onclick: move |e: Event<MouseData>| e.stop_propagation(),
                     oninput: move |e: FormEvent| name.set(e.value()),
                     onkeydown: move |e: Event<KeyboardData>| {
-                        if e.key() == Key::Enter {
+                        if e.key() == Key::Enter && !name.peek().trim().is_empty() {
                             on_create.call(name.peek().clone());
                         }
                     },
@@ -513,7 +506,11 @@ fn PlaylistPicker(
                 button {
                     class: "ctx-newpl-btn",
                     title: "Create playlist with this item",
-                    onclick: move |_| on_create.call(name.peek().clone()),
+                    onclick: move |_| {
+                        if !name.peek().trim().is_empty() {
+                            on_create.call(name.peek().clone());
+                        }
+                    },
                     i { class: "fa-solid fa-plus" }
                 }
             }

@@ -201,3 +201,34 @@ pub fn use_discovery_engine() -> Arc<DiscoveryEngine> {
 pub fn use_config() -> Signal<AppConfig> {
     use_context::<Signal<AppConfig>>()
 }
+
+/// `m:ss`, or `h:mm:ss` once a track runs past an hour.
+///
+/// One shared copy: the bottombar, the fullscreen cover and every track row
+/// each had their own, and all three lacked the hours branch — a 90-minute
+/// SoundCloud DJ mix rendered as "90:00" and counted up through "78:42".
+pub fn fmt_time(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+#[cfg(test)]
+mod fmt_time_tests {
+    use super::fmt_time;
+
+    #[test]
+    fn switches_to_hours_only_past_the_hour() {
+        assert_eq!(fmt_time(0), "0:00");
+        assert_eq!(fmt_time(7), "0:07");
+        assert_eq!(fmt_time(605), "10:05");
+        assert_eq!(fmt_time(3599), "59:59");
+        // The bug: a 90-minute mix used to render as "90:00".
+        assert_eq!(fmt_time(3600), "1:00:00");
+        assert_eq!(fmt_time(5400), "1:30:00");
+        assert_eq!(fmt_time(7322), "2:02:02");
+    }
+}

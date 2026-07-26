@@ -134,8 +134,6 @@
   background: var(--raise2);
 }
 
-/* Ctx-menu heart glyph when already liked */
-.ctx-glyph.liked { color: var(--like); }
 
 
 /* ── Local tab: album groups ────────────────────────────── */

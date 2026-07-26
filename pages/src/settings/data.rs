@@ -13,6 +13,7 @@ pub(super) fn DataSettings() -> Element {
     let player = use_player();
     let sc = use_soundcloud();
     let mut status = use_signal(|| None::<String>);
+    let mut confirm_clear_history = use_signal(|| false);
     let config_dir = AppConfig::config_dir();
     let cache_dir = AppConfig::cache_dir();
     let config_label = format_path(config_dir.as_ref());
@@ -64,13 +65,27 @@ pub(super) fn DataSettings() -> Element {
                         }
                     },
                 }
+                // Two-step, unlike its neighbours: the other buttons clear
+                // caches that rebuild themselves, but play history does not —
+                // it's the local play log behind Home's "Recently played" and
+                // the recommendation seed. Same confirm idiom as playlist
+                // delete in library.rs.
                 Button {
-                    label: "Clear play history".to_string(),
+                    label: if *confirm_clear_history.read() {
+                        "Really clear?".to_string()
+                    } else {
+                        "Clear play history".to_string()
+                    },
                     variant: ButtonVariant::Ghost,
                     size: ButtonSize::Sm,
                     on_click: {
                         let player = player.clone();
                         move |_| {
+                            if !*confirm_clear_history.peek() {
+                                confirm_clear_history.set(true);
+                                return;
+                            }
+                            confirm_clear_history.set(false);
                             status.set(Some(match player.clear_history() {
                                 Ok(()) => "Cleared play history.".into(),
                                 Err(e) => format!("Could not clear play history: {e}"),

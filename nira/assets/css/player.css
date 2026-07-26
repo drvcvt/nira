@@ -220,7 +220,7 @@
   height: 18px;
   display: flex;
   align-items: center;
-  --progress: 0%;
+  --seek-pct: 0%;
 }
 
 .player-progress::before {
@@ -243,7 +243,7 @@
   left: 0;
   top: 50%;
   transform: translateY(-50%);
-  width: var(--progress);
+  width: var(--seek-pct);
   height: 5px;
   border-radius: var(--r-full);
   background: var(--fg);
@@ -353,11 +353,6 @@
   display: inline-block;
 }
 
-/* Source identity comes from the label text — dots stay neutral. */
-.player-source-dot[data-provider="Spotify"],
-.player-source-dot[data-provider="SoundCloud"],
-.player-source-dot[data-provider="Local"]      { background: var(--text-faint); }
-
 .player-queue-btn {
   appearance: none;
   display: inline-flex;
@@ -391,6 +386,18 @@
   border: none;
   cursor: default;
   z-index: 900;
+}
+
+/* The catcher is rendered inside .player, which is a stacking context
+   (position:absolute + z-index:10), so its z-index:900 resolved ABOVE the
+   unpositioned transport clusters and swallowed the first click on every
+   bottombar control while the queue was open. Lift them over it — they don't
+   overlap the popover, which sits at bottom: calc(100% + 10px). */
+.player-left,
+.player-center,
+.player-right {
+  position: relative;
+  z-index: 902;
 }
 
 .queue-popover {
@@ -685,6 +692,14 @@
   outline: none;
   cursor: pointer;
   border: none;
+}
+
+/* The `outline: none` above wins on source order over base.css's blanket
+   :focus-visible ring (same specificity, player.css loads later), so the
+   slider had no focus indicator at all. Both sibling sliders restore one. */
+.vol-slider:focus-visible {
+  outline: 2px solid var(--sub);
+  outline-offset: 3px;
 }
 
 .vol-slider::-webkit-slider-thumb {

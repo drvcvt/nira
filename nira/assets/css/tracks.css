@@ -1,10 +1,5 @@
 /* ─── search page — shared track-row styling ───────────────────── */
 
-.search-spinner {
-  color: var(--text-faint);
-  font-size: 0.85em;
-}
-
 .search-error {
   background: var(--raise1);
   border-radius: var(--rs);
@@ -14,12 +9,6 @@
   margin-bottom: 10px;
   max-width: 60ch;
   font-size: 0.88em;
-}
-
-.search-empty {
-  color: var(--text-faint);
-  padding: 24px 0;
-  font-size: 0.9em;
 }
 
 .track-list {
@@ -115,47 +104,6 @@
 
 /* Provider badges stay neutral — the label text is the identity. */
 
-/* ─── Search page — hint chip rendered inside SearchBar children ── */
-
-.search-page > h1 + .hint {
-  margin-bottom: 16px;
-}
-
-/* Hint chip on the right: spinner during work, kbd-hint when idle.
-   Passed in as SearchBar's trailing slot (children). */
-.search-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: inherit;
-  font-size: 0.66rem;
-  letter-spacing: 0.1em;
-  text-transform: lowercase;
-  color: var(--text-faint);
-  white-space: nowrap;
-  padding-left: 8px;
-  border-left: 1px solid var(--line);
-  margin-left: 2px;
-}
-
-.search-hint.searching,
-.search-hint.loading {
-  color: var(--text-muted);
-}
-
-.search-hint .kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  background: var(--raise2);
-  border-radius: 4px;
-  font-size: 0.66rem;
-  color: var(--text-muted);
-}
-
 /* ─── inline artist / album links (used in track rows + bottombar) ─ */
 
 .artist-link {
@@ -192,23 +140,4 @@
 
 /* ─── discovery page extras ────────────────────────────── */
 
-.discovery-row {
-  grid-template-columns: 44px 1fr auto auto;
-}
-
-.discovery-score {
-  font-size: 0.7em;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--accent-soft);
-  width: 28px;
-  text-align: center;
-  cursor: help;
-}
-
-.discovery-badges {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
 

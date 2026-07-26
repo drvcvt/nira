@@ -1,6 +1,5 @@
 //! Album detail page — cover, header, tracklist.
 
-use std::collections::HashSet;
 
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
@@ -10,7 +9,7 @@ use hooks::{
     use_ctx_menu, use_detail, use_downloads, use_local_library, use_hires-provider, use_queue,
 };
 
-use crate::parts::{PlayableLi, TrackCtx, format_duration};
+use crate::parts::{OwnedIndex, PlayableLi, TrackCtx, format_duration};
 
 #[component]
 pub fn AlbumPage(uri: AlbumUri) -> Element {
@@ -25,6 +24,11 @@ pub fn AlbumPage(uri: AlbumUri) -> Element {
     let view = album.view.read().clone();
     let is_loading = *album.is_loading.read();
     let error = album.error.read().clone();
+    // One index build per rescan, shared by the header and the row list.
+    let local = use_local_library();
+    let owned = use_memo(move || {
+        OwnedIndex::new(local.tracks.read().iter().map(track_match_key).collect())
+    });
 
     rsx! {
         section { class: "page album-page",
@@ -47,6 +51,7 @@ pub fn AlbumPage(uri: AlbumUri) -> Element {
             } else if let Some(d) = view.as_ref() {
                 AlbumHeader {
                     detail: d.clone(),
+                    owned: owned(),
                     on_play_all: {
                         let queue = queue.clone();
                         let tracks = d.tracks.clone();
@@ -57,14 +62,18 @@ pub fn AlbumPage(uri: AlbumUri) -> Element {
                         }
                     }
                 }
-                AlbumTrackList { tracks: d.tracks.clone() }
+                AlbumTrackList { tracks: d.tracks.clone(), owned: owned() }
             }
         }
     }
 }
 
 #[component]
-fn AlbumHeader(detail: hooks::AlbumDetail, on_play_all: EventHandler<()>) -> Element {
+fn AlbumHeader(
+    detail: hooks::AlbumDetail,
+    owned: OwnedIndex,
+    on_play_all: EventHandler<()>,
+) -> Element {
     let cover = detail.cover_url.clone().unwrap_or_default();
     let detail_router = use_detail();
     let ctx = use_ctx_menu();
@@ -89,17 +98,14 @@ fn AlbumHeader(detail: hooks::AlbumDetail, on_play_all: EventHandler<()>) -> Ele
     let artist_name = detail.artist.name.clone();
     let artist_uri = detail.artist.uri.clone();
     let provider = detail.provider.label().to_lowercase();
-    // How much of this album is already on disk — reading the tracks signal
-    // subscribes us, so the chip updates live when a download's rescan lands.
-    let owned_count = {
-        let local_tracks = local.tracks.read();
-        let owned: HashSet<(String, String)> = local_tracks.iter().map(track_match_key).collect();
-        detail
-            .tracks
-            .iter()
-            .filter(|t| owned.contains(&track_match_key(t)))
-            .count()
-    };
+    // How much of this album is already on disk. The index is memoized in
+    // AlbumPage off the tracks signal, so this still updates live when a
+    // download's rescan lands — without rebuilding it here.
+    let owned_count = detail
+        .tracks
+        .iter()
+        .filter(|t| owned.contains(&track_match_key(t)))
+        .count();
 
     rsx! {
         header {
@@ -216,7 +222,7 @@ fn AlbumHeader(detail: hooks::AlbumDetail, on_play_all: EventHandler<()>) -> Ele
 }
 
 #[component]
-fn AlbumTrackList(tracks: Vec<Track>) -> Element {
+fn AlbumTrackList(tracks: Vec<Track>, owned: OwnedIndex) -> Element {
     let local = use_local_library();
     let qz = use_hires-provider();
     let downloads = use_downloads();
@@ -229,10 +235,6 @@ fn AlbumTrackList(tracks: Vec<Track>) -> Element {
             }
         };
     }
-    // Normalized (artist, title) index of the on-disk library — one build
-    // per render, O(1) per row below.
-    let owned: HashSet<(String, String)> =
-        local.tracks.read().iter().map(track_match_key).collect();
     let row_ctx = TrackCtx::new(tracks.clone());
     rsx! {
         ul { class: "track-list",

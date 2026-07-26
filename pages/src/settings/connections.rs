@@ -94,7 +94,9 @@ pub(super) fn ConnectionsSettings() -> Element {
                                 qz_format.set(fid);
                                 let mut w = config.write();
                                 w.hires-provider_format_id = Some(fid);
-                                let _ = w.save();
+                                if let Err(e) = w.save() {
+                                    qz_status.set(Some(format!("Could not save quality: {e}")));
+                                }
                                 let qz = qz.clone();
                                 spawn(async move { qz.set_format_id(fid).await; });
                             }
@@ -121,7 +123,11 @@ pub(super) fn ConnectionsSettings() -> Element {
                                     {
                                         let mut w = config.write();
                                         w.hires-provider_token = None;
-                                        let _ = w.save();
+                                        if let Err(e) = w.save() {
+                                            qz_status.set(Some(format!(
+                                                "Disconnected, but could not update the config: {e}"
+                                            )));
+                                        }
                                     }
                                     qz_token.set(String::new());
                                     spawn(async move {
@@ -153,9 +159,14 @@ pub(super) fn ConnectionsSettings() -> Element {
                                             Ok(()) => {
                                                 let mut w = config.write();
                                                 w.hires-provider_token = Some(token.clone());
-                                                let _ = w.save();
+                                                let saved = w.save();
                                                 drop(w);
-                                                qz_status.set(Some("Connected. Download FLACs from search.".into()));
+                                                qz_status.set(Some(match saved {
+                                                    Ok(()) => "Connected. Download FLACs from search.".into(),
+                                                    Err(e) => format!(
+                                                        "Connected, but the token could not be saved ({e}) — you'll have to paste it again next launch."
+                                                    ),
+                                                }));
                                             }
                                             Err(e) => qz_status.set(Some(format!("Token rejected: {e}. Make sure you copied the full auth token while logged in."))),
                                         }

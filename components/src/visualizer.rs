@@ -40,6 +40,13 @@ pub fn Visualizer() -> Element {
     let player = use_player();
     let is_open = *open.read();
 
+    // Trap entry / hand-back: the overlay paints an opaque fullscreen canvas,
+    // so without this Tab walked onto controls behind it and the focus ring
+    // was painted underneath, invisible.
+    use_effect(move || {
+        crate::overlay_focus(*open.read(), ".viz-overlay .viz-close");
+    });
+
     // Long-lived pump: creates the eval (and with it the JS render loop)
     // when the overlay opens, feeds it analysis frames, drops it on close.
     use_hook({

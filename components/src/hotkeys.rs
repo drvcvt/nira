@@ -70,8 +70,8 @@ const BINDS_PLAYBACK: BindRows = &[
     (&["L"], "Like current track"),
 ];
 const BINDS_VOLUME: BindRows = &[
-    (&["↑", "Ctrl + ↑"], "Volume up"),
-    (&["↓", "Ctrl + ↓"], "Volume down"),
+    (&["Ctrl + ↑"], "Volume up"),
+    (&["Ctrl + ↓"], "Volume down"),
     (&["M"], "Mute / unmute"),
 ];
 const BINDS_APP: BindRows = &[
@@ -282,6 +282,7 @@ pub fn Hotkeys() -> Element {
                 class: "binds-backdrop",
                 r#type: "button",
                 tabindex: "-1",
+                "aria-hidden": "true",
                 onclick: move |_| open.set(false),
             }
             div { class: "binds-panel",

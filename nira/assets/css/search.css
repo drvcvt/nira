@@ -11,8 +11,7 @@
   color: var(--text);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-btn);
-  transition: border-color 160ms ease, background 160ms ease,
-              box-shadow 220ms ease;
+  transition: border-color 160ms ease, background 160ms ease;
 }
 
 .searchbar:focus-within {

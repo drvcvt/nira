@@ -32,6 +32,12 @@ pub fn use_listenbrainz_feed() -> UseListenBrainzFeed {
     let is_loading = use_signal(|| false);
     let error = use_signal(|| None::<String>);
     let needs_config = use_signal(|| true);
+    // Which username the current state belongs to. Outer `None` means "the
+    // effect has never applied anything yet", so the first run always fires.
+    // The effect below reads the whole `AppConfig` signal, which is also
+    // written by `set_volume` — without this guard a volume drag re-spawned
+    // one fetch per slider step.
+    let mut applied_for = use_signal(|| None::<Option<String>>);
 
     // Reactive on config changes: when the user types/saves a new username,
     // `use_effect` re-runs and re-fetches.
@@ -44,6 +50,13 @@ pub fn use_listenbrainz_feed() -> UseListenBrainzFeed {
                 .clone()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
+
+            // Only the username field matters here — any other config write
+            // (volume, theme, …) must not re-fetch.
+            if applied_for.peek().as_ref() == Some(&username) {
+                return;
+            }
+            applied_for.set(Some(username.clone()));
 
             let mut listens_sig = listens;
             let mut loading_sig = is_loading;

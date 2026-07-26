@@ -160,6 +160,12 @@ pub struct Player {
     /// Set by [`Player::cancel_next`]: the appended next source is stale
     /// (queue was edited) and must be skipped the moment it starts.
     skip_stale_next: Arc<std::sync::atomic::AtomicBool>,
+    /// Set from cpal's stream-error callback when the output device dies
+    /// (DAC unplugged, PipeWire restart). Once set, the data callback stops
+    /// being invoked, which means rodio's `clear()` and `try_seek()` block
+    /// forever on a channel that can never fire — on the UI thread. Every
+    /// blocking rodio call checks this first and degrades instead of hanging.
+    device_dead: Arc<std::sync::atomic::AtomicBool>,
     /// Visualizer analysis bus — every rodio source is wrapped in a
     /// sample tap feeding it; the UI polls [`Player::viz_frame`].
     viz: Arc<viz::VizBus>,
@@ -196,15 +202,47 @@ impl Player {
     /// so `player/` doesn't need to know about `config/`.
     pub fn spawn(history_path: Option<PathBuf>, initial_volume: f32) -> Result<Self, PlayerError> {
         let (tx, rx) = mpsc::sync_channel::<Result<Arc<RodioPlayer>, PlayerError>>(1);
+        let device_dead = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+        let worker_dead = Arc::clone(&device_dead);
         std::thread::Builder::new()
             .name("nira-audio".into())
             .spawn(move || {
-                let device_sink = match DeviceSinkBuilder::open_default_sink() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        let _ = tx.send(Err(PlayerError::Device(e.to_string())));
-                        return;
+                // Builder path rather than the bare `open_default_sink()`:
+                // that helper takes no error callback, and without one a dead
+                // device is completely silent to us. Fall back to it if the
+                // builder path can't open anything, so we don't trade startup
+                // robustness (it also tries non-default devices) for the flag.
+                let open = || {
+                    let flag = Arc::clone(&worker_dead);
+                    DeviceSinkBuilder::from_default_device()
+                        .and_then(|b| {
+                            b.with_error_callback(move |err| {
+                                tracing::error!(%err, "audio stream error — device presumed dead");
+                                flag.store(true, Ordering::Relaxed);
+                            })
+                            .open_sink_or_fallback()
+                        })
+                        .or_else(|first_err| {
+                            DeviceSinkBuilder::open_default_sink().map_err(|_| first_err)
+                        })
+                };
+                // Retry briefly: the launcher can start nira before PipeWire
+                // is up, and a hard failure here panics the whole app in
+                // main(). ~2 s of patience turns that race into a slow boot.
+                let mut attempt = 0;
+                let device_sink = loop {
+                    match open() {
+                        Ok(s) => break s,
+                        Err(e) if attempt < 5 => {
+                            attempt += 1;
+                            tracing::warn!(%e, attempt, "audio device not ready, retrying");
+                            std::thread::sleep(Duration::from_millis(400));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(PlayerError::Device(e.to_string())));
+                            return;
+                        }
                     }
                 };
                 let player = Arc::new(RodioPlayer::connect_new(device_sink.mixer()));
@@ -237,6 +275,7 @@ impl Player {
             last_rodio_pos: Arc::new(Mutex::new(Duration::ZERO)),
             gapless_advanced: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             skip_stale_next: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            device_dead,
             viz: viz::VizBus::new(),
             transport_tx,
             transport_rx: Arc::new(Mutex::new(Some(transport_rx))),
@@ -266,6 +305,23 @@ impl Player {
         self.transport_rx.lock().ok().and_then(|mut g| g.take())
     }
 
+    /// True once cpal reported a stream error. rodio's `clear()` and
+    /// `try_seek()` both wait on the data callback to acknowledge them, and a
+    /// dead device means that callback is never invoked again — so the caller
+    /// (usually the Dioxus UI thread, sometimes the MPRIS runtime) would block
+    /// forever. Callers degrade to a no-op instead.
+    pub fn device_is_dead(&self) -> bool {
+        self.device_dead.load(Ordering::Relaxed)
+    }
+
+    /// `rodio.clear()`, guarded. See [`Player::device_is_dead`].
+    fn clear_sink(&self) {
+        if self.device_is_dead() {
+            return;
+        }
+        self.rodio.clear();
+    }
+
     fn current_volume(&self) -> f32 {
         *self.user_volume.read().unwrap_or_else(|p| p.into_inner())
     }
@@ -285,11 +341,23 @@ impl Player {
         }
     }
 
-    /// Effective rodio sink gain: user slider (log curve) × per-track
-    /// normalisation factor.
-    fn rodio_gain(&self) -> f32 {
+    /// Sink gain: the user slider's log curve, and nothing else.
+    ///
+    /// Per-track ReplayGain is deliberately NOT folded in here. It is baked
+    /// into each source with `.amplify()` instead, because the sink is shared
+    /// with the gapless-appended next track: applying the next track's gain to
+    /// the sink could only happen at the boundary *commit*, which is a 200 ms
+    /// poll, so the new track played up to 200 ms at the old track's gain and
+    /// then jumped in one sample. Static per-source gain is correct from
+    /// sample zero and needs no commit at all.
+    fn slider_gain(&self) -> f32 {
         Self::slider_to_gain(self.current_volume())
-            * *self.track_gain.read().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Gain baked into the currently playing source. Only read by the seek
+    /// fallback, which rebuilds the decoder and must re-apply it.
+    fn current_track_gain(&self) -> f32 {
+        *self.track_gain.read().unwrap_or_else(|p| p.into_inner())
     }
 
     fn set_track_gain(&self, g: f32) {
@@ -334,9 +402,17 @@ impl Player {
     /// ReplayGain track gain (album gain as fallback) from a local file's
     /// tags, as a linear factor. Untagged or unparsable → 1.0.
     fn replaygain_factor(path: &Path) -> f32 {
+        use lofty::config::ParseOptions;
         use lofty::prelude::*;
         use lofty::tag::ItemKey;
-        let Ok(tagged) = lofty::read_from_path(path) else {
+        // read_cover_art(false): the default parse pulls embedded artwork into
+        // memory, so a FLAC with a 12 MB cover cost 12 MB of read+alloc on the
+        // load path — before the file is even opened for decoding — to fetch
+        // one gain string that gets discarded.
+        let Ok(tagged) = lofty::probe::Probe::open(path)
+            .map(|p| p.options(ParseOptions::new().read_cover_art(false)))
+            .and_then(|p| p.read())
+        else {
             return 1.0;
         };
         let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else {
@@ -379,7 +455,7 @@ impl Player {
         self.clear_pending();
         self.set_track_gain(1.0);
         self.set_rodio_source(None);
-        self.rodio.clear();
+        self.clear_sink();
         // 0.2 headroom keeps the sine from clipping even at user-volume 1.0.
         // rodio's controls.volume layers on top.
         let tone = rodio::source::SineWave::new(440.0)
@@ -409,12 +485,12 @@ impl Player {
         self.silence_spotify();
         self.clear_pending();
         self.set_track_gain(1.0);
-        let gain = self.rodio_gain();
+        let gain = self.slider_gain();
         let bytes: Arc<[u8]> = bytes.into();
         let decoder = Self::decoder_from_bytes(&bytes)?;
         let dur = decoder.total_duration();
         self.set_rodio_source(Some(RodioSource::Bytes(bytes)));
-        self.rodio.clear();
+        self.clear_sink();
         // Re-assert log-curved gain *before* append so the very first 5 ms
         // of the new source can't leak through at unity gain — rodio's
         // periodic_access tick runs on the first poll, which happens at
@@ -453,17 +529,18 @@ impl Player {
             tracing::info!(factor = rg, path = %path.display(), "replaygain applied");
         }
         self.set_track_gain(rg);
-        let gain = self.rodio_gain();
+        let gain = self.slider_gain();
         let file = std::fs::File::open(path)
             .map_err(|e| PlayerError::Decode(format!("open {}: {e}", path.display())))?;
         let decoder = Decoder::try_from(file).map_err(|e| PlayerError::Decode(e.to_string()))?;
         let dur = decoder.total_duration().or(fallback_duration);
         self.set_rodio_source(Some(RodioSource::File(path.to_path_buf())));
-        self.rodio.clear();
+        self.clear_sink();
         // Re-assert log-curved gain before append — same first-5ms unity-gain
-        // leak guard as play_bytes.
+        // leak guard as play_bytes. ReplayGain rides on the source itself.
         self.rodio.set_volume(gain);
-        self.rodio.append(viz::Tap::new(decoder, self.viz.clone()));
+        self.rodio
+            .append(viz::Tap::new(decoder.amplify(rg), self.viz.clone()));
         self.rodio.play();
         if let Ok(mut d) = self.duration.write() {
             *d = dur;
@@ -502,9 +579,9 @@ impl Player {
             duration,
             url,
         } = prepared;
-        let gain = self.rodio_gain();
+        let gain = self.slider_gain();
         self.set_rodio_source(Some(RodioSource::Http { url }));
-        self.rodio.clear();
+        self.clear_sink();
         // Same first-5ms unity-gain leak guard as play_bytes.
         self.rodio.set_volume(gain);
         self.rodio.append(viz::Tap::new(decoder, self.viz.clone()));
@@ -607,7 +684,10 @@ impl Player {
         if let Ok(mut l) = self.last_rodio_pos.lock() {
             *l = self.rodio.get_pos();
         }
-        self.rodio.append(viz::Tap::new(decoder, self.viz.clone()));
+        // Bake this track's gain into the appended source. The sink volume
+        // can't carry it — it's still rendering the *previous* track.
+        self.rodio
+            .append(viz::Tap::new(decoder.amplify(track_gain), self.viz.clone()));
         true
     }
 
@@ -661,8 +741,10 @@ impl Player {
         if let Ok(mut d) = self.duration.write() {
             *d = next.duration;
         }
+        // Record it for the seek rebuild only — the audio already carries this
+        // gain via `.amplify()` at append time, so touching the sink volume
+        // here would double-apply it (and was the 200 ms-late jump).
         self.set_track_gain(next.track_gain);
-        self.rodio.set_volume(self.rodio_gain());
         self.set_now_playing(Some(next.now_playing));
         self.record_now_playing();
         self.gapless_advanced
@@ -781,11 +863,15 @@ impl Player {
         let backend = self
             .spotify
             .lock()
-            .unwrap()
+            .unwrap_or_else(|p| p.into_inner())
             .clone()
             .ok_or(PlayerError::SpotifyNotReady)?;
         self.clear_pending();
-        self.rodio.clear();
+        self.clear_sink();
+        // Drop the retained rodio source too — otherwise a fully-materialised
+        // SC track (Arc<[u8]>, ~10MB) stays pinned for the whole Spotify
+        // session. Every other backend switch nulls it.
+        self.set_rodio_source(None);
         backend.load_and_play(uri)?;
         if let Ok(mut d) = self.duration.write() {
             *d = duration;
@@ -842,7 +928,7 @@ impl Player {
         self.silence_spotify();
         self.clear_pending();
         self.set_rodio_source(None);
-        self.rodio.clear();
+        self.clear_sink();
         if let Ok(mut d) = self.duration.write() {
             *d = None;
         }
@@ -867,6 +953,10 @@ impl Player {
                 }
             }
             Active::Rodio => {
+                if self.device_is_dead() {
+                    tracing::warn!("seek ignored — audio device is not responding");
+                    return;
+                }
                 match self.rodio.try_seek(target) {
                     Ok(()) => {
                         // Keep the gapless boundary detector honest: a user
@@ -970,12 +1060,18 @@ impl Player {
         // The rebuild clears the sink, which drops any gapless-appended
         // next source with it — its metadata must not commit later.
         self.clear_pending();
-        let gain = self.rodio_gain();
-        self.rodio.clear();
+        let gain = self.slider_gain();
+        // The rebuilt decoder is the same track, so it must carry the same
+        // ReplayGain the original append baked in.
+        let track_gain = self.current_track_gain();
+        self.clear_sink();
         // Same first-5ms unity-gain leak guard as play_bytes.
         self.rodio.set_volume(gain);
-        self.rodio.append(viz::Tap::new(decoder, self.viz.clone()));
-        if let Err(e) = self.rodio.try_seek(target) {
+        self.rodio
+            .append(viz::Tap::new(decoder.amplify(track_gain), self.viz.clone()));
+        if !self.device_is_dead()
+            && let Err(e) = self.rodio.try_seek(target)
+        {
             tracing::warn!("forward seek into fresh decoder failed: {e}");
         }
         if !was_paused {
@@ -1006,10 +1102,11 @@ impl Player {
             *w = v;
         }
         // Convert the perceptual slider position to a linear gain via the
-        // 60 dB log curve (× the current track's normalisation factor).
+        // 60 dB log curve. ReplayGain is not folded in — it lives on the
+        // source, so the sink carries the user's intent only.
         // librespot's `SoftMixer` applies the same curve internally, so we
         // pass the raw slider value over there.
-        self.rodio.set_volume(self.rodio_gain());
+        self.rodio.set_volume(self.slider_gain());
         if let Some(b) = self
             .spotify
             .lock()
@@ -1034,11 +1131,18 @@ impl Player {
             {
                 Some(b) => {
                     let s = b.snapshot();
-                    (
-                        s.is_paused,
-                        Duration::from_millis(s.position_ms as u64),
-                        s.has_track,
-                    )
+                    // Clamp to the track length. The backend extrapolates
+                    // from Instant::elapsed() between librespot events, and a
+                    // dead AP session emits no Paused/Stopped/EndOfTrack — so
+                    // an unclamped position ticks past 100% forever, which
+                    // makes a dropped connection indistinguishable from
+                    // playback AND blinds the queue's stall detector (it
+                    // watches for a position that stops advancing).
+                    let mut position = Duration::from_millis(s.position_ms as u64);
+                    if let Some(d) = self.duration.read().ok().and_then(|d| *d) {
+                        position = position.min(d);
+                    }
+                    (s.is_paused, position, s.has_track)
                 }
                 None => (false, Duration::ZERO, false),
             },

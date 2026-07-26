@@ -55,6 +55,7 @@ const CSS_ALL: &str = concat!(
     include_str!("../assets/css/buttons.css"),
     include_str!("../assets/css/binds.css"),
     include_str!("../assets/css/viz.css"),
+    include_str!("../assets/css/cover.css"),
     include_str!("../assets/css/responsive.css"),
 );
 // FontAwesome utility classes (6.5.1, @font-face blocks stripped at vendor
@@ -233,6 +234,11 @@ fn App() -> Element {
     let viz_open = use_signal(|| false);
     use_context_provider(|| components::visualizer::VizOpen(viz_open));
 
+    // Fullscreen cover overlay open-state — shared by the bottombar's mini
+    // cover, the Escape bridge and the overlay itself.
+    let cover_open = use_signal(|| false);
+    use_context_provider(|| components::cover::CoverOpen(cover_open));
+
     // Pre-mute volume stash — shared by the M-key bridge and the
     // bottombar's speaker button.
     let mute_stash = use_signal(|| None::<f32>);
@@ -313,8 +319,19 @@ fn App() -> Element {
     // font sets the `--font-ui` variable. Runs once on boot and again
     // whenever Settings flips the config signal.
     let config_sig = hooks::use_config();
+    // Last appearance actually pushed to the DOM. The config signal is also
+    // written by `set_volume`, so without this guard a volume drag fired one
+    // `document::eval` round-trip per slider step — each one rewriting
+    // `--font-ui` on the root element, which invalidates style for everything
+    // that inherits it, on the thread servicing the drag.
+    let mut applied_appearance = use_signal(|| None::<(hooks::ThemePref, &'static str)>);
     use_effect(move || {
         let cfg = config_sig.read();
+        let font_stack = hooks::ui_font_stack(cfg.ui_font.as_deref());
+        if *applied_appearance.peek() == Some((cfg.theme, font_stack)) {
+            return;
+        }
+        applied_appearance.set(Some((cfg.theme, font_stack)));
         let theme_js = match cfg.theme {
             hooks::ThemePref::Light => {
                 "document.documentElement.setAttribute('data-theme','light');"
@@ -324,7 +341,6 @@ fn App() -> Element {
             }
             hooks::ThemePref::System => "document.documentElement.removeAttribute('data-theme');",
         };
-        let font_stack = hooks::ui_font_stack(cfg.ui_font.as_deref());
         let js = format!(
             "{theme_js}document.documentElement.style.setProperty('--font-ui', '{font_stack}');"
         );
@@ -375,28 +391,52 @@ fn App() -> Element {
                             return;\
                         }}\
                         if (key === 'escape') {{\
-                            if (document.querySelector('.binds-overlay.open')) {{\
+                            /* stopPropagation as well as preventDefault: this\
+                               is a capture listener, so without it the same\
+                               keydown still reaches the search overlay's own\
+                               onkeydown and the shell handler, and one Escape\
+                               closes two overlays at once. */\
+                            var dismiss = function(id) {{\
                                 e.preventDefault();\
-                                press('nira-key-binds-close');\
+                                e.stopPropagation();\
+                                press(id);\
+                            }};\
+                            if (document.querySelector('.binds-overlay.open')) {{\
+                                dismiss('nira-key-binds-close');\
                                 return;\
                             }}\
                             if (document.querySelector('.viz-overlay')) {{\
-                                e.preventDefault();\
-                                press('nira-key-viz-close');\
+                                dismiss('nira-key-viz-close');\
+                                return;\
+                            }}\
+                            /* :not(.closing) — the element lingers for the\
+                               400ms close animation, and matching it there\
+                               swallowed the next Escape. */\
+                            if (document.querySelector('.cover-overlay:not(.closing)')) {{\
+                                dismiss('nira-key-cover-close');\
                                 return;\
                             }}\
                             if (document.querySelector('.search-overlay.open')) {{\
-                                e.preventDefault();\
-                                press('nira-search-close-hotkey');\
+                                dismiss('nira-search-close-hotkey');\
                                 return;\
                             }}\
                             if (document.querySelector('.queue-popover')) {{\
-                                e.preventDefault();\
-                                press('nira-key-queue-close');\
+                                dismiss('nira-key-queue-close');\
                             }}\
                             return;\
                         }}\
                         if (typing(e)) return;\
+                        /* Space must still activate a focused button. The\
+                           typing() guard above only exempts text inputs, and\
+                           this listener stopPropagation()s, so without this\
+                           no button in the app responded to Space. Real\
+                           <button> only — track rows are role=button and keep\
+                           Space as the global play/pause bind on purpose. */\
+                        if (isSpace &&\
+                            e.target &&\
+                            e.target.closest &&\
+                            e.target.closest('button:not(.hotkey-bridge)')\
+                        ) return;\
                         var acted = false;\
                         if (mod && !e.altKey && !e.shiftKey) {{\
                             if (key === 'arrowright') {{ press('nira-key-next'); acted = true; }}\
@@ -413,8 +453,10 @@ fn App() -> Element {
                             else if (key === 'l') {{ press('nira-key-like'); acted = true; }}\
                             else if (key === 'v') {{ press('nira-key-viz'); acted = true; }}\
                             else if (key === 'm') {{ press('nira-key-mute'); acted = true; }}\
-                            else if (key === 'arrowup') {{ press('nira-key-volup'); acted = true; }}\
-                            else if (key === 'arrowdown') {{ press('nira-key-voldown'); acted = true; }}\
+                            /* Bare arrows deliberately unbound: .content is\
+                               the app's only scroll container, and claiming\
+                               them here left the app unscrollable by keyboard.\
+                               Ctrl+Up/Down above still adjusts volume. */\
                         }}\
                         if (acted) {{\
                             e.preventDefault();\
@@ -450,6 +492,13 @@ fn App() -> Element {
                         || (mods.contains(Modifiers::ALT) && is_space);
                     if open_search {
                         e.prevent_default();
+                        // Dismiss the ctx menu first — it renders above the
+                        // search overlay and its full-screen catcher eats
+                        // every click on it, so opening search underneath an
+                        // open menu produced an unreachable overlay.
+                        if ctx_menu.current.peek().is_some() {
+                            ctx_menu.close();
+                        }
                         search_open.set(true);
                     } else if e.key() == Key::Escape && ctx_menu.current.peek().is_some() {
                         e.prevent_default();
@@ -510,6 +559,8 @@ fn App() -> Element {
             components::hotkeys::Hotkeys {}
             // Fullscreen audio visualizer (V / bottombar wave button).
             components::visualizer::Visualizer {}
+            // Fullscreen cover / vinyl overlay (bottombar mini cover).
+            components::cover::CoverOverlay {}
             // Bottom-left toast for the hi-res provider download progress/result.
             components::download_toast::DownloadToast {}
         }

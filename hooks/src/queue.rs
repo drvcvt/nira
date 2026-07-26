@@ -416,6 +416,10 @@ impl UseQueue {
             Some(c) if idx < c => {
                 entries.set(updated);
                 current.set(Some(c - 1));
+                // Removing a row above the playing one shifts current_index,
+                // which strands an in-flight load exactly like the idx == c
+                // branch above.
+                self.reissue_if_loading();
             }
             _ => entries.set(updated),
         }
@@ -640,6 +644,10 @@ impl UseQueue {
         entries.set(merged);
         if let Some(i) = idx {
             current.set(Some(i));
+            // Un-shuffling re-points current_index into the original order.
+            // toggle_shuffle's ON branch re-issues for the same reason, but
+            // returns before reaching that guard on the OFF path.
+            self.reissue_if_loading();
         }
     }
 
@@ -677,6 +685,20 @@ impl UseQueue {
         let next = generation.peek().wrapping_add(1);
         generation.set(next);
         next
+    }
+
+    /// Re-issue an in-flight load whose index moved out from under it.
+    ///
+    /// `is_current_load` keys on the raw `current_index`, so *any* mutation of
+    /// it invalidates a pending load — the task reaches its commit point, sees
+    /// a different index, and bails silently, leaving the queue wedged in
+    /// `Loading` with no audio and a blanked position. Every site that moves
+    /// `current_index` while a load may be in flight must call this.
+    fn reissue_if_loading(&self) {
+        if *self.advance_state.peek() == AdvanceState::Loading {
+            self.bump_load_generation();
+            load_current(self.clone());
+        }
     }
 }
 

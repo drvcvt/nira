@@ -7,6 +7,10 @@ use hooks::{ThemePref, UI_FONTS, ui_font_stack, use_config};
 #[component]
 pub(super) fn AppearanceSettings() -> Element {
     let mut config = use_config();
+    // Surfaced, not swallowed: a read-only config dir used to flip the UI
+    // live and then silently revert on next launch, with nothing to explain
+    // it. Every other settings pane already reports its save result.
+    let mut status = use_signal(|| None::<String>);
     let current_theme = config.read().theme;
     let current_font = config
         .read()
@@ -18,7 +22,9 @@ pub(super) fn AppearanceSettings() -> Element {
         let mut cfg = config.write();
         if cfg.theme != t {
             cfg.theme = t;
-            let _ = cfg.save();
+            if let Err(e) = cfg.save() {
+                status.set(Some(format!("Could not save theme: {e}")));
+            }
         }
     };
 
@@ -32,7 +38,9 @@ pub(super) fn AppearanceSettings() -> Element {
         let mut cfg = config.write();
         if cfg.ui_font != next {
             cfg.ui_font = next;
-            let _ = cfg.save();
+            if let Err(e) = cfg.save() {
+                status.set(Some(format!("Could not save font: {e}")));
+            }
         }
     };
 
@@ -55,16 +63,19 @@ pub(super) fn AppearanceSettings() -> Element {
                 div { class: "mode-toggle",
                     button {
                         class: if current_theme == ThemePref::System { "mode-btn active" } else { "mode-btn" },
+                        "aria-pressed": if current_theme == ThemePref::System { "true" } else { "false" },
                         onclick: move |_| pick_theme(ThemePref::System),
                         "System"
                     }
                     button {
                         class: if current_theme == ThemePref::Light { "mode-btn active" } else { "mode-btn" },
+                        "aria-pressed": if current_theme == ThemePref::Light { "true" } else { "false" },
                         onclick: move |_| pick_theme(ThemePref::Light),
                         "Light"
                     }
                     button {
                         class: if current_theme == ThemePref::Dark { "mode-btn active" } else { "mode-btn" },
+                        "aria-pressed": if current_theme == ThemePref::Dark { "true" } else { "false" },
                         onclick: move |_| pick_theme(ThemePref::Dark),
                         "Dark"
                     }
@@ -86,6 +97,11 @@ pub(super) fn AppearanceSettings() -> Element {
                         // Click-away overlay + the option list, each in its own font.
                         button {
                             class: "field-dropdown-overlay",
+                            // Matches every other click-away catcher in the
+                            // app — without these it was a nameless tab stop
+                            // covering the whole page.
+                            tabindex: "-1",
+                            "aria-hidden": "true",
                             onclick: move |_| font_open.set(false),
                         }
                         div { class: "field-dropdown-panel",
@@ -113,6 +129,10 @@ pub(super) fn AppearanceSettings() -> Element {
                     "Goreshit — Burn This Moment Into the Retina of My Eye. Pack my box with five dozen liquor jugs."
                 }
                 p { class: "font-specimen-nums", "0123456789 · 3:42 / 61:08 · 44.1 kHz FLAC" }
+            }
+
+            if let Some(msg) = status.read().as_ref() {
+                p { class: "settings-status", "{msg}" }
             }
         }
     }

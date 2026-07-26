@@ -27,52 +27,14 @@
   color: var(--chip-on-fg);
 }
 
-.bridge-result {
-  margin-top: 18px;
-  padding: 14px;
-  background: var(--raise1);
-  border-radius: var(--r);
-}
 
-.bridge-seed {
-  padding-bottom: 10px;
-  margin-bottom: 10px;
-}
 
-.bridge-matches {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.bridge-match-btn {
-  background: var(--raise2);
-  border: none;
-  color: var(--text);
-  text-align: left;
-  padding: 10px 12px;
-  border-radius: var(--rs);
-  cursor: pointer;
-  font: inherit;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  transition: background 150ms ease;
-}
-
-.bridge-match-btn:hover {
-  background: var(--raise3);
-}
 
 
 /* ─────────────────────────────────────────────────────────── */
 /* ── Discover — orbital revamp ─────────────────────────────── */
 /* ─────────────────────────────────────────────────────────── */
 
-/* Per-source colours — used by the orbit dots, legend, and per-row
-   source pills. SC keeps its brand orange; LB borrows nira's accent
-   indigo because LB's own orange is too close to SC's; LF stays
-   on-brand red. Three perceptually distinct hues. */
 /* Per-source cues — grayscale brightness steps instead of brand hues.
    The legend text carries the actual source names. */
 :root {
@@ -161,53 +123,16 @@
   background: transparent;
 }
 
-/* Accent glow + bottom-anchored ellipse, masked to fade in from the top
-   so there's no perceptible canvas border against the controls above.
-   The ellipse sits in the lower 60% of the canvas — visually anchors
-   the scene toward the legend area rather than competing with the top
-   edge for attention. */
-.discover-canvas::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background: none;
-  /* Long, soft fade-in from the top + matching tail at the bottom so
-     the atmosphere dissolves smoothly into the page in both directions.
-     30% top fade is deliberately generous — anything tighter shows a
-     visible glow boundary against the controls. */
-  mask-image: linear-gradient(to bottom,
-    transparent 0%, #000 30%, #000 95%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom,
-    transparent 0%, #000 30%, #000 95%, transparent 100%);
-}
+/* Both ::before (starfield) and ::after (accent glow) were removed — the
+   quiet canvas carries the scene on its own. Their rules lingered with
+   `background: none`, so they painted nothing while still forcing a
+   full-canvas render object and a mask compositing pass per frame.
 
-/* The starfield ::before also gets the same fade so its tiny dots
-   don't betray the rectangle. */
-.discover-canvas::before {
-  z-index: 0;
-  mask-image: linear-gradient(to bottom,
-    transparent 0%, #000 18%, #000 95%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom,
-    transparent 0%, #000 18%, #000 95%, transparent 100%);
-}
-
-/* Lift the orbital elements above the masked bg layers so the fade
-   only touches atmosphere, never the rings/core/legend/status. */
+   Lift the orbital elements above the bg layers regardless. */
 .discover-canvas > .orbit,
 .discover-canvas > .orbit-core,
 .discover-canvas > .orbit-legend,
 .discover-canvas > .orbit-status { z-index: 1; }
-
-/* Starfield removed — the quiet canvas carries the scene on its own. */
-.discover-canvas::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: none;
-}
 
 /* A single grain overlay using SVG-as-data-URL would be lovely here but
    browsers can balloon CPU on huge blur surfaces — keep it static. */
@@ -261,9 +186,9 @@
 /* Single-blur shadow per dot — the previous double-shadow setup added
    a second blur pass per dot per frame. With three constantly-rotating
    dots, halving the shadow work meaningfully drops paint cost. */
-.orbit-sc .orbit-dot { background: var(--src-sc); box-shadow: 0 0 10px var(--src-sc); }
-.orbit-lb .orbit-dot { background: var(--src-lb); box-shadow: 0 0 10px var(--src-lb); }
-.orbit-lf .orbit-dot { background: var(--src-lf); box-shadow: 0 0 10px var(--src-lf); }
+.orbit-sc .orbit-dot { background: var(--src-sc); }
+.orbit-lb .orbit-dot { background: var(--src-lb); }
+.orbit-lf .orbit-dot { background: var(--src-lf); }
 
 /* Centre: the void where the seed will land. Pulses gently when idle,
    harder when searching. */
@@ -349,7 +274,6 @@
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
-  box-shadow: 0 0 8px currentColor;
 }
 
 .orbit-legend-row[data-src="sc"] .orbit-legend-dot { background: var(--src-sc); color: var(--src-sc); }
@@ -388,13 +312,11 @@
   height: 7px;
   border-radius: 50%;
   background: var(--text-faint);
-  box-shadow: 0 0 0 0 transparent;
 }
 
 .discover-canvas.searching .orbit-status { color: var(--accent); }
 .discover-canvas.searching .orbit-status-led {
   background: var(--accent);
-  box-shadow: 0 0 10px var(--accent);
   animation: orbit-led-blink 0.9s steps(2, end) infinite;
 }
 
@@ -499,24 +421,6 @@
 
 .discover-seed-stats .stats-sep { color: var(--text-faint); }
 
-.discover-seed-reroll {
-  background: var(--raise2);
-  border: none;
-  color: var(--text-muted);
-  padding: 6px 14px;
-  border-radius: var(--rs);
-  font: inherit;
-  font-size: 0.7rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: color 150ms ease, background 150ms ease;
-}
-
-.discover-seed-reroll:hover {
-  color: var(--text);
-  background: var(--raise3);
-}
 
 /* ── Discovery list rows ────────────────────────────────────── */
 
@@ -597,7 +501,6 @@
   transition: transform 140ms ease;
 }
 
-.discovery-source.on { box-shadow: 0 0 10px currentColor; }
 .discovery-source.sc.on { background: var(--src-sc); color: var(--src-sc); }
 .discovery-source.lb.on { background: var(--src-lb); color: var(--src-lb); }
 .discovery-source.lf.on { background: var(--src-lf); color: var(--src-lf); }

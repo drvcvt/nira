@@ -164,6 +164,7 @@ fn SourceToggle(
     rsx! {
         button {
             class: if enabled { "source-toggle on" } else { "source-toggle" },
+            "aria-pressed": if enabled { "true" } else { "false" },
             onclick: move |_| on_toggle.call(()),
             span { class: "source-toggle-icon",
                 if enabled {

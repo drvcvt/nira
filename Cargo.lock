@@ -4871,6 +4871,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "config",
  "librespot",
  "lofty",
  "rodio 0.22.2",
@@ -5758,6 +5759,7 @@ dependencies = [
  "num-rational",
  "symphonia",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

@@ -24,7 +24,7 @@
   corner-shape: squircle;
   -webkit-corner-shape: squircle;
   transition: background 140ms ease, color 140ms ease,
-              box-shadow 140ms ease, transform 80ms ease;
+              transform 80ms ease;
 }
 
 /* Md (default) — primary CTAs: Play, Connect, Find similar. */
@@ -76,9 +76,7 @@
    gracefully to plain rounded rect on engines that don't support it,
    so it's safe to ship unconditionally. */
 .nav-item,
-.discover-seed-reroll,
 .mode-btn,
-.banner-play-btn,
 .settings-btn,
 .bridge-target-btn {
   corner-shape: squircle;

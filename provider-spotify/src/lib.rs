@@ -262,20 +262,8 @@ impl SpotifyProvider {
         let Some(path) = self.tokens_path.as_ref() else {
             return Ok(());
         };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let json = serde_json::to_string_pretty(token)
-            .map_err(|e| ProviderError::Other(format!("token serialize: {e}")))?;
-        std::fs::write(path, json)
-            .map_err(|e| ProviderError::Other(format!("token write: {e}")))?;
-        // Best-effort tighten perms on Unix.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-        }
-        Ok(())
+        config::AppConfig::atomic_write_secret_json(path, token)
+            .map_err(|e| ProviderError::Other(format!("token write: {e}")))
     }
 
     /// Get a fresh access token, refreshing if it's within 60s of expiry.
@@ -1043,6 +1031,45 @@ struct SpRelatedArtists {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn token_persist_replaces_symlink_with_private_file() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let dir = std::env::temp_dir().join(format!(
+            "nira-spotify-token-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim_path = dir.join("victim");
+        let token_path = dir.join("spotify-tokens.json");
+        std::fs::write(&victim_path, "untouched").unwrap();
+        symlink(&victim_path, &token_path).unwrap();
+
+        let provider = SpotifyProvider::new("client".into(), Some(token_path.clone())).unwrap();
+        provider
+            .persist_token(&TokenSet {
+                access_token: "access".into(),
+                refresh_token: Some("refresh".into()),
+                expires_at_unix: 123,
+            })
+            .unwrap();
+
+        let victim = std::fs::read_to_string(&victim_path).unwrap();
+        let saved: TokenSet =
+            serde_json::from_str(&std::fs::read_to_string(&token_path).unwrap()).unwrap();
+        let mode = std::fs::metadata(&token_path).unwrap().permissions().mode() & 0o777;
+        std::fs::remove_dir_all(dir).unwrap();
+
+        assert_eq!(victim, "untouched");
+        assert_eq!(saved.access_token, "access");
+        assert_eq!(mode, 0o600);
+    }
 
     #[test]
     fn ghost_liked_item_is_skipped_not_fatal() {

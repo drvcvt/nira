@@ -11,10 +11,7 @@ use hooks::{
 };
 
 pub fn format_duration(d: std::time::Duration) -> String {
-    let total = d.as_secs();
-    let m = total / 60;
-    let s = total % 60;
-    format!("{m}:{s:02}")
+    hooks::fmt_time(d.as_secs())
 }
 
 /// Shared playback context for a list of rows. Every row's click handler
@@ -42,6 +39,33 @@ impl TrackCtx {
     /// and only on click, not per render.
     pub fn to_vec(&self) -> Vec<Track> {
         (*self.0).clone()
+    }
+}
+
+/// Normalized (artist, title) index of the on-disk library, shared between
+/// the album header's owned-count and the row list's per-row check.
+///
+/// Same `Arc` + pointer-equality trick as [`TrackCtx`], for the same reason:
+/// `track_match_key` costs 8 allocations per library track, both components
+/// were building their own copy every render, and both stay subscribed to
+/// `local.tracks` while hidden under the detail stack — so one rescan
+/// rebuilt the index once per mounted album page, twice over.
+#[derive(Clone)]
+pub struct OwnedIndex(std::sync::Arc<std::collections::HashSet<(String, String)>>);
+
+impl PartialEq for OwnedIndex {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl OwnedIndex {
+    pub fn new(keys: std::collections::HashSet<(String, String)>) -> Self {
+        Self(std::sync::Arc::new(keys))
+    }
+
+    pub fn contains(&self, key: &(String, String)) -> bool {
+        self.0.contains(key)
     }
 }
 

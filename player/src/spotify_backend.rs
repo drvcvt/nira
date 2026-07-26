@@ -169,7 +169,8 @@ impl SpotifyBackend {
         {
             let elapsed = t.elapsed().as_millis() as u32;
             s.position_ms = s.position_ms.saturating_add(elapsed);
-            s.last_position_at = Some(Instant::now());
+            // No `last_position_at` write here — `s` is a returned clone, so
+            // this only ever looked like it advanced the anchor.
         }
         s
     }

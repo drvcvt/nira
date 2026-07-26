@@ -12,6 +12,11 @@
 use dioxus::prelude::*;
 use provider_api::{AlbumUri, ArtistUri};
 
+/// How many detail levels stay mounted. Every level is a live page holding
+/// its loaded data and still subscribed to the shared library signal, so an
+/// uncapped stack turns a long browsing session into a slow leak.
+const DETAIL_STACK_CAP: usize = 12;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DetailView {
     Artist(ArtistUri),
@@ -55,6 +60,14 @@ impl UseDetail {
             return;
         }
         s.push(view);
+        // artist → album → artist → … is a loop with no natural end, and
+        // every level stays mounted (MainContent hides all but the top), so
+        // the stack grew without bound. Drop the oldest past the cap — Back
+        // stays useful for the recent path, which is all anyone walks back.
+        if s.len() > DETAIL_STACK_CAP {
+            let overflow = s.len() - DETAIL_STACK_CAP;
+            s.drain(..overflow);
+        }
         stack.set(s);
     }
 
