@@ -166,6 +166,9 @@ pub struct Player {
     /// forever on a channel that can never fire — on the UI thread. Every
     /// blocking rodio call checks this first and degrades instead of hanging.
     device_dead: Arc<std::sync::atomic::AtomicBool>,
+    /// Position last observed while `device_dead` was set, so the flag can be
+    /// retired on evidence rather than staying latched for the whole process.
+    dead_probe: Arc<Mutex<Option<Duration>>>,
     /// Visualizer analysis bus — every rodio source is wrapped in a
     /// sample tap feeding it; the UI polls [`Player::viz_frame`].
     viz: Arc<viz::VizBus>,
@@ -276,6 +279,7 @@ impl Player {
             gapless_advanced: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             skip_stale_next: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             device_dead,
+            dead_probe: Arc::new(Mutex::new(None)),
             viz: viz::VizBus::new(),
             transport_tx,
             transport_rx: Arc::new(Mutex::new(Some(transport_rx))),
@@ -311,7 +315,30 @@ impl Player {
     /// (usually the Dioxus UI thread, sometimes the MPRIS runtime) would block
     /// forever. Callers degrade to a no-op instead.
     pub fn device_is_dead(&self) -> bool {
-        self.device_dead.load(Ordering::Relaxed)
+        if !self.device_dead.load(Ordering::Relaxed) {
+            return false;
+        }
+        // The flag is set from cpal's error callback and nothing upstream ever
+        // clears it, so a single transient stream error used to disable
+        // seeking for the rest of the process — app-wide, not just for the
+        // caller that tripped it. Retire it on proof of life: rodio writes its
+        // position from inside the data callback, so a position that has moved
+        // since the last look means the callback is running again and the
+        // acknowledgement `try_seek`/`clear` wait on will arrive.
+        let pos = self.rodio.get_pos();
+        let mut probe = self.dead_probe.lock().unwrap_or_else(|p| p.into_inner());
+        match *probe {
+            Some(prev) if pos > prev => {
+                self.device_dead.store(false, Ordering::Relaxed);
+                *probe = None;
+                tracing::info!("audio device is responding again");
+                false
+            }
+            _ => {
+                *probe = Some(pos);
+                true
+            }
+        }
     }
 
     /// `rodio.clear()`, guarded. See [`Player::device_is_dead`].
@@ -957,15 +984,18 @@ impl Player {
                     tracing::warn!("seek ignored — audio device is not responding");
                     return;
                 }
+                // Keep the gapless boundary detector honest *before* the
+                // attempt, not only on the happy path. The detector reads a
+                // backwards jump of more than two seconds as "the sink crossed
+                // into the appended next track" and advances the queue; a
+                // deliberate backwards seek looks exactly like that. The
+                // rebuild fallback below never updated this, so scrubbing back
+                // on a format that needs it silently skipped a track.
+                if let Ok(mut l) = self.last_rodio_pos.lock() {
+                    *l = target;
+                }
                 match self.rodio.try_seek(target) {
-                    Ok(()) => {
-                        // Keep the gapless boundary detector honest: a user
-                        // seek is a legitimate backwards jump, not a source
-                        // hand-off.
-                        if let Ok(mut l) = self.last_rodio_pos.lock() {
-                            *l = target;
-                        }
-                    }
+                    Ok(()) => {}
                     Err(e) => {
                         // Symphonia can't seek backward on some formats (MP3
                         // from bytes in particular). Rebuild the decoder from

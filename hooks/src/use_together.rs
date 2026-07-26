@@ -41,6 +41,16 @@ const COMPARE: Duration = Duration::from_secs(5);
 /// Loop cadence while a session is up.
 const TICK: Duration = Duration::from_millis(500);
 
+/// Floor on how often a correction may be issued, however urgent it looks.
+/// A seek is not free — on a progressive stream it can re-open the connection
+/// — so correcting faster than this makes the drift it is chasing worse.
+const MIN_CORRECT_GAP: Duration = Duration::from_secs(2);
+
+/// Corrections that measurably fail to close the gap before we stop trying.
+/// Without this the loop reissues a seek that is being refused (a dead audio
+/// device, a source that cannot seek) twice a second, forever.
+const FUTILE_LIMIT: u8 = 2;
+
 /// Loop cadence while there is no session. This task lives for the whole
 /// process and is idle for almost all of it, so the common case gets the
 /// cheap cadence.
@@ -172,6 +182,9 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
         // Last (position, timestamp, playing) the host announced, so a scrub
         // can be spotted the moment the next announcement contradicts it.
         let mut last_seen: Option<(u64, u64, bool)> = None;
+        let mut last_correct_ns: u64 = 0;
+        let mut last_err_ns: Option<u64> = None;
+        let mut futile: u8 = 0;
 
         let mut tick = IDLE_TICK;
         loop {
@@ -218,6 +231,8 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
                         anchored = Some(target.playback_id);
                         since_compare = Duration::ZERO;
                         last_seen = None;
+                        last_err_ns = None;
+                        futile = 0;
                         match adopt(&queue, &local, &target) {
                             AdoptOutcome::Playing => {
                                 pending_align = true;
@@ -264,8 +279,38 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
                     if !jumped && since_compare < COMPARE {
                         continue;
                     }
+                    // Give up rather than hammer. A correction that does not
+                    // move us is being refused by something we cannot see from
+                    // here, and repeating it every tick only floods the log and
+                    // fights the queue.
+                    if futile >= FUTILE_LIMIT {
+                        continue;
+                    }
+                    let now_ns = t.now_ns();
+                    if now_ns.saturating_sub(last_correct_ns)
+                        < MIN_CORRECT_GAP.as_nanos() as u64
+                    {
+                        continue;
+                    }
                     since_compare = Duration::ZERO;
-                    correct(&player, &t, &target);
+                    last_correct_ns = now_ns;
+
+                    let err = correct(&player, &t, &target);
+                    // "Worked" means the gap shrank by a quarter or better.
+                    match (last_err_ns, err) {
+                        (Some(prev), Some(cur)) if cur >= prev - prev / 4 => {
+                            futile += 1;
+                            if futile >= FUTILE_LIMIT {
+                                tracing::warn!(
+                                    gap_ms = cur / 1_000_000,
+                                    "together: correction is not taking effect, \
+                                     leaving playback alone"
+                                );
+                            }
+                        }
+                        _ => futile = 0,
+                    }
+                    last_err_ns = err;
                 }
             }
         }
@@ -330,10 +375,10 @@ fn shared_provider(uri: &str) -> Option<ProviderId> {
 /// the one for backward seeks. Running ahead (which only happens when the host
 /// stalled) is fixed with a short pause instead, which costs nothing at all
 /// and never touches the decoder.
-fn correct(player: &player::Player, t: &Together, target: &RemoteNow) {
+fn correct(player: &player::Player, t: &Together, target: &RemoteNow) -> Option<u64> {
     let snap = player.snapshot();
     if !snap.has_source {
-        return;
+        return None;
     }
     let expected = expected_position(t, target);
     let (mine, _) = player.position_at();
@@ -347,7 +392,7 @@ fn correct(player: &player::Player, t: &Together, target: &RemoteNow) {
         } else {
             player.pause();
         }
-        return;
+        return None;
     }
 
     let behind = expected.checked_sub(mine);
@@ -385,6 +430,7 @@ fn correct(player: &player::Player, t: &Together, target: &RemoteNow) {
         }
         _ => {}
     }
+    Some(behind.or(ahead).unwrap_or_default().as_nanos() as u64)
 }
 
 /// Did the host's own timeline jump between two announcements?
@@ -395,12 +441,19 @@ fn correct(player: &player::Player, t: &Together, target: &RemoteNow) {
 /// spots the discontinuity on the very next message.
 fn host_jumped(prev: (u64, u64, bool), now: &RemoteNow) -> bool {
     let (prev_pos, prev_at, prev_playing) = prev;
-    // A transport change moves the position for legitimate reasons; treat it
-    // as a jump so we re-check, which is harmless.
-    if prev_playing != now.playing || !prev_playing {
+    // A transport change moves the position for legitimate reasons.
+    if prev_playing != now.playing {
         return true;
     }
-    let elapsed = now.at_ns.saturating_sub(prev_at);
+    // A paused host's position should not move at all, so no time is added and
+    // any change is a scrub. Treating "still paused" as a jump — which this
+    // did — made every single tick a correction for as long as the host stayed
+    // paused.
+    let elapsed = if now.playing {
+        now.at_ns.saturating_sub(prev_at)
+    } else {
+        0
+    };
     let predicted = prev_pos.saturating_add(elapsed);
     now.pos_ns.abs_diff(predicted) > RESYNC.as_nanos() as u64
 }
@@ -457,6 +510,21 @@ mod tests {
     #[test]
     fn transport_changes_force_a_recheck() {
         assert!(host_jumped((0, 0, true), &now(10, 10, false)));
-        assert!(host_jumped((0, 0, false), &now(0, 10, false)));
+    }
+
+    /// The regression that made every tick a correction: a host that simply
+    /// stays paused is not moving and must not read as a jump.
+    #[test]
+    fn a_host_that_stays_paused_is_not_a_jump() {
+        let prev = (Duration::from_secs(30).as_nanos() as u64, 0, false);
+        assert!(!host_jumped(prev, &now(30, 10, false)));
+        assert!(!host_jumped(prev, &now(30, 60, false)));
+    }
+
+    /// But scrubbing while paused still is one.
+    #[test]
+    fn scrubbing_while_paused_is_a_jump() {
+        let prev = (Duration::from_secs(30).as_nanos() as u64, 0, false);
+        assert!(host_jumped(prev, &now(90, 10, false)));
     }
 }
