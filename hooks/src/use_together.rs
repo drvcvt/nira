@@ -169,6 +169,9 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
         // without it the guest would restart the track and only converge when
         // the periodic comparison eventually trips the resync threshold.
         let mut pending_align = false;
+        // Last (position, timestamp, playing) the host announced, so a scrub
+        // can be spotted the moment the next announcement contradicts it.
+        let mut last_seen: Option<(u64, u64, bool)> = None;
 
         let mut tick = IDLE_TICK;
         loop {
@@ -214,6 +217,7 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
                         // the host kept playing it.
                         anchored = Some(target.playback_id);
                         since_compare = Duration::ZERO;
+                        last_seen = None;
                         match adopt(&queue, &local, &target) {
                             AdoptOutcome::Playing => {
                                 pending_align = true;
@@ -251,8 +255,13 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
                         continue;
                     }
 
+                    // A scrub on the host is not drift and must not wait for
+                    // the comparison timer.
+                    let jumped = last_seen.is_some_and(|p| host_jumped(p, &target));
+                    last_seen = Some((target.pos_ns, target.at_ns, target.playing));
+
                     since_compare += TICK;
-                    if since_compare < COMPARE {
+                    if !jumped && since_compare < COMPARE {
                         continue;
                     }
                     since_compare = Duration::ZERO;
@@ -345,13 +354,25 @@ fn correct(player: &player::Player, t: &Together, target: &RemoteNow) {
     let ahead = mine.checked_sub(expected);
 
     match (behind, ahead) {
+        // A large gap in either direction is a discontinuity — the host
+        // scrubbed, or we stalled — and the answer to both is to go where the
+        // host is. Seeking backwards can cost a decoder rebuild, which is
+        // unpleasant but bounded. Waiting the gap out instead is not: a host
+        // scrubbing back two minutes used to silence the guest for two
+        // minutes, which is what "it hangs after scrubbing" was.
         (Some(d), _) if d >= RESYNC => {
             tracing::info!(behind_ms = d.as_millis(), "together: resyncing forward");
             player.seek(expected);
         }
         (_, Some(d)) if d >= RESYNC => {
-            // Wait for the host to catch up to us rather than seeking back.
-            tracing::info!(ahead_ms = d.as_millis(), "together: holding for the host");
+            tracing::info!(ahead_ms = d.as_millis(), "together: resyncing back");
+            player.seek(expected);
+        }
+        // A small lead is worth waiting out rather than seeking, because a
+        // pause costs nothing and never touches the decoder. Bounded by the
+        // arm above: anything reaching RESYNC never gets here.
+        (_, Some(d)) if d > DEAD_ZONE => {
+            tracing::debug!(ahead_ms = d.as_millis(), "together: holding briefly");
             player.pause();
             let p = player.clone();
             spawn_forever(async move {
@@ -363,5 +384,79 @@ fn correct(player: &player::Player, t: &Together, target: &RemoteNow) {
             tracing::debug!(behind_ms = d.as_millis(), "together: drift, will re-anchor");
         }
         _ => {}
+    }
+}
+
+/// Did the host's own timeline jump between two announcements?
+///
+/// Without this the guest only notices a scrub when the comparison timer next
+/// comes round, so up to `COMPARE` plus a heartbeat of audibly wrong audio.
+/// Comparing the host's new position against what its previous one predicted
+/// spots the discontinuity on the very next message.
+fn host_jumped(prev: (u64, u64, bool), now: &RemoteNow) -> bool {
+    let (prev_pos, prev_at, prev_playing) = prev;
+    // A transport change moves the position for legitimate reasons; treat it
+    // as a jump so we re-check, which is harmless.
+    if prev_playing != now.playing || !prev_playing {
+        return true;
+    }
+    let elapsed = now.at_ns.saturating_sub(prev_at);
+    let predicted = prev_pos.saturating_add(elapsed);
+    now.pos_ns.abs_diff(predicted) > RESYNC.as_nanos() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn now(pos_secs: u64, at_secs: u64, playing: bool) -> RemoteNow {
+        RemoteNow {
+            track_uri: "soundcloud:track:1".into(),
+            artist: "a".into(),
+            title: "t".into(),
+            duration_ns: Duration::from_secs(300).as_nanos() as u64,
+            pos_ns: Duration::from_secs(pos_secs).as_nanos() as u64,
+            at_ns: Duration::from_secs(at_secs).as_nanos() as u64,
+            playing,
+            playback_id: 1,
+        }
+    }
+
+    /// Ordinary playback: the position advanced by exactly the elapsed time.
+    /// Reporting this as a jump would make every heartbeat force a correction.
+    #[test]
+    fn steady_playback_is_not_a_jump() {
+        assert!(!host_jumped((0, 0, true), &now(10, 10, true)));
+        assert!(!host_jumped(
+            (Duration::from_secs(60).as_nanos() as u64, 0, true),
+            &now(62, 2, true)
+        ));
+    }
+
+    /// Small clock and sampling noise must not read as a scrub either — the
+    /// whole point of the dead zone is that we ignore it.
+    #[test]
+    fn sampling_noise_is_not_a_jump() {
+        let prev = (Duration::from_secs(30).as_nanos() as u64, 0, true);
+        let mut n = now(32, 2, true);
+        n.pos_ns += Duration::from_millis(300).as_nanos() as u64;
+        assert!(!host_jumped(prev, &n));
+    }
+
+    /// The case that broke: the host scrubs and the guest must find out now,
+    /// not when the comparison timer next fires.
+    #[test]
+    fn a_scrub_in_either_direction_is_a_jump() {
+        let prev = (Duration::from_secs(60).as_nanos() as u64, 0, true);
+        assert!(host_jumped(prev, &now(120, 2, true)), "forward scrub missed");
+        assert!(host_jumped(prev, &now(5, 2, true)), "backward scrub missed");
+    }
+
+    /// Transport changes move the position for legitimate reasons; re-checking
+    /// is cheap and being wrong here is not.
+    #[test]
+    fn transport_changes_force_a_recheck() {
+        assert!(host_jumped((0, 0, true), &now(10, 10, false)));
+        assert!(host_jumped((0, 0, false), &now(0, 10, false)));
     }
 }
