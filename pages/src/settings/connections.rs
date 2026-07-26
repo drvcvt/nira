@@ -320,6 +320,12 @@ fn ListenTogetherCard() -> Element {
             if !peers.is_empty() {
                 p { class: "settings-status", "Connected: {peers}" }
             }
+            if let Some(missing) = together.unmatched.read().clone() {
+                p { class: "settings-status",
+                    "Sitting this one out — your friend is playing a file from their "
+                    "own library that you don't have: {missing}"
+                }
+            }
             if !status.is_empty() {
                 p { class: "settings-status",
                     "{status}"

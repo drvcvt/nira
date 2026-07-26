@@ -54,6 +54,9 @@ pub struct UseTogether {
     /// stops advancing on its own — otherwise both ends walk the queue at the
     /// same track end and race each other.
     pub following: Signal<bool>,
+    /// "artist — title" of a host track we cannot play, so the UI can say so
+    /// instead of leaving the guest staring at silence.
+    pub unmatched: Signal<Option<String>>,
 }
 
 impl UseTogether {
@@ -145,11 +148,13 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
     let together = use_signal(Together::new);
     let mut snapshot = use_signal(|| together.peek().snapshot());
     let mut following = use_signal(|| false);
+    let mut unmatched = use_signal(|| None::<String>);
 
     use_context_provider(move || UseTogether {
         together,
         snapshot,
         following,
+        unmatched,
     });
 
     // Root-scoped: the session outlives whatever page started it.
@@ -189,7 +194,12 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
                     t.publish(describe(&queue, &player));
                     anchored = None;
                 }
-                Role::Off => anchored = None,
+                Role::Off => {
+                    anchored = None;
+                    if unmatched.peek().is_some() {
+                        unmatched.set(None);
+                    }
+                }
                 Role::Guest => {
                     let Some(target) = snap.target.clone() else {
                         continue;
@@ -198,10 +208,32 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
                     // New playback on the host — load our own copy and line up
                     // from scratch. Position is not comparable across this.
                     if anchored != Some(target.playback_id) {
-                        if adopt(&queue, &local, &target) {
-                            anchored = Some(target.playback_id);
-                            since_compare = Duration::ZERO;
-                            pending_align = true;
+                        // Record the attempt whatever the outcome. Retrying a
+                        // track we cannot play buys nothing and, before this,
+                        // logged the same line twice a second for as long as
+                        // the host kept playing it.
+                        anchored = Some(target.playback_id);
+                        since_compare = Duration::ZERO;
+                        match adopt(&queue, &local, &target) {
+                            AdoptOutcome::Playing => {
+                                pending_align = true;
+                                if unmatched.peek().is_some() {
+                                    unmatched.set(None);
+                                }
+                            }
+                            AdoptOutcome::NotOurs => {
+                                pending_align = false;
+                                tracing::info!(
+                                    title = %target.title,
+                                    artist = %target.artist,
+                                    uri = %target.track_uri,
+                                    "together: host is on a local file we do not have"
+                                );
+                                unmatched.set(Some(format!(
+                                    "{} — {}",
+                                    target.artist, target.title
+                                )));
+                            }
                         }
                         continue;
                     }
@@ -234,20 +266,51 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
 /// Start playing the host's track locally. Step 1 only handles the case where
 /// we already own it; anything else is reported and skipped rather than
 /// silently leaving the guest on the previous track.
-fn adopt(queue: &UseQueue, local: &UseLocalLibrary, target: &RemoteNow) -> bool {
+fn adopt(queue: &UseQueue, local: &UseLocalLibrary, target: &RemoteNow) -> AdoptOutcome {
+    // A streaming provider's URI means the same thing on both machines, so the
+    // guest can just play it. This is the common case in practice — the host is
+    // usually playing something neither of us has on disk — and requiring a
+    // local copy for it was the wrong default.
+    if let Some(provider) = shared_provider(&target.track_uri) {
+        let mut t = as_match_target(target);
+        t.provider = provider;
+        queue.play_track(t);
+        return AdoptOutcome::Playing;
+    }
+
+    // A `local:` URI is a path on the host's machine and means nothing here, so
+    // fall back to finding our own copy of the same recording.
     let wanted = as_match_target(target);
     let library = local.tracks.peek();
     let Some(found) = crate::matching::find_strict_match(&wanted, &library).cloned() else {
-        tracing::info!(
-            title = %target.title,
-            artist = %target.artist,
-            "together: host is playing something that is not in our library"
-        );
-        return false;
+        return AdoptOutcome::NotOurs;
     };
     drop(library);
     queue.play_track(found);
-    true
+    AdoptOutcome::Playing
+}
+
+#[derive(PartialEq)]
+enum AdoptOutcome {
+    Playing,
+    /// The host is on a local file we do not have. Transferring it is a
+    /// separate feature; until then the guest sits this track out.
+    NotOurs,
+}
+
+/// Providers whose URIs address the same track from any machine.
+///
+/// Deliberately not exhaustive over `ProviderId`: a provider the guest is not
+/// signed in to would fail at load time with a less useful error than simply
+/// falling through to the local-library match.
+fn shared_provider(uri: &str) -> Option<ProviderId> {
+    if uri.starts_with("soundcloud:") {
+        Some(ProviderId::SoundCloud)
+    } else if uri.starts_with("spotify:") {
+        Some(ProviderId::Spotify)
+    } else {
+        None
+    }
 }
 
 /// Compare and, only if the gap is real, correct.
