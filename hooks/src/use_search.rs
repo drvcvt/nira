@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use dioxus::prelude::*;
 use provider_api::{Artist, Provider, Query, SearchResults, Track};
-use provider_hires-provider::the hi-res providerProvider;
 use provider_soundcloud::SoundCloudProvider;
 use provider_spotify::SpotifyProvider;
 
@@ -34,7 +33,6 @@ pub struct UseSearch {
 pub fn use_search() -> UseSearch {
     let sc = use_context::<Arc<SoundCloudProvider>>();
     let sp = use_context::<Arc<SpotifyProvider>>();
-    let qz = use_context::<Arc<the hi-res providerProvider>>();
 
     let query = use_signal(String::new);
     let results = use_signal(Vec::<Track>::new);
@@ -46,13 +44,11 @@ pub fn use_search() -> UseSearch {
     use_effect({
         let sc = sc.clone();
         let sp = sp.clone();
-        let qz = qz.clone();
         move || {
             let snapshot = query.read().clone();
             let sc = sc.clone();
             let sp = sp.clone();
-            let qz = qz.clone();
-            let q_sig = query;
+                let q_sig = query;
             let mut results_sig = results;
             let mut artists_sig = artists;
             let mut is_searching_sig = is_searching;
@@ -81,13 +77,11 @@ pub fn use_search() -> UseSearch {
                 };
 
                 let sp_connected = sp.is_connected();
-                let qz_connected = qz.is_connected();
                 let q_sc = q.clone();
                 let q_sp = q.clone();
-                let q_qz = q.clone();
                 // Per-provider timing so a slow search points at its culprit.
                 let t0 = std::time::Instant::now();
-                let (sc_res, sp_res, qz_res) = tokio::join!(
+                let (sc_res, sp_res) = tokio::join!(
                     async {
                         let t = std::time::Instant::now();
                         let r = sc.search(&q_sc).await;
@@ -102,24 +96,13 @@ pub fn use_search() -> UseSearch {
                         };
                         (r, t.elapsed().as_millis() as u64)
                     },
-                    async move {
-                        let t = std::time::Instant::now();
-                        let r = if qz_connected {
-                            qz.search(&q_qz).await
-                        } else {
-                            Ok(SearchResults::default())
-                        };
-                        (r, t.elapsed().as_millis() as u64)
-                    },
                 );
                 let (sc_res, sc_ms) = sc_res;
                 let (sp_res, sp_ms) = sp_res;
-                let (qz_res, qz_ms) = qz_res;
                 tracing::info!(
                     total_ms = t0.elapsed().as_millis() as u64,
                     sc_ms,
                     sp_ms,
-                    qz_ms,
                     "search completed"
                 );
 
@@ -129,16 +112,8 @@ pub fn use_search() -> UseSearch {
                     return;
                 }
 
-                // the hi-res provider first (it's the download source the user came for), then
-                // the streaming providers interleaved. Any provider that errors
+                // Streaming providers interleaved. Any provider that errors
                 // just drops out — one failure never blanks the results.
-                let qz_tracks = match qz_res {
-                    Ok(r) => r.tracks,
-                    Err(e) => {
-                        tracing::warn!(error=%e, "the hi-res provider search failed");
-                        Vec::new()
-                    }
-                };
                 let (sc_tracks, sc_artists, sc_err) = match sc_res {
                     Ok(r) => (r.tracks, r.artists, None),
                     Err(e) => (Vec::new(), Vec::new(), Some(e)),
@@ -152,27 +127,23 @@ pub fn use_search() -> UseSearch {
 
                 match (sc_err, sp_err) {
                     (None, None) => {
-                        results_sig.set(prepend(qz_tracks, interleave(sp_tracks, sc_tracks)));
+                        results_sig.set(interleave(sp_tracks, sc_tracks));
                     }
                     (None, Some(e)) => {
                         tracing::warn!(error=%e, "Spotify search failed; falling back to SC only");
-                        results_sig.set(prepend(qz_tracks, sc_tracks));
+                        results_sig.set(sc_tracks);
                     }
                     (Some(e), None) => {
                         tracing::warn!(error=%e, "SoundCloud search failed; falling back to Spotify only");
-                        results_sig.set(prepend(qz_tracks, sp_tracks));
+                        results_sig.set(sp_tracks);
                     }
                     (Some(sc_e), Some(sp_e)) => {
-                        if qz_tracks.is_empty() {
-                            error_sig.set(Some(format!(
-                                "both providers failed — sc: {sc_e}; spotify: {sp_e}"
-                            )));
-                            // Don't leave the previous query's results behind
-                            // an error banner where Enter could still play them.
-                            results_sig.set(Vec::new());
-                        } else {
-                            results_sig.set(qz_tracks);
-                        }
+                        error_sig.set(Some(format!(
+                            "both providers failed — sc: {sc_e}; spotify: {sp_e}"
+                        )));
+                        // Don't leave the previous query's results behind
+                        // an error banner where Enter could still play them.
+                        results_sig.set(Vec::new());
                     }
                 }
                 results_for_sig.set(snapshot.clone());
@@ -192,8 +163,7 @@ pub fn use_search() -> UseSearch {
 }
 
 /// Artist hits: Spotify first (there's a full profile behind the click),
-/// SC users only for names Spotify didn't cover. the hi-res provider artists never enter
-/// the merge — there's no the hi-res provider artist page to open yet.
+/// SC users only for names Spotify didn't cover.
 fn merge_artist_hits(spotify: Vec<Artist>, soundcloud: Vec<Artist>) -> Vec<Artist> {
     let mut merged = spotify;
     let mut seen: HashSet<String> = merged.iter().map(|a| match_key(&a.name)).collect();
@@ -204,12 +174,6 @@ fn merge_artist_hits(spotify: Vec<Artist>, soundcloud: Vec<Artist>) -> Vec<Artis
     }
     merged.truncate(8);
     merged
-}
-
-/// Put `head` in front of `tail` (the hi-res provider results lead the list).
-fn prepend(mut head: Vec<Track>, tail: Vec<Track>) -> Vec<Track> {
-    head.extend(tail);
-    head
 }
 
 fn interleave(a: Vec<Track>, b: Vec<Track>) -> Vec<Track> {

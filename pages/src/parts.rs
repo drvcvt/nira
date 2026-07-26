@@ -73,7 +73,6 @@ pub fn provider_badge_class(provider: ProviderId) -> &'static str {
     match provider {
         ProviderId::Spotify => "track-badge spotify",
         ProviderId::SoundCloud => "track-badge soundcloud",
-        ProviderId::the hi-res provider => "track-badge hires-provider",
         ProviderId::Local => "track-badge",
     }
 }

@@ -24,7 +24,6 @@ use dioxus::prelude::*;
 use discovery::{DiscoveryEngine, DiscoveryResult, SimilarToSeed, canonical_title};
 use player::{Active, NowPlaying, Player, PlayerSnapshot, TransportCmd};
 use provider_api::{Provider, ProviderId, StreamHandle, Track};
-use provider_hires-provider::the hi-res providerProvider;
 use provider_soundcloud::SoundCloudProvider;
 use provider_spotify::SpotifyProvider;
 use rand::Rng;
@@ -71,13 +70,7 @@ pub struct UseQueue {
     resume_hint: Signal<Option<(String, Duration)>>,
     sc: Arc<SoundCloudProvider>,
     sp: Arc<SpotifyProvider>,
-    qz: Arc<the hi-res providerProvider>,
     player: Player,
-    /// FLAC-first swap cache: original track URI → the matched the hi-res provider track
-    /// (None = searched, no strict match). Session-scoped so replays and
-    /// queue walks don't re-hit the the hi-res provider search API per play. Errors are
-    /// NOT cached — a network blip shouldn't pin a track to lossy forever.
-    qz_swaps: Arc<std::sync::Mutex<std::collections::HashMap<String, Option<Track>>>>,
 }
 
 /// Lifecycle of a Song Radio fetch. Surfaced via `UseQueue::radio_status`
@@ -807,46 +800,11 @@ fn load_current(queue: UseQueue) {
         error.set(None);
         player.set_now_playing(Some(now_playing_from(&track)));
 
-        // FLAC first: streaming-provider tracks get one shot at resolving
-        // the same recording on the hi-res provider (strict artist+title+duration match).
-        // Hit → we stream the FLAC instead and the player bar shows the hi-res provider
-        // as the source; miss or any error → the original provider plays.
-        // The queue entry keeps its original identity (likes, re-clicks).
-        let swap = resolve_flac_first(&queue, &track).await;
-        let playing = match &swap {
-            Some(qz_track) => {
-                if !is_current_load(&queue, generation, idx, &expected_uri) {
-                    return;
-                }
-                tracing::info!(from = %track.uri.0, to = %qz_track.uri.0, "flac-first: playing the hi-res provider variant");
-                player.set_now_playing(Some(now_playing_from(qz_track)));
-                qz_track.clone()
-            }
-            None => track.clone(),
-        };
-
-        let Some(mut outcome) =
-            play_one(&queue, &player, &playing, generation, idx, &expected_uri).await
+        let Some(outcome) =
+            play_one(&queue, &player, &track, generation, idx, &expected_uri).await
         else {
             return; // superseded by a newer load
         };
-
-        // The matched FLAC resolved but wouldn't stream (region lock, sub
-        // limits, CDN hiccup) — retry once via the original provider so the
-        // user still hears the track instead of an error.
-        if outcome.is_err() && swap.is_some() {
-            tracing::warn!(
-                error = ?outcome.as_ref().err(),
-                "flac-first: hires-provider stream failed, falling back to original provider"
-            );
-            player.set_now_playing(Some(now_playing_from(&track)));
-            let Some(retry) =
-                play_one(&queue, &player, &track, generation, idx, &expected_uri).await
-            else {
-                return;
-            };
-            outcome = retry;
-        }
 
         if !is_current_load(&queue, generation, idx, &expected_uri) {
             return;
@@ -923,9 +881,7 @@ async fn prefetch_gapless(queue: UseQueue, generation: u64, target: usize) {
     if track.provider == ProviderId::Spotify {
         return;
     }
-    let playing = resolve_flac_first(&queue, &track)
-        .await
-        .unwrap_or_else(|| track.clone());
+    let playing = track.clone();
     // Superseded by a newer load OR cancelled by a queue edit — bail before
     // touching the sink.
     let stale = || {
@@ -944,12 +900,8 @@ async fn prefetch_gapless(queue: UseQueue, generation: u64, target: usize) {
                 .unwrap_or(false),
             None => false,
         },
-        ProviderId::SoundCloud | ProviderId::the hi-res provider => {
-            let loaded = if playing.provider == ProviderId::SoundCloud {
-                load_sc(queue.sc.as_ref(), &playing).await
-            } else {
-                load_qz(queue.qz.as_ref(), &playing).await
-            };
+        ProviderId::SoundCloud => {
+            let loaded = load_sc(queue.sc.as_ref(), &playing).await;
             match loaded {
                 Ok(LoadedStream::Url(url)) => {
                     match Player::prepare_http(&url, Some(playing.duration)).await {
@@ -1023,12 +975,6 @@ async fn play_one(
                 }
             }
         },
-        ProviderId::the hi-res provider => match load_qz(queue.qz.as_ref(), track).await {
-            Ok(stream) => {
-                start_stream(queue, player, track, stream, generation, idx, expected_uri).await?
-            }
-            Err(msg) => Err(msg),
-        },
         ProviderId::Local => match provider_local::path_from_uri(&track.uri.0) {
             Some(path) => player
                 .play_file(path, Some(track.duration))
@@ -1036,48 +982,6 @@ async fn play_one(
             None => Err("Malformed local track reference.".into()),
         },
     })
-}
-
-/// Resolve a Spotify/SoundCloud track to its the hi-res provider FLAC counterpart, if the
-/// user is logged in to the hi-res provider and a strict match exists. Cached per original
-/// URI for the session; search errors return None without caching so the
-/// next play retries.
-async fn resolve_flac_first(queue: &UseQueue, track: &Track) -> Option<Track> {
-    if !matches!(
-        track.provider,
-        ProviderId::Spotify | ProviderId::SoundCloud
-    ) {
-        return None;
-    }
-    if !queue.qz.is_connected() {
-        return None;
-    }
-    if let Ok(cache) = queue.qz_swaps.lock()
-        && let Some(cached) = cache.get(&track.uri.0)
-    {
-        return cached.clone();
-    }
-
-    let artist = track
-        .artists
-        .first()
-        .map(|a| a.name.clone())
-        .unwrap_or_default();
-    let q = provider_api::Query {
-        text: format!("{artist} {}", track.title).trim().to_string(),
-        limit: Some(10),
-    };
-    let found = match queue.qz.search(&q).await {
-        Ok(res) => crate::matching::find_strict_match(track, &res.tracks).cloned(),
-        Err(e) => {
-            tracing::debug!(error = %e, uri = %track.uri.0, "flac-first: hires-provider search failed");
-            return None; // not cached — retry on next play
-        }
-    };
-    if let Ok(mut cache) = queue.qz_swaps.lock() {
-        cache.insert(track.uri.0.clone(), found.clone());
-    }
-    found
 }
 
 fn is_current_load(queue: &UseQueue, generation: u64, idx: usize, uri: &str) -> bool {
@@ -1111,9 +1015,6 @@ fn now_playing_from(track: &Track) -> NowPlaying {
     }
 }
 
-/// the hi-res provider streaming: getFileUrl → single FLAC CDN URL → bytes. The account
-/// must be logged in (Settings → Connections). Used for in-app playback; the
-/// download-to-library path in `provider-hires-provider` is separate.
 /// What a provider load resolved to: a URL the player streams progressively
 /// (playback starts after a small prefetch), or fully materialised bytes
 /// (SoundCloud HLS, where the provider concatenates segments itself).
@@ -1152,21 +1053,6 @@ async fn start_stream(
             }
             Some(player.play_bytes(bytes).map_err(|e| format!("decode: {e}")))
         }
-    }
-}
-
-async fn load_qz(qz: &the hi-res providerProvider, track: &Track) -> Result<LoadedStream, String> {
-    let stream = qz.resolve_stream(&track.uri).await.map_err(|e| {
-        if matches!(e, provider_api::ProviderError::AuthRequired) {
-            "Log in to the hi-res provider in Settings to stream this track.".to_string()
-        } else {
-            format!("the hi-res provider stream unavailable: {e}")
-        }
-    })?;
-    match stream {
-        StreamHandle::HttpStream { url, .. } => Ok(LoadedStream::Url(url)),
-        StreamHandle::Bytes { data, .. } => Ok(LoadedStream::Bytes(data)),
-        StreamHandle::InProcess { .. } => Err("Unexpected the hi-res provider stream type.".into()),
     }
 }
 
@@ -1217,7 +1103,6 @@ pub fn install(
     player: Player,
     sc: Arc<SoundCloudProvider>,
     sp: Arc<SpotifyProvider>,
-    qz: Arc<the hi-res providerProvider>,
 ) {
     let entries = use_signal(Vec::<Track>::new);
     let current_index = use_signal(|| None::<usize>);
@@ -1247,9 +1132,7 @@ pub fn install(
         resume_hint,
         sc,
         sp,
-        qz,
         player: player.clone(),
-        qz_swaps: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
     use_context_provider({
         let queue = queue.clone();

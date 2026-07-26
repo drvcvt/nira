@@ -100,7 +100,7 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
                     } else if !has_query {
                         div { class: "search-overlay-empty",
                             div { class: "search-overlay-empty-title", "Start typing" }
-                            div { class: "search-overlay-empty-copy", "the hi-res provider results lead when connected, then Spotify and SoundCloud. Enter plays the first result." }
+                            div { class: "search-overlay-empty-copy", "Spotify and SoundCloud results interleaved. Enter plays the first result." }
                         }
                     } else if results.is_empty() && artist_hits.is_empty() && !is_searching {
                         div { class: "search-overlay-empty",

@@ -13,7 +13,6 @@ use dioxus::prelude::*;
 use provider_api::{
     AlbumBrief, AlbumType, Artist, ArtistUri, Provider, ProviderId, Query, RelatedArtist, Track,
 };
-use provider_hires-provider::the hi-res providerProvider;
 use provider_soundcloud::SoundCloudProvider;
 use provider_spotify::SpotifyProvider;
 
@@ -46,7 +45,6 @@ pub struct UseArtist {
     generation: Signal<u64>,
     sc: Signal<Option<Arc<SoundCloudProvider>>>,
     sp: Signal<Option<Arc<SpotifyProvider>>>,
-    qz: Signal<Option<Arc<the hi-res providerProvider>>>,
 }
 
 impl UseArtist {
@@ -56,7 +54,6 @@ impl UseArtist {
     pub fn load(&self, uri: ArtistUri) {
         let sc = self.sc.peek().clone();
         let sp = self.sp.peek().clone();
-        let qz = self.qz.peek().clone();
         let mut view = self.view;
         let mut is_loading = self.is_loading;
         let mut is_loading_related = self.is_loading_related;
@@ -75,7 +72,6 @@ impl UseArtist {
             let provider: Option<Arc<dyn Provider>> = match infer_provider(&uri) {
                 Some(ProviderId::Spotify) => sp.map(|p| p as Arc<dyn Provider>),
                 Some(ProviderId::SoundCloud) => sc.map(|p| p as Arc<dyn Provider>),
-                Some(ProviderId::the hi-res provider) => qz.map(|p| p as Arc<dyn Provider>),
                 _ => None,
             };
             let Some(provider) = provider else {
@@ -172,7 +168,7 @@ impl UseArtist {
         // the augmentation alias when one was found, otherwise stay empty.
         let uri = match provider_id {
             ProviderId::Spotify => Some(v.artist.uri.clone()),
-            ProviderId::SoundCloud | ProviderId::the hi-res provider | ProviderId::Local => {
+            ProviderId::SoundCloud | ProviderId::Local => {
                 v.via_spotify.clone()
             }
         };
@@ -210,7 +206,6 @@ impl UseArtist {
 pub fn use_artist() -> UseArtist {
     let sc = use_context::<Arc<SoundCloudProvider>>();
     let sp = use_context::<Arc<SpotifyProvider>>();
-    let qz = use_context::<Arc<the hi-res providerProvider>>();
     UseArtist {
         view: use_signal(|| None::<ArtistView>),
         is_loading: use_signal(|| false),
@@ -219,7 +214,6 @@ pub fn use_artist() -> UseArtist {
         generation: use_signal(|| 0u64),
         sc: use_signal(|| Some(sc)),
         sp: use_signal(|| Some(sp)),
-        qz: use_signal(|| Some(qz)),
     }
 }
 
@@ -256,8 +250,6 @@ fn infer_provider(uri: &ArtistUri) -> Option<ProviderId> {
         Some(ProviderId::Spotify)
     } else if uri.0.starts_with("soundcloud:") {
         Some(ProviderId::SoundCloud)
-    } else if uri.0.starts_with("hires-provider:") {
-        Some(ProviderId::the hi-res provider)
     } else {
         // local: URIs are name-derived keys, not provider entities — the UI
         // renders them as plain text (see `uri_has_detail_page`).

@@ -96,7 +96,6 @@ impl UseDetail {
 pub fn uri_has_detail_page(uri: &str) -> bool {
     uri.starts_with("spotify:")
         || uri.starts_with("soundcloud:")
-        || uri.starts_with("hires-provider:")
         || uri.starts_with("local:album:")
 }
 

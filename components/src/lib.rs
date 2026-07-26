@@ -8,14 +8,12 @@ pub mod bottombar;
 pub mod button;
 pub mod cover;
 pub mod ctx_menu;
-pub mod download_toast;
 pub mod hotkeys;
 pub mod searchbar;
 pub mod sidebar;
 pub mod visualizer;
 
 pub use button::{Button, ButtonSize, ButtonVariant};
-pub use download_toast::DownloadToast;
 pub use searchbar::SearchBar;
 
 /// Move focus into an overlay when it opens and hand it back when it closes.

@@ -398,7 +398,7 @@
   letter-spacing: 0.02em;
 }
 
-/* ── Native <select> (e.g. the hi-res provider quality) — mt-ui-style ─────── */
+/* ── Native <select> — mt-ui-style ─────────────────────────── */
 
 select.settings-input {
   appearance: none;

@@ -10,7 +10,6 @@ members = [
     "provider-api",
     "provider-soundcloud",
     "provider-spotify",
-    "provider-hires-provider",
     "provider-local",
     "enrichment",
     "discovery",
@@ -57,7 +56,6 @@ config = { path = "./config" }
 provider-api = { path = "./provider-api" }
 provider-soundcloud = { path = "./provider-soundcloud" }
 provider-spotify = { path = "./provider-spotify" }
-provider-hires-provider = { path = "./provider-hires-provider" }
 provider-local = { path = "./provider-local" }
 enrichment = { path = "./enrichment" }
 discovery = { path = "./discovery" }

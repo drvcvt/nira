@@ -3,20 +3,17 @@
 //! Sections (top→bottom):
 //! 1. Header (title + artist · provider)
 //! 2. Playback — Play next, Add to queue, Song Radio
-//! 3. Download — FLAC via the hi-res provider (direct for the hi-res provider tracks, strict match
-//!    for other providers; album entry on the hi-res provider tracks only)
-//! 4. Save — Like / Unlike, Add to playlist (expands in place)
-//! 5. Navigate — Artist / Album
-//! 6. History — Remove from history (only when opened from a history card)
+//! 3. Save — Like / Unlike, Add to playlist (expands in place)
+//! 4. Navigate — Artist / Album
+//! 5. History — Remove from history (only when opened from a history card)
 
 use std::sync::Arc;
 
 use dioxus::prelude::*;
 use hooks::{
-    AlbumCtx, AlbumUri, CtxTarget, DiscoveryEngine, PlaylistAlbum, ProviderId,
-    download_hires-provider_album, download_hires-provider_track, download_hires-provider_track_by_match,
-    uri_has_detail_page, use_config, use_ctx_menu, use_detail, use_downloads, use_history,
-    use_likes, use_local_library, use_playlists, use_hires-provider, use_queue,
+    AlbumCtx, AlbumUri, CtxTarget, DiscoveryEngine, PlaylistAlbum,
+    uri_has_detail_page, use_ctx_menu, use_detail, use_history,
+    use_likes, use_playlists, use_queue,
 };
 
 /// Anchor-flip so the menu never overflows the window: near the right or
@@ -38,14 +35,6 @@ fn anchor_style(x: f64, y: f64) -> (String, String) {
         format!("top: {:.0}px;", y)
     };
     (h, v)
-}
-
-fn track_download_label(provider: ProviderId) -> &'static str {
-    if provider == ProviderId::the hi-res provider {
-        "Download (.flac)"
-    } else {
-        "Find on the hi-res provider & download"
-    }
 }
 
 /// Move the roving keyboard focus over the menu's enabled items by `delta`
@@ -87,10 +76,6 @@ pub fn ContextMenu() -> Element {
     let playlists = use_playlists();
     let history = use_history();
     let engine = use_context::<Arc<DiscoveryEngine>>();
-    let qz = use_hires-provider();
-    let config = use_config();
-    let local = use_local_library();
-    let downloads = use_downloads();
     // Inline "Add to playlist" expansion state — reset whenever the menu
     // opens/closes so every fresh right-click starts collapsed.
     let mut show_playlists = use_signal(|| false);
@@ -195,69 +180,6 @@ pub fn ContextMenu() -> Element {
 
     let has_nav = artist_nav.is_some() || album_nav.is_some();
 
-    // Download section — any streaming track can be grabbed as FLAC. A
-    // the hi-res provider track downloads directly; other providers are matched on the hi-res provider
-    // first (strict artist/title/duration match). The flows live in
-    // `hooks::download_hires-provider_*` (shared with the album page): write hi-res
-    // FLAC (MP3 fallback) into the library, then rescan so it shows up
-    // under Library → Local. Local tracks are already on disk — no entry.
-    let is_hires-provider = track.provider == ProviderId::the hi-res provider;
-    let download_label = track_download_label(track.provider);
-    let can_download = qz.is_connected() && track.provider != ProviderId::Local;
-    let qz_album = track
-        .album
-        .as_ref()
-        .filter(|_| is_hires-provider)
-        .filter(|a| a.uri.0.starts_with("hires-provider:album:"))
-        .map(|a| (a.uri.0.clone(), a.title.clone()));
-    let library_root = config.read().library_root.clone();
-
-    let download_track_section = can_download.then(|| {
-        let qz = qz.clone();
-        let local = local.clone();
-        let root = library_root.clone();
-        let track = track.clone();
-        rsx! {
-            button {
-                class: "ctx-item",
-                role: "menuitem",
-                onclick: move |_| {
-                    ctx.close();
-                    if track.provider == ProviderId::the hi-res provider {
-                        download_hires-provider_track(qz.clone(), local.clone(), downloads, root.clone(), track.uri.0.clone(), track.title.clone());
-                    } else {
-                        download_hires-provider_track_by_match(qz.clone(), local.clone(), downloads, root.clone(), track.clone());
-                    }
-                },
-                i { class: "ctx-icon fa-solid fa-download" }
-                div { class: "ctx-item-body",
-                    div { class: "ctx-item-label", "{download_label}" }
-                }
-            }
-        }
-    });
-
-    let download_album_section = qz_album.clone().map(|(uri, album_title)| {
-        let qz = qz.clone();
-        let local = local.clone();
-        let root = library_root.clone();
-        rsx! {
-            button {
-                class: "ctx-item",
-                role: "menuitem",
-                onclick: move |_| {
-                    ctx.close();
-                    download_hires-provider_album(qz.clone(), local.clone(), downloads, root.clone(), uri.clone(), album_title.clone());
-                },
-                i { class: "ctx-icon fa-solid fa-compact-disc" }
-                div { class: "ctx-item-body",
-                    div { class: "ctx-item-label", "Download album (.flac)" }
-                }
-            }
-        }
-    });
-
-    let has_download = can_download;
 
     // History card origin → offer removing exactly that log row.
     let history_section = state.history_entry.clone().map(|entry| {
@@ -362,14 +284,6 @@ pub fn ContextMenu() -> Element {
                     div { class: "ctx-item-body",
                         div { class: "ctx-item-label", "Song Radio" }
                     }
-                }
-            }
-
-            if has_download {
-                div { class: "ctx-sep" }
-                div { class: "ctx-group",
-                    {download_track_section}
-                    {download_album_section}
                 }
             }
 
@@ -688,18 +602,5 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
-    #[test]
-    fn cross_provider_download_label_names_hires-provider_search() {
-        assert_eq!(track_download_label(ProviderId::the hi-res provider), "Download (.flac)");
-        assert_eq!(
-            track_download_label(ProviderId::Spotify),
-            "Find on the hi-res provider & download"
-        );
-        assert_eq!(
-            track_download_label(ProviderId::SoundCloud),
-            "Find on the hi-res provider & download"
-        );
-    }
 }

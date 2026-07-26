@@ -8,7 +8,6 @@ use dioxus::prelude::*;
 use provider_api::{
     AlbumDetail, AlbumType, AlbumUri, ArtistRef, ArtistUri, Provider, ProviderId, Track,
 };
-use provider_hires-provider::the hi-res providerProvider;
 use provider_soundcloud::SoundCloudProvider;
 use provider_spotify::SpotifyProvider;
 
@@ -24,7 +23,6 @@ pub struct UseAlbum {
     generation: Signal<u64>,
     sc: Signal<Option<Arc<SoundCloudProvider>>>,
     sp: Signal<Option<Arc<SpotifyProvider>>>,
-    qz: Signal<Option<Arc<the hi-res providerProvider>>>,
     local: UseLocalLibrary,
 }
 
@@ -32,7 +30,6 @@ impl UseAlbum {
     pub fn load(&self, uri: AlbumUri) {
         let sc = self.sc.peek().clone();
         let sp = self.sp.peek().clone();
-        let qz = self.qz.peek().clone();
         let local = self.local;
         let mut view = self.view;
         let mut is_loading = self.is_loading;
@@ -62,8 +59,6 @@ impl UseAlbum {
                 sp.map(|p| p as Arc<dyn Provider>)
             } else if uri.0.starts_with("soundcloud:") {
                 sc.map(|p| p as Arc<dyn Provider>)
-            } else if uri.0.starts_with("hires-provider:") {
-                qz.map(|p| p as Arc<dyn Provider>)
             } else {
                 None
             };
@@ -100,7 +95,6 @@ impl UseAlbum {
 pub async fn fetch_album_detail(
     sc: Arc<SoundCloudProvider>,
     sp: Arc<SpotifyProvider>,
-    qz: Arc<the hi-res providerProvider>,
     local: UseLocalLibrary,
     uri: AlbumUri,
 ) -> Option<AlbumDetail> {
@@ -111,8 +105,6 @@ pub async fn fetch_album_detail(
         Some(sp as Arc<dyn Provider>)
     } else if uri.0.starts_with("soundcloud:") {
         Some(sc as Arc<dyn Provider>)
-    } else if uri.0.starts_with("hires-provider:") {
-        Some(qz as Arc<dyn Provider>)
     } else {
         None
     };
@@ -152,7 +144,6 @@ fn local_album_detail(local: &UseLocalLibrary, uri: &AlbumUri) -> Option<AlbumDe
 pub fn use_album() -> UseAlbum {
     let sc = use_context::<Arc<SoundCloudProvider>>();
     let sp = use_context::<Arc<SpotifyProvider>>();
-    let qz = use_context::<Arc<the hi-res providerProvider>>();
     let local = use_local_library();
     UseAlbum {
         view: use_signal(|| None::<AlbumDetail>),
@@ -161,7 +152,6 @@ pub fn use_album() -> UseAlbum {
         generation: use_signal(|| 0u64),
         sc: use_signal(|| Some(sc)),
         sp: use_signal(|| Some(sp)),
-        qz: use_signal(|| Some(qz)),
         local,
     }
 }

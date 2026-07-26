@@ -94,17 +94,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub ui_font: Option<String>,
 
-    /// the hi-res provider `user_auth_token` from the logged-in the provider web player session.
-    /// the hi-res provider disabled email/password login server-side (April 2026), so token
-    /// auth is the only working path — the user pastes their token from the
-    /// browser. Stored plaintext like the other provider secrets. Empty =
-    /// the hi-res provider disabled.
-    #[serde(default)]
-    pub hires-provider_token: Option<String>,
-    /// Download/stream quality as a the hi-res provider `format_id`: 5=MP3, 6=CD FLAC,
-    /// 7=24/≤96, 27=24/≤192. None = best (27).
-    #[serde(default)]
-    pub hires-provider_format_id: Option<u32>,
 
     /// 0.0 – 1.0 linear gain. The audio engine applies a square-law taper
     /// before feeding the output stream so the slider feels even.
@@ -151,8 +140,6 @@ impl Default for AppConfig {
             library_root: None,
             theme: ThemePref::default(),
             ui_font: None,
-            hires-provider_token: None,
-            hires-provider_format_id: None,
             volume: default_volume(),
             spotify_client_id: None,
             listenbrainz_token: None,
@@ -243,11 +230,8 @@ impl AppConfig {
         Self::cache_dir().map(|d| d.join("soundcloud-client-id.json"))
     }
 
-    /// Cached the hi-res provider app credentials + user auth token. Rebuildable: on a cache
+    /// Rebuildable provider cache. On a cache
     /// wipe we re-scrape and re-login from the config email/password.
-    pub fn hires-provider_auth_cache_path() -> Option<PathBuf> {
-        Self::cache_dir().map(|d| d.join("hires-provider-auth.json"))
-    }
 
     /// Local play-log consumed by the Home page's "Recently played" row.
     pub fn play_history_path() -> Option<PathBuf> {
@@ -347,7 +331,7 @@ impl AppConfig {
     }
 
     /// Background variant of [`Self::save`] for hot paths (volume drags).
-    /// Secret-tier: config.json carries the the hi-res provider/ListenBrainz/Last.fm
+    /// Secret-tier: config.json carries the ListenBrainz/Last.fm
     /// tokens, so it gets the same 0600 treatment as the auth caches.
     pub fn save_bg(&self) -> anyhow::Result<()> {
         let Some(path) = Self::config_path() else {

@@ -3,8 +3,8 @@
 A desktop music player written in Rust, built around the lesson that a
 single global state object is the easiest way to ruin a reactive UI.
 
-**Status:** daily-driven. Plays from SoundCloud, Spotify, the hi-res provider
-downloads and local files; cross-platform discovery works,
+**Status:** daily-driven. Plays from SoundCloud, Spotify and local
+files; cross-platform discovery works,
 library/likes/scrobbling are wired. Jellyfin is the next big gap.
 
 ---
@@ -13,7 +13,7 @@ library/likes/scrobbling are wired. Jellyfin is the next big gap.
 
 A native, local-first music player for Linux/macOS/Windows that
 prioritises a snappy UI even with tens of thousands of tracks indexed.
-The streaming providers (SoundCloud, Spotify, the hi-res provider, later Jellyfin) live in
+The streaming providers (SoundCloud, Spotify, later Jellyfin) live in
 isolated provider crates behind a common trait, so the UI doesn't grow
 per-provider branches and a provider going down doesn't take the app
 with it.
@@ -38,12 +38,11 @@ picked.
 | Audio engine      | rodio for SC progressive streams + librespot 0.8 for Spotify. One canonical volume curve (60 dB log) so backend switches don't jolt the levels. |
 | SoundCloud        | Public `client_id` auto-detected from the web player. Search, track resolve, related-tracks feed. No login. |
 | Spotify           | OAuth PKCE (user brings their own Developer Client ID). Search, liked songs, artist/album detail. Playback via librespot — **requires Spotify Premium**. |
-| the hi-res provider             | Hi-res FLAC search + **download-to-library**: whole albums, single tracks, and any SC/Spotify track via strict the hi-res provider match. Delta downloads — re-running an album only fetches the missing tracks; album pages track how much is already on disk. Tags + cover art are embedded at download time (the CDN streams arrive untagged; the API payload is the metadata source). Token auth: paste your `auth token` from the logged-in the provider web player session (the hi-res provider disabled 3rd-party email/password login). FLAC-first, MP3 only as a last resort; Library → Local badges + filters lossless vs lossy. **Requires a the hi-res provider Studio subscription.** Details: [docs/hires-provider.md](docs/hires-provider.md). |
-| Local files       | `provider-local` scans `library_root` (tags via lofty), feeds the Library page's Local tab with lossless/lossy badges + filters. Rescan after every download; no filesystem watcher yet. |
+| Local files       | `provider-local` scans `library_root` (tags via lofty), feeds the Library page's Local tab with lossless/lossy badges + filters. Rescan on demand; no filesystem watcher yet. |
 | Discovery         | Cross-provider candidate merge from SoundCloud's `/related` and ListenBrainz's similarity graph, optional Last.fm third source. Dedup by (artist, title), provider badges per row. |
-| Queue             | Auto-advance watcher (polls `has_source` falling-edge). Manual next/prev/stop, per-row remove. FLAC-first swap: a queued lossy track with a strict the hi-res provider match plays the FLAC instead. **Gapless** on the rodio side (next track appended to the sink, boundary detected via per-source position). Queue + in-track position persist — a restart resumes where you stopped. |
+| Queue             | Auto-advance watcher (polls `has_source` falling-edge). Manual next/prev/stop, per-row remove. **Gapless** on the rodio side (next track appended to the sink, boundary detected via per-source position). Queue + in-track position persist — a restart resumes where you stopped. |
 | Playlists         | Local cross-provider playlists (JSON, likes-tier). Tracks add as rows; whole albums embed as expandable widgets (right-click an album card/banner). Rename, reorder, play/shuffle across both. |
-| Loudness          | ReplayGain track gain applied on rodio playback; the hi-res provider downloads get measured (EBU R128) and tagged at download time; librespot normalisation on. |
+| Loudness          | ReplayGain track gain applied on rodio playback; librespot normalisation on. |
 | Keybinds          | Space play/pause, Ctrl+←/→ prev/next, Ctrl+↑/↓ volume, S/R/L shuffle/repeat/like, V visualizer, Ctrl+/ shortcut sheet. |
 | Visualizer        | Fullscreen grayscale spectrum + beat-driven particles (V or the wave button). DSP in Rust (FFT, log bands, beat detection); canvas renders. Rodio sources only — librespot is its own engine. |
 | Pages             | Home (For You shelves, Daily Mixes, activity rails), Discover, Search + global search overlay (Ctrl+F / Alt+Space), Library (Saved/Local/Playlists/Spotify tabs), Settings (tabbed), Album detail, Artist detail with tabs. |
@@ -94,13 +93,12 @@ nira/
 │   └── assets/css/       split stylesheets (base, home, player, settings, …) — Dioxus requires assets in the binary crate
 ├── components/           sidebar, bottombar, global context menu
 ├── pages/                discover, search + overlay, library, album, artist; home/ and settings/ are module dirs
-├── hooks/                per-domain reactivity (use_player, use_library, use_downloads, …) + queue + matching
+├── hooks/                per-domain reactivity (use_player, use_library, use_queue, …) + queue + matching
 ├── player/               rodio + librespot, history log, transport bus
 ├── config/               AppConfig load/save under XDG dirs
 ├── provider-api/         common Provider trait + DTOs
 ├── provider-spotify/     OAuth PKCE + Web API + librespot wiring
 ├── provider-soundcloud/  client_id scrape + search + streams
-├── provider-hires-provider/       token auth, hi-res FLAC downloads (docs/hires-provider.md)
 ├── provider-local/       library_root scan, tag read via lofty
 ├── discovery/            cross-platform candidate merge
 └── enrichment/           MusicBrainz / ListenBrainz / Last.fm clients + TTL cache
@@ -181,10 +179,6 @@ without any login. To unlock the rest, open **Settings**:
 - **Last.fm** — optional API key for a third discovery signal. Either
   paste it in Settings or set `NIRA_LASTFM_API_KEY` in the environment
   at launch.
-- **the hi-res provider** — paste your `auth token` from a logged-in
-  the provider web player session to enable hi-res FLAC downloads into your
-  library (the hi-res provider Studio subscription required — see
-  [docs/hires-provider.md](docs/hires-provider.md)).
 
 All state lives under XDG dirs:
 

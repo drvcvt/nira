@@ -46,7 +46,7 @@ pub fn find_strict_match<'a>(target: &Track, candidates: &'a [Track]) -> Option<
         }
         let (a, b) = (target.duration.as_secs(), c.duration.as_secs());
         // Both durations must be known and agree. A 0 ("unknown") duration
-        // used to skip this veto — the hi-res provider tracks without a duration field
+        // used to skip this veto — tracks without a duration field
         // deserialize to 0, and the veto is the only guard separating
         // same-titled versions (edit vs. re-recording), so unknown = reject.
         a > 0 && b > 0 && a.abs_diff(b) <= 3
@@ -70,7 +70,7 @@ mod tests {
             album: None,
             duration: Duration::from_secs(secs),
             cover_url: None,
-            provider: provider_api::ProviderId::the hi-res provider,
+            provider: provider_api::ProviderId::Local,
             mbid: None,
             added_at: None,
         }

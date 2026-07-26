@@ -2,7 +2,7 @@
 
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
-use hooks::{FLAC_QUALITIES, use_config, use_hires-provider, use_soundcloud, use_spotify};
+use hooks::{use_config, use_soundcloud, use_spotify};
 
 use super::{SettingsCard, StatusPill};
 
@@ -11,7 +11,6 @@ pub(super) fn ConnectionsSettings() -> Element {
     let mut config = use_config();
     let sp = use_spotify();
     let sc = use_soundcloud();
-    let qz = use_hires-provider();
 
     let mut client_id_draft = use_signal({
         let cfg = config.read();
@@ -40,147 +39,11 @@ pub(super) fn ConnectionsSettings() -> Element {
     let provider_client_id = sp.client_id();
     let spotify_connected = sp.is_connected();
 
-    // the hi-res provider: token-based auth (email/password login was disabled by the hi-res provider).
-    let qz_initial_token = config.read().hires-provider_token.clone().unwrap_or_default();
-    let mut qz_token = use_signal(move || qz_initial_token);
-    let mut qz_format = use_signal(|| config.read().hires-provider_format_id.unwrap_or(27));
-    let mut qz_status = use_signal(|| None::<String>);
-    let mut qz_busy = use_signal(|| false);
-    let qz_connected = qz.is_connected();
 
     rsx! {
         section { class: "settings-group settings-stack",
             h2 { "Connections" }
             p { class: "hint", "Provider credentials and service status." }
-
-            SettingsCard {
-                title: "the hi-res provider".to_string(),
-                icon: "fa-solid fa-compact-disc".to_string(),
-                p { class: "settings-card-copy",
-                    "Download hi-res FLAC from your the hi-res provider Studio subscription into your library. the hi-res provider disabled email/password login for third-party apps, so nira uses your session token instead."
-                }
-                div { class: "settings-warn",
-                    strong { "How to get your token: " }
-                    "Open "
-                    code { "the provider web player" }
-                    " (logged in) → press F12 → Network tab → reload → click any "
-                    code { "api.json" }
-                    " request → under Request Headers copy the value of "
-                    code { "auth token" }
-                    ". Paste it below."
-                }
-                div { class: "settings-row",
-                    label { r#for: "qz-token", "Auth token" }
-                    input {
-                        id: "qz-token",
-                        r#type: "password",
-                        class: "settings-input",
-                        placeholder: "auth token from the provider web player",
-                        value: "{qz_token.read()}",
-                        disabled: *qz_busy.read(),
-                        oninput: move |e| qz_token.set(e.value()),
-                    }
-                }
-                div { class: "settings-row compact",
-                    label { r#for: "qz-quality", "Quality" }
-                    select {
-                        id: "qz-quality",
-                        class: "settings-input",
-                        disabled: *qz_busy.read(),
-                        onchange: {
-                            let qz = qz.clone();
-                            move |e: Event<FormData>| {
-                                let fid: u32 = e.value().parse().unwrap_or(27);
-                                qz_format.set(fid);
-                                let mut w = config.write();
-                                w.hires-provider_format_id = Some(fid);
-                                if let Err(e) = w.save() {
-                                    qz_status.set(Some(format!("Could not save quality: {e}")));
-                                }
-                                let qz = qz.clone();
-                                spawn(async move { qz.set_format_id(fid).await; });
-                            }
-                        },
-                        for (fid, label) in FLAC_QUALITIES.iter() {
-                            option {
-                                value: "{fid}",
-                                selected: *qz_format.read() == *fid,
-                                "{label}"
-                            }
-                        }
-                    }
-                }
-                div { class: "settings-actions",
-                    if qz_connected {
-                        Button {
-                            label: "Disconnect".to_string(),
-                            variant: ButtonVariant::Ghost,
-                            size: ButtonSize::Sm,
-                            on_click: {
-                                let qz = qz.clone();
-                                move |_| {
-                                    let qz = qz.clone();
-                                    {
-                                        let mut w = config.write();
-                                        w.hires-provider_token = None;
-                                        if let Err(e) = w.save() {
-                                            qz_status.set(Some(format!(
-                                                "Disconnected, but could not update the config: {e}"
-                                            )));
-                                        }
-                                    }
-                                    qz_token.set(String::new());
-                                    spawn(async move {
-                                        qz.logout().await;
-                                        qz_status.set(Some("Disconnected.".into()));
-                                    });
-                                }
-                            },
-                        }
-                    } else {
-                        Button {
-                            label: if *qz_busy.read() { "Verifying…".to_string() } else { "Connect".to_string() },
-                            variant: ButtonVariant::Primary,
-                            size: ButtonSize::Sm,
-                            disabled: *qz_busy.read(),
-                            on_click: {
-                                let qz = qz.clone();
-                                move |_| {
-                                    let token = qz_token.read().trim().to_string();
-                                    if token.is_empty() {
-                                        qz_status.set(Some("Paste your the hi-res provider auth token first.".into()));
-                                        return;
-                                    }
-                                    qz_busy.set(true);
-                                    qz_status.set(Some("Verifying token with the hi-res provider…".into()));
-                                    let qz = qz.clone();
-                                    spawn(async move {
-                                        match qz.set_token(&token).await {
-                                            Ok(()) => {
-                                                let mut w = config.write();
-                                                w.hires-provider_token = Some(token.clone());
-                                                let saved = w.save();
-                                                drop(w);
-                                                qz_status.set(Some(match saved {
-                                                    Ok(()) => "Connected. Download FLACs from search.".into(),
-                                                    Err(e) => format!(
-                                                        "Connected, but the token could not be saved ({e}) — you'll have to paste it again next launch."
-                                                    ),
-                                                }));
-                                            }
-                                            Err(e) => qz_status.set(Some(format!("Token rejected: {e}. Make sure you copied the full auth token while logged in."))),
-                                        }
-                                        qz_busy.set(false);
-                                    });
-                                }
-                            },
-                        }
-                    }
-                }
-                if let Some(msg) = qz_status.read().as_ref() {
-                    p { class: "settings-status", "{msg}" }
-                }
-            }
 
             SettingsCard {
                 title: "Spotify".to_string(),

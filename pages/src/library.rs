@@ -909,7 +909,7 @@ fn local_ext(uri: &str) -> Option<String> {
 }
 
 /// Whether a local track is lossless, judged by its file extension. We only
-/// ever write `.flac`/`.mp3` from the hi-res provider, and the user's own files carry real
+/// ever write `.flac`/`.mp3`, and the user's own files carry real
 /// extensions — so the extension is a reliable lossless/lossy split without
 /// re-reading every file's codec.
 fn is_lossless(uri: &str) -> bool {
@@ -1166,6 +1166,6 @@ mod tests {
         assert!(!is_lossless("local:track:/m/a.mp3"));
         assert_eq!(local_format_label("local:track:/m/a.flac").as_deref(), Some("FLAC"));
         assert_eq!(local_format_label("local:track:/m/a.mp3").as_deref(), Some("MP3"));
-        assert_eq!(local_format_label("hires-provider:track:123"), None);
+        assert_eq!(local_format_label("spotify:track:123"), None);
     }
 }

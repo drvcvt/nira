@@ -11,7 +11,6 @@ use components::Section;
 use config::AppConfig;
 use dioxus::prelude::*;
 use hooks::{AppContext, DetailView, Player, use_detail};
-use provider_hires-provider::the hi-res providerProvider;
 use provider_soundcloud::SoundCloudProvider;
 use provider_spotify::SpotifyProvider;
 
@@ -221,13 +220,7 @@ fn App() -> Element {
         let tokens_path = AppConfig::spotify_tokens_path();
         Arc::new(SpotifyProvider::new(client_id, tokens_path).expect("Spotify provider init"))
     });
-    let qz = use_hook(|| {
-        Arc::new(
-            the hi-res providerProvider::new(app_cfg.hires-provider_format_id, app_cfg.hires-provider_token.clone())
-                .expect("the hi-res provider provider init"),
-        )
-    });
-    AppContext::install(player.clone(), sc.clone(), sp, qz, app_cfg);
+    AppContext::install(player.clone(), sc.clone(), sp, app_cfg);
 
     // Visualizer open-state — shared by the bottombar button, the V-key
     // bridge and the overlay itself.
@@ -561,8 +554,6 @@ fn App() -> Element {
             components::visualizer::Visualizer {}
             // Fullscreen cover / vinyl overlay (bottombar mini cover).
             components::cover::CoverOverlay {}
-            // Bottom-left toast for the hi-res provider download progress/result.
-            components::download_toast::DownloadToast {}
         }
     }
 }

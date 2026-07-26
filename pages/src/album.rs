@@ -4,9 +4,8 @@
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
 use hooks::{
-    AlbumCtx, AlbumUri, ProviderId, Track, download_from_hires-provider_by_query, download_hires-provider_album,
-    download_hires-provider_track, download_hires-provider_track_by_match, track_match_key, use_album, use_config,
-    use_ctx_menu, use_detail, use_downloads, use_local_library, use_hires-provider, use_queue,
+    AlbumCtx, AlbumUri, Track, track_match_key, use_album,
+    use_ctx_menu, use_detail, use_local_library, use_queue,
 };
 
 use crate::parts::{OwnedIndex, PlayableLi, TrackCtx, format_duration};
@@ -77,12 +76,6 @@ fn AlbumHeader(
     let cover = detail.cover_url.clone().unwrap_or_default();
     let detail_router = use_detail();
     let ctx = use_ctx_menu();
-    let qz = use_hires-provider();
-    let downloads = use_downloads();
-    let local = use_local_library();
-    let config = use_config();
-    let qz_connected = qz.is_connected();
-    let is_hires-provider_album = detail.provider == ProviderId::the hi-res provider;
     let kind_label = match detail.album_type {
         hooks::AlbumType::Album => "album",
         hooks::AlbumType::Single => "single",
@@ -183,38 +176,6 @@ fn AlbumHeader(
                         disabled: track_count == 0,
                         on_click: move |_| on_play_all.call(()),
                     }
-                    // Download as FLAC. A the hi-res provider album downloads directly; any
-                    // other provider's album is matched on the hi-res provider first, so a
-                    // Spotify/SC album can still be grabbed losslessly. The
-                    // download is a delta — tracks already on disk are
-                    // skipped, so the label counts only what's missing.
-                    // Fully owned albums hide the button (the chip says why).
-                    if qz_connected && owned_count < track_count {
-                        Button {
-                            label: if owned_count > 0 {
-                                format!("Download {} missing (.flac)", track_count - owned_count)
-                            } else {
-                                "Download (.flac)".to_string()
-                            },
-                            icon: Some("fa-solid fa-download".to_string()),
-                            variant: ButtonVariant::Ghost,
-                            disabled: track_count == 0,
-                            on_click: {
-                                let qz = qz.clone();
-                                let album_uri = detail.uri.0.clone();
-                                let title = detail.title.clone();
-                                let artist_name = detail.artist.name.clone();
-                                move |_| {
-                                    let root = config.read().library_root.clone();
-                                    if is_hires-provider_album {
-                                        download_hires-provider_album(qz.clone(), local.clone(), downloads, root, album_uri.clone(), title.clone());
-                                    } else {
-                                        download_from_hires-provider_by_query(qz.clone(), local.clone(), downloads, root, artist_name.clone(), title.clone());
-                                    }
-                                }
-                            },
-                        }
-                    }
                 }
             }
         }
@@ -223,11 +184,6 @@ fn AlbumHeader(
 
 #[component]
 fn AlbumTrackList(tracks: Vec<Track>, owned: OwnedIndex) -> Element {
-    let local = use_local_library();
-    let qz = use_hires-provider();
-    let downloads = use_downloads();
-    let config = use_config();
-    let qz_connected = qz.is_connected();
     if tracks.is_empty() {
         return rsx! {
             div { class: "discover-empty",
@@ -257,36 +213,6 @@ fn AlbumTrackList(tracks: Vec<Track>, owned: OwnedIndex) -> Element {
                             i {
                                 class: "fa-solid fa-check track-owned",
                                 title: "In your library",
-                            }
-                        } else if qz_connected {
-                            // Single-track grab. the hi-res provider tracks download
-                            // directly; other providers go through the
-                            // strict the hi-res provider match first.
-                            button {
-                                class: "track-dl",
-                                r#type: "button",
-                                title: "Download (.flac)",
-                                onclick: {
-                                    let qz = qz.clone();
-                                    let local = local.clone();
-                                    let t = t.clone();
-                                    move |e: Event<MouseData>| {
-                                        e.stop_propagation();
-                                        let root = config.read().library_root.clone();
-                                        if t.provider == ProviderId::the hi-res provider {
-                                            download_hires-provider_track(
-                                                qz.clone(), local.clone(), downloads, root,
-                                                t.uri.0.clone(), t.title.clone(),
-                                            );
-                                        } else {
-                                            download_hires-provider_track_by_match(
-                                                qz.clone(), local.clone(), downloads, root,
-                                                t.clone(),
-                                            );
-                                        }
-                                    }
-                                },
-                                i { class: "fa-solid fa-download" }
                             }
                         }
                         span { "{format_duration(t.duration)}" }

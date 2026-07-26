@@ -12,7 +12,7 @@ use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
 use hooks::{
     AlbumBrief, AlbumCtx, ArtistUri, RelatedArtist, Track, fetch_album_detail, is_long_play,
-    use_artist, use_ctx_menu, use_detail, use_local_library, use_hires-provider, use_queue,
+    use_artist, use_ctx_menu, use_detail, use_local_library, use_queue,
     use_soundcloud, use_spotify,
 };
 
@@ -351,7 +351,6 @@ fn AlbumCard(album: AlbumBrief, on_open: EventHandler<()>) -> Element {
     let ctx = use_ctx_menu();
     let sc = use_soundcloud();
     let sp = use_spotify();
-    let qz = use_hires-provider();
     let local = use_local_library();
     let cover = album.cover_url.clone().unwrap_or_default();
     let provider = album.provider.label();
@@ -397,10 +396,10 @@ fn AlbumCard(album: AlbumBrief, on_open: EventHandler<()>) -> Element {
                             tracks: Vec::new(),
                         },
                     );
-                    let (sc, sp, qz) = (sc.clone(), sp.clone(), qz.clone());
+                    let (sc, sp) = (sc.clone(), sp.clone());
                     let uri = album.uri.clone();
                     spawn(async move {
-                        if let Some(d) = fetch_album_detail(sc, sp, qz, local, uri).await {
+                        if let Some(d) = fetch_album_detail(sc, sp, local, uri).await {
                             ctx.set_album_tracks(&d.uri.0, d.tracks);
                         }
                     });

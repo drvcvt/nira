@@ -6,7 +6,7 @@ use std::sync::Arc;
 use dioxus::prelude::*;
 use hooks::{
     ArtistRef, ArtistUri, HistoryEntry, Provider, ProviderId, Query, Track, TrackUri, UseLibrary,
-    use_ctx_menu, use_local_library, use_hires-provider, use_queue, use_soundcloud, use_spotify,
+    use_ctx_menu, use_local_library, use_queue, use_soundcloud, use_spotify,
 };
 
 use super::rails::{Rail, SkeletonRow};
@@ -45,7 +45,6 @@ fn HistoryCard(entry: HistoryEntry, entries: Vec<HistoryEntry>, index: usize) ->
     let ctx = use_ctx_menu();
     let sc: Arc<dyn Provider> = use_soundcloud();
     let sp: Arc<dyn Provider> = use_spotify();
-    let qz: Arc<dyn Provider> = use_hires-provider();
     let local = use_local_library();
     let cover = entry.cover_url.clone().unwrap_or_default();
     let badge_class = badge_class_for(&entry.provider);
@@ -54,8 +53,8 @@ fn HistoryCard(entry: HistoryEntry, entries: Vec<HistoryEntry>, index: usize) ->
     let artist = entry.artist.clone();
     let clicked_title = title.clone();
     let played_label = format_relative(entry.played_at);
-    let providers_for_click = (sc.clone(), sp.clone(), qz.clone());
-    let providers_for_context = (sc, sp, qz);
+    let providers_for_click = (sc.clone(), sp.clone());
+    let providers_for_context = (sc, sp);
 
     rsx! {
         button {
@@ -63,7 +62,7 @@ fn HistoryCard(entry: HistoryEntry, entries: Vec<HistoryEntry>, index: usize) ->
             title: "{title} — {artist}\nplayed {played_label}",
             onclick: move |_| {
                 let queue = queue.clone();
-                let (sc, sp, qz) = providers_for_click.clone();
+                let (sc, sp) = providers_for_click.clone();
                 let local_tracks = local.tracks.peek().clone();
                 let entries = entries.clone();
                 let clicked_title = clicked_title.clone();
@@ -72,7 +71,7 @@ fn HistoryCard(entry: HistoryEntry, entries: Vec<HistoryEntry>, index: usize) ->
                     // was up to ~2 network round trips per entry before any
                     // audio started.
                     let resolved = futures_util::future::join_all(entries.iter().map(|row| {
-                        resolve_history_entry(sc.clone(), sp.clone(), qz.clone(), &local_tracks, row)
+                        resolve_history_entry(sc.clone(), sp.clone(), &local_tracks, row)
                     }))
                     .await;
                     let mut tracks = Vec::<Track>::new();
@@ -102,14 +101,14 @@ fn HistoryCard(entry: HistoryEntry, entries: Vec<HistoryEntry>, index: usize) ->
                 move |e: Event<MouseData>| {
                     e.prevent_default();
                     let pos = e.data.client_coordinates();
-                    let (sc, sp, qz) = providers_for_context.clone();
+                    let (sc, sp) = providers_for_context.clone();
                     let local_tracks = local.tracks.peek().clone();
                     let entry = entry.clone();
                     spawn(async move {
                         // Open the menu even when the entry no longer
                         // resolves anywhere — deleting a dead row is the
                         // main reason to right-click it.
-                        let track = resolve_history_entry(sc, sp, qz, &local_tracks, &entry)
+                        let track = resolve_history_entry(sc, sp, &local_tracks, &entry)
                             .await
                             .unwrap_or_else(|| placeholder_track(&entry));
                         ctx.open_for_history(pos.x, pos.y, track, entry);
@@ -142,7 +141,6 @@ fn placeholder_track(entry: &HistoryEntry) -> Track {
         provider: match entry.provider.as_str() {
             "Spotify" => ProviderId::Spotify,
             "SoundCloud" => ProviderId::SoundCloud,
-            "the hi-res provider" => ProviderId::the hi-res provider,
             _ => ProviderId::Local,
         },
         title: entry.title.clone(),
@@ -161,16 +159,12 @@ fn placeholder_track(entry: &HistoryEntry) -> Track {
 async fn resolve_history_entry(
     sc: Arc<dyn Provider>,
     sp: Arc<dyn Provider>,
-    qz: Arc<dyn Provider>,
     local_tracks: &[Track],
     entry: &HistoryEntry,
 ) -> Option<Track> {
-    // "the hi-res provider" rows are common even for streaming users: the FLAC-first swap
-    // logs the played the hi-res provider variant, not the clicked Spotify/SC track.
     let exact = match (entry.provider.as_str(), entry.track_uri.as_ref()) {
         ("Spotify", Some(uri)) => sp.track(&TrackUri(uri.clone())).await.ok(),
         ("SoundCloud", Some(uri)) => sc.track(&TrackUri(uri.clone())).await.ok(),
-        ("the hi-res provider", Some(uri)) => qz.track(&TrackUri(uri.clone())).await.ok(),
         // Local plays resolve against the scanned library — no network.
         ("Local", Some(uri)) => local_tracks.iter().find(|t| t.uri.0 == *uri).cloned(),
         _ => None,
@@ -190,11 +184,6 @@ async fn resolve_history_entry(
             .ok()
             .and_then(|r| r.tracks.into_iter().next()),
         "SoundCloud" => sc
-            .search(&q)
-            .await
-            .ok()
-            .and_then(|r| r.tracks.into_iter().next()),
-        "the hi-res provider" => qz
             .search(&q)
             .await
             .ok()

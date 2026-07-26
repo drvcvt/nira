@@ -22,7 +22,6 @@ pub mod use_artist;
 pub mod use_ctx_menu;
 pub mod use_detail;
 pub mod use_discovery;
-pub mod use_downloads;
 pub mod use_history;
 pub mod use_library;
 pub mod use_likes;
@@ -40,10 +39,6 @@ pub use use_artist::{ArtistView, UseArtist, is_long_play, use_artist};
 pub use use_ctx_menu::{AlbumCtx, CtxMenuState, CtxTarget, UseCtxMenu, use_ctx_menu};
 pub use use_detail::{DetailView, UseDetail, uri_has_detail_page, use_detail};
 pub use use_discovery::{DiscoveryMode, UseDiscovery, use_discovery};
-pub use use_downloads::{
-    UseDownloads, download_from_hires-provider_by_query, download_hires-provider_album, download_hires-provider_track,
-    download_hires-provider_track_by_match, use_downloads,
-};
 pub use use_history::{UseHistory, install_history, use_history};
 pub use use_library::{UseLibrary, install_library, use_library};
 pub use use_likes::{LikedTrack, UseLikes, use_likes};
@@ -65,7 +60,6 @@ pub use discovery::{
 };
 pub use enrichment::Listen;
 pub use player::{Active, HistoryEntry, NowPlaying, Player, PlayerError, PlayerSnapshot, VizFrame};
-pub use provider_hires-provider::{DownloadSummary, FLAC_QUALITIES, the hi-res providerProvider};
 pub use provider_api::{
     AlbumBrief, AlbumDetail, AlbumRef, AlbumType, AlbumUri, Artist, ArtistRef, ArtistUri, Provider,
     ProviderError, ProviderId, Query, RelatedArtist, Track, TrackUri,
@@ -82,7 +76,6 @@ impl AppContext {
         player: Player,
         sc: Arc<SoundCloudProvider>,
         spotify: Arc<SpotifyProvider>,
-        hires-provider: Arc<the hi-res providerProvider>,
         config: AppConfig,
     ) {
         PlayerContext::install(player.clone());
@@ -95,10 +88,6 @@ impl AppContext {
         use_context_provider({
             let sp = spotify.clone();
             move || sp
-        });
-        use_context_provider({
-            let qz = hires-provider.clone();
-            move || qz
         });
 
         // Discovery engine — owns its own EnrichmentClient (MB + LB cache),
@@ -140,7 +129,7 @@ impl AppContext {
 
         // Queue + auto-advance watcher. Pages route track-clicks through
         // this; the watcher detects natural track-end and walks the index.
-        queue::install(player.clone(), sc.clone(), spotify.clone(), hires-provider.clone());
+        queue::install(player.clone(), sc.clone(), spotify.clone());
 
         // Global context-menu signal. Track rows on any page open it; the
         // `ContextMenu` component in the app root subscribes and renders.
@@ -165,9 +154,6 @@ impl AppContext {
         // at the root instead of restarting on every Home↔Library switch.
         use_library::install_library();
 
-        // Global download-status channel (the hi-res provider → library toast).
-        use_downloads::install_downloads();
-
         // Local-file library — scans config.library_root once on boot,
         // re-scannable from Settings/Library. Empty until a folder is set.
         use_local_library::install_local_library(config_sig);
@@ -184,10 +170,6 @@ pub fn use_soundcloud() -> Arc<SoundCloudProvider> {
 
 pub fn use_spotify() -> Arc<SpotifyProvider> {
     use_context::<Arc<SpotifyProvider>>()
-}
-
-pub fn use_hires-provider() -> Arc<the hi-res providerProvider> {
-    use_context::<Arc<the hi-res providerProvider>>()
 }
 
 pub fn use_enrichment() -> Arc<EnrichmentClient> {
