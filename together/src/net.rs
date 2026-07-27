@@ -156,11 +156,7 @@ impl Together {
                 }
                 _ = beat.tick() => {
                     let state = self.inner.publish.read().unwrap_or_else(|p| p.into_inner()).clone();
-                    if let Some(mut now) = state {
-                        // Stamp at send time, not at publish time — the queue
-                        // watcher's sample can be up to its own tick old, and a
-                        // stale `at_ns` reads to the guest as drift.
-                        now.at_ns = self.now_ns();
+                    if let Some(now) = state {
                         if let Err(e) = send(&mut w, &Msg::Now(Box::new(now))).await {
                             break Err(e);
                         }

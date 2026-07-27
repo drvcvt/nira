@@ -4,17 +4,14 @@
 //! where the policy lives, because the policy is really a statement about the
 //! queue and it belongs next to the queue that enforces it.
 //!
-//! **Anchor, don't chase.** Two machines playing the same file from local disk
-//! drift apart only by their crystals — tens of ppm, under 10 ms over a track.
-//! So the steady state is: line up once, then leave it alone. Continuous
-//! correction would be fighting noise, because the position we can read leads
-//! the DAC by an unmodelled output buffer and arrives through a 200 ms poll.
+//! **Anchor, then verify.** Two machines playing the same file from local disk
+//! drift apart only by their crystals, so the steady state is to line up once
+//! and leave gaps inside the dead zone alone. A slower check catches startup
+//! latency, stalls and scrubs without turning position sampling into a
+//! high-frequency control loop.
 //!
-//! What the periodic comparison is for is *discontinuities* — a buffer
-//! underrun, a stall, a deliberate pause. Those do not decay; the sample
-//! counter simply stops while the wall clock does not, so the lag is permanent
-//! until something corrects it. Hence the thresholds below rather than no
-//! comparison at all.
+//! Gaps outside the dead zone do not decay: both players continue at the same
+//! rate. They need one correction even when they are smaller than a scrub.
 
 use std::time::Duration;
 
@@ -30,12 +27,10 @@ use crate::use_local_library::UseLocalLibrary;
 /// and every boundary that carries a gap re-anchors anyway.
 const DEAD_ZONE: Duration = Duration::from_millis(100);
 
-/// Above this, something discontinuous happened — correct now rather than
-/// waiting for a boundary that may be minutes away.
-const RESYNC: Duration = Duration::from_millis(2000);
+/// Difference between consecutive host announcements that counts as a scrub.
+const JUMP_THRESHOLD: Duration = Duration::from_millis(2000);
 
-/// How often we compare. Deliberately slower than the queue watcher: this is
-/// an alarm, not a control loop.
+/// How often we compare. Deliberately slower than the queue watcher.
 const COMPARE: Duration = Duration::from_secs(5);
 
 /// Loop cadence while a session is up.
@@ -367,14 +362,11 @@ fn shared_provider(uri: &str) -> Option<ProviderId> {
     }
 }
 
-/// Compare and, only if the gap is real, correct.
-///
-/// The two directions cost very different amounts, so they are handled
-/// differently. Falling behind is fixed with a *forward* seek, which every
-/// format supports — the expensive decoder-rebuild path in `Player::seek` is
-/// the one for backward seeks. Running ahead (which only happens when the host
-/// stalled) is fixed with a short pause instead, which costs nothing at all
-/// and never touches the decoder.
+fn needs_correction(mine: Duration, expected: Duration) -> bool {
+    mine.abs_diff(expected) > DEAD_ZONE
+}
+
+/// Compare and, only if the gap is audible, correct.
 fn correct(player: &player::Player, t: &Together, target: &RemoteNow) -> Option<u64> {
     let snap = player.snapshot();
     if !snap.has_source {
@@ -395,42 +387,16 @@ fn correct(player: &player::Player, t: &Together, target: &RemoteNow) -> Option<
         return None;
     }
 
-    let behind = expected.checked_sub(mine);
-    let ahead = mine.checked_sub(expected);
-
-    match (behind, ahead) {
-        // A large gap in either direction is a discontinuity — the host
-        // scrubbed, or we stalled — and the answer to both is to go where the
-        // host is. Seeking backwards can cost a decoder rebuild, which is
-        // unpleasant but bounded. Waiting the gap out instead is not: a host
-        // scrubbing back two minutes used to silence the guest for two
-        // minutes, which is what "it hangs after scrubbing" was.
-        (Some(d), _) if d >= RESYNC => {
-            tracing::info!(behind_ms = d.as_millis(), "together: resyncing forward");
-            player.seek(expected);
+    let gap = mine.abs_diff(expected);
+    if needs_correction(mine, expected) {
+        if mine < expected {
+            tracing::info!(behind_ms = gap.as_millis(), "together: resyncing forward");
+        } else {
+            tracing::info!(ahead_ms = gap.as_millis(), "together: resyncing back");
         }
-        (_, Some(d)) if d >= RESYNC => {
-            tracing::info!(ahead_ms = d.as_millis(), "together: resyncing back");
-            player.seek(expected);
-        }
-        // A small lead is worth waiting out rather than seeking, because a
-        // pause costs nothing and never touches the decoder. Bounded by the
-        // arm above: anything reaching RESYNC never gets here.
-        (_, Some(d)) if d > DEAD_ZONE => {
-            tracing::debug!(ahead_ms = d.as_millis(), "together: holding briefly");
-            player.pause();
-            let p = player.clone();
-            spawn_forever(async move {
-                tokio::time::sleep(d).await;
-                p.resume();
-            });
-        }
-        (Some(d), _) if d > DEAD_ZONE => {
-            tracing::debug!(behind_ms = d.as_millis(), "together: drift, will re-anchor");
-        }
-        _ => {}
+        player.seek(expected);
     }
-    Some(behind.or(ahead).unwrap_or_default().as_nanos() as u64)
+    Some(gap.as_nanos() as u64)
 }
 
 /// Did the host's own timeline jump between two announcements?
@@ -455,7 +421,7 @@ fn host_jumped(prev: (u64, u64, bool), now: &RemoteNow) -> bool {
         0
     };
     let predicted = prev_pos.saturating_add(elapsed);
-    now.pos_ns.abs_diff(predicted) > RESYNC.as_nanos() as u64
+    now.pos_ns.abs_diff(predicted) > JUMP_THRESHOLD.as_nanos() as u64
 }
 
 #[cfg(test)]
@@ -526,5 +492,22 @@ mod tests {
     fn scrubbing_while_paused_is_a_jump() {
         let prev = (Duration::from_secs(30).as_nanos() as u64, 0, false);
         assert!(host_jumped(prev, &now(90, 10, false)));
+    }
+
+    #[test]
+    fn audible_gap_requires_correction_in_either_direction() {
+        let expected = Duration::from_secs(30);
+        assert!(needs_correction(
+            expected - Duration::from_millis(500),
+            expected
+        ));
+        assert!(needs_correction(
+            expected + Duration::from_millis(500),
+            expected
+        ));
+        assert!(!needs_correction(
+            expected - Duration::from_millis(50),
+            expected
+        ));
     }
 }

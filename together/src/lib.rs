@@ -135,9 +135,12 @@ impl Together {
     /// Host: hand the sync loop the current playback state. Called from the
     /// queue watcher on every state change and on its regular tick; cheap
     /// enough to call at the watcher's cadence.
-    pub fn publish(&self, now: Option<RemoteNow>) {
+    pub fn publish(&self, mut now: Option<RemoteNow>) {
         if *self.inner.role.read().unwrap_or_else(|p| p.into_inner()) != Role::Host {
             return;
+        }
+        if let Some(now) = &mut now {
+            now.at_ns = self.now_ns();
         }
         *self.inner.publish.write().unwrap_or_else(|p| p.into_inner()) = now;
     }
@@ -174,5 +177,43 @@ impl Together {
 impl Default for Together {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publish_stamps_when_the_position_was_sampled() {
+        let together = Together::new();
+        *together
+            .inner
+            .role
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = Role::Host;
+        std::thread::sleep(Duration::from_millis(1));
+
+        together.publish(Some(RemoteNow {
+            track_uri: "local:track:/music/a.flac".into(),
+            artist: "Boards of Canada".into(),
+            title: "Roygbiv".into(),
+            duration_ns: 151_000_000_000,
+            pos_ns: 42_000_000_000,
+            at_ns: 0,
+            playing: true,
+            playback_id: 7,
+        }));
+
+        let at_ns = together
+            .inner
+            .publish
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .unwrap()
+            .at_ns;
+        assert!(at_ns > 0);
+        assert!(at_ns <= together.now_ns());
     }
 }
