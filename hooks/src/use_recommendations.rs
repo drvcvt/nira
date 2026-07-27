@@ -368,6 +368,15 @@ impl UseRecommendations {
     }
 }
 
+fn should_start_initial_load(
+    cache_checked: bool,
+    did_initial_load: bool,
+    in_flight: bool,
+    spotify_loading: bool,
+) -> bool {
+    cache_checked && !did_initial_load && !in_flight && !spotify_loading
+}
+
 pub fn use_recommendations(
     library: UseLibrary,
     history_entries: Signal<Vec<HistoryEntry>>,
@@ -430,24 +439,17 @@ pub fn use_recommendations(
     {
         let handle = handle.clone();
         use_effect(move || {
-            let history_len = history_entries.read().len();
-            let spotify_len = library.liked.read().len();
-            let local_len = local_likes.items.read().len();
             // Wait for the async cache hydrate — deciding before it lands
             // would trigger a network refresh even when a fresh cache is
             // about to populate the signals. (Subscribed read: the effect
             // re-runs when the hydrate finishes.)
-            if !*cache_checked.read() {
-                return;
-            }
             let in_flight = *handle.is_loading.peek();
-            if *did_initial_load.peek() || in_flight {
-                return;
-            }
-            // Wait until at least one user-data source has populated, then
-            // commit to a single mount-time decision and never auto-refresh
-            // again — the user can hit Refresh / Reroll explicitly.
-            if history_len + spotify_len + local_len == 0 {
+            if !should_start_initial_load(
+                *cache_checked.read(),
+                *did_initial_load.peek(),
+                in_flight,
+                *library.is_loading.read(),
+            ) {
                 return;
             }
             did_initial_load.set(true);
@@ -1568,6 +1570,16 @@ mod tests {
             mbid: None,
             added_at: None,
         }
+    }
+
+    #[test]
+    fn initial_load_starts_without_spotify_or_seed_data() {
+        assert!(should_start_initial_load(true, false, false, false));
+        assert!(
+            plans_for(&[], &[])
+                .iter()
+                .any(|plan| plan.id == SHELF_TRENDING)
+        );
     }
 
     #[test]
