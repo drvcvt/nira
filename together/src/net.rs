@@ -156,10 +156,12 @@ impl Together {
                 }
                 _ = beat.tick() => {
                     let state = self.inner.publish.read().unwrap_or_else(|p| p.into_inner()).clone();
-                    if let Some(now) = state {
-                        if let Err(e) = send(&mut w, &Msg::Now(Box::new(now))).await {
-                            break Err(e);
-                        }
+                    let msg = match state {
+                        Some(now) => Msg::Now(Box::new(now)),
+                        None => Msg::Stopped,
+                    };
+                    if let Err(e) = send(&mut w, &msg).await {
+                        break Err(e);
                     }
                 }
                 else => break Ok(()),
@@ -205,7 +207,14 @@ impl Together {
                         .unwrap_or_else(|p| p.into_inner())
                         .record(t1, t2, t3);
                 }
-                Ok(Msg::Now(now)) => self.absorb(*now),
+                Ok(Msg::Now(now)) => {
+                    *self.inner.stopped.write().unwrap_or_else(|p| p.into_inner()) = false;
+                    self.absorb(*now);
+                }
+                Ok(Msg::Stopped) => {
+                    *self.inner.target.write().unwrap_or_else(|p| p.into_inner()) = None;
+                    *self.inner.stopped.write().unwrap_or_else(|p| p.into_inner()) = true;
+                }
                 Ok(Msg::Bye) => break Ok(()),
                 Ok(_) => {}
                 Err(e) => break Err(e),
@@ -237,6 +246,7 @@ impl Together {
         *self.inner.role.write().unwrap_or_else(|p| p.into_inner()) = Role::Off;
         *self.inner.ticket.write().unwrap_or_else(|p| p.into_inner()) = None;
         *self.inner.target.write().unwrap_or_else(|p| p.into_inner()) = None;
+        *self.inner.stopped.write().unwrap_or_else(|p| p.into_inner()) = false;
         *self.inner.publish.write().unwrap_or_else(|p| p.into_inner()) = None;
         self.inner
             .peers

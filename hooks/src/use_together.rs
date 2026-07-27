@@ -186,6 +186,7 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
         let mut last_correct_ns: u64 = 0;
         let mut last_err_ns: Option<u64> = None;
         let mut futile: u8 = 0;
+        let mut host_stopped = false;
 
         let mut tick = IDLE_TICK;
         loop {
@@ -210,14 +211,27 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
                 Role::Host => {
                     t.publish(describe(&queue, &player));
                     anchored = None;
+                    host_stopped = false;
                 }
                 Role::Off => {
                     anchored = None;
+                    host_stopped = false;
                     if unmatched.peek().is_some() {
                         unmatched.set(None);
                     }
                 }
                 Role::Guest => {
+                    if snap.stopped {
+                        if !host_stopped {
+                            queue.stop();
+                            anchored = None;
+                            pending_align = false;
+                            last_seen = None;
+                            host_stopped = true;
+                        }
+                        continue;
+                    }
+                    host_stopped = false;
                     let Some(target) = snap.target.clone() else {
                         continue;
                     };

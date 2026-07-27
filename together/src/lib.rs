@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 /// Protocol identifier. Bump the suffix on any wire-incompatible change —
 /// iroh refuses a connection whose ALPN it does not know, which turns a
 /// version mismatch into a clean "can't connect" instead of a garbled decode.
-pub const ALPN: &[u8] = b"nira/together/2";
+pub const ALPN: &[u8] = b"nira/together/3";
 
 /// Heartbeat interval. Also the probe interval — every heartbeat carries a
 /// fresh clock probe, so link quality tracks the same cadence as state.
@@ -68,6 +68,7 @@ enum Msg {
     /// `t1` echoed so the requester can pair it up without keeping state.
     Pong { t1: u64, t2: u64 },
     Now(Box<RemoteNow>),
+    Stopped,
     Bye,
 }
 
@@ -91,6 +92,8 @@ pub struct TogetherSnapshot {
     /// What the host says is playing, already translated onto *our* clock:
     /// `at_ns` is comparable with [`Together::now_ns`]. `None` on the host.
     pub target: Option<RemoteNow>,
+    /// The host explicitly announced that nothing is playing.
+    pub stopped: bool,
 }
 
 struct Inner {
@@ -103,6 +106,7 @@ struct Inner {
     publish: RwLock<Option<RemoteNow>>,
     /// Guest side: the host's latest state, translated onto our clock.
     target: RwLock<Option<RemoteNow>>,
+    stopped: RwLock<bool>,
     sync: Mutex<clock::ClockSync>,
 }
 
@@ -123,6 +127,7 @@ impl Together {
                 ticket: RwLock::new(None),
                 publish: RwLock::new(None),
                 target: RwLock::new(None),
+                stopped: RwLock::new(false),
                 sync: Mutex::new(clock::ClockSync::new()),
             }),
         }
@@ -168,6 +173,7 @@ impl Together {
                 .rtt_ns()
                 .map(|ns| ns / 1_000_000),
             target: i.target.read().unwrap_or_else(|p| p.into_inner()).clone(),
+            stopped: *i.stopped.read().unwrap_or_else(|p| p.into_inner()),
         }
     }
 

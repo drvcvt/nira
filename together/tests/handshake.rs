@@ -91,6 +91,13 @@ fn guest_receives_host_state_on_a_translated_clock() {
         "translated timestamp is implausibly old"
     );
 
+    host.publish(None);
+    wait_for(
+        "the host's stopped state to reach the guest",
+        Duration::from_secs(10),
+        || guest.snapshot().stopped.then_some(()),
+    );
+
     let snap = guest.snapshot();
     assert_eq!(snap.role, Role::Guest);
     assert!(snap.rtt_ms.is_some(), "no clock probe completed");
