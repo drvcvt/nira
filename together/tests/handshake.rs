@@ -34,9 +34,11 @@ fn sample_now() -> RemoteNow {
         track_uri: "local:track:/music/a.flac".into(),
         artist: "Boards of Canada".into(),
         title: "Roygbiv".into(),
+        album_title: Some("Music Has the Right to Children".into()),
+        cover_url: Some("https://img.example/roygbiv.jpg".into()),
         duration_ns: Duration::from_secs(151).as_nanos() as u64,
         pos_ns: Duration::from_secs(42).as_nanos() as u64,
-        at_ns: 0, // stamped by the session at send time
+        at_ns: 0, // stamped by Together::publish
         playing: true,
         playback_id: 7,
     }
@@ -63,6 +65,14 @@ fn guest_receives_host_state_on_a_translated_clock() {
 
     assert_eq!(target.title, "Roygbiv");
     assert_eq!(target.artist, "Boards of Canada");
+    assert_eq!(
+        target.album_title.as_deref(),
+        Some("Music Has the Right to Children")
+    );
+    assert_eq!(
+        target.cover_url.as_deref(),
+        Some("https://img.example/roygbiv.jpg")
+    );
     assert_eq!(target.playback_id, 7);
     assert!(target.playing);
 

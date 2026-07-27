@@ -17,7 +17,9 @@ use std::time::Duration;
 
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use provider_api::{ArtistRef, ArtistUri, ProviderId, Track, TrackUri};
+use provider_api::{
+    AlbumRef, AlbumUri, ArtistRef, ArtistUri, ProviderId, Track, TrackUri,
+};
 use together::{RemoteNow, Role, Together, TogetherSnapshot};
 
 use crate::queue::UseQueue;
@@ -107,10 +109,11 @@ fn describe(queue: &UseQueue, player: &player::Player) -> Option<RemoteNow> {
             .map(|a| a.name.clone())
             .unwrap_or_default(),
         title: track.title.clone(),
+        album_title: track.album.as_ref().map(|album| album.title.clone()),
+        cover_url: track.cover_url.clone(),
         duration_ns: track.duration.as_nanos() as u64,
         pos_ns: pos.as_nanos() as u64,
-        // Overwritten at send time by the session loop; the value here would
-        // already be stale by the time it goes out.
+        // Stamped by Together::publish beside the position sample.
         at_ns: 0,
         playing: !snap.is_paused && snap.has_source,
         playback_id: snap.playback_id,
@@ -129,9 +132,12 @@ fn as_match_target(now: &RemoteNow) -> Track {
             uri: ArtistUri(String::new()),
             name: now.artist.clone(),
         }],
-        album: None,
+        album: now.album_title.as_ref().map(|title| AlbumRef {
+            uri: AlbumUri(String::new()),
+            title: title.clone(),
+        }),
         duration: Duration::from_nanos(now.duration_ns),
-        cover_url: None,
+        cover_url: now.cover_url.clone(),
         mbid: None,
         added_at: None,
     }
@@ -433,6 +439,8 @@ mod tests {
             track_uri: "soundcloud:track:1".into(),
             artist: "a".into(),
             title: "t".into(),
+            album_title: None,
+            cover_url: None,
             duration_ns: Duration::from_secs(300).as_nanos() as u64,
             pos_ns: Duration::from_secs(pos_secs).as_nanos() as u64,
             at_ns: Duration::from_secs(at_secs).as_nanos() as u64,
@@ -509,5 +517,21 @@ mod tests {
             expected - Duration::from_millis(50),
             expected
         ));
+    }
+    #[test]
+    fn transferred_track_keeps_visual_metadata() {
+        let mut remote = now(30, 10, true);
+        remote.album_title = Some("Geogaddi".into());
+        remote.cover_url = Some("https://img.example/geogaddi.jpg".into());
+
+        let track = as_match_target(&remote);
+        assert_eq!(
+            track.album.as_ref().map(|album| album.title.as_str()),
+            Some("Geogaddi")
+        );
+        assert_eq!(
+            track.cover_url.as_deref(),
+            Some("https://img.example/geogaddi.jpg")
+        );
     }
 }

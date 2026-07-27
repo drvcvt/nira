@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 /// Protocol identifier. Bump the suffix on any wire-incompatible change —
 /// iroh refuses a connection whose ALPN it does not know, which turns a
 /// version mismatch into a clean "can't connect" instead of a garbled decode.
-pub const ALPN: &[u8] = b"nira/together/1";
+pub const ALPN: &[u8] = b"nira/together/2";
 
 /// Heartbeat interval. Also the probe interval — every heartbeat carries a
 /// fresh clock probe, so link quality tracks the same cadence as state.
@@ -48,6 +48,8 @@ pub struct RemoteNow {
     pub track_uri: String,
     pub artist: String,
     pub title: String,
+    pub album_title: Option<String>,
+    pub cover_url: Option<String>,
     pub duration_ns: u64,
     /// Playback position at `at_ns`.
     pub pos_ns: u64,
@@ -198,6 +200,8 @@ mod tests {
             track_uri: "local:track:/music/a.flac".into(),
             artist: "Boards of Canada".into(),
             title: "Roygbiv".into(),
+            album_title: Some("Music Has the Right to Children".into()),
+            cover_url: Some("https://img.example/roygbiv.jpg".into()),
             duration_ns: 151_000_000_000,
             pos_ns: 42_000_000_000,
             at_ns: 0,
