@@ -32,6 +32,7 @@ pub mod use_player;
 pub mod use_recommendations;
 pub mod use_search;
 pub mod use_together;
+pub mod use_youtube;
 
 pub use matching::{find_strict_match, match_key, track_match_key};
 pub use queue::{RadioStatus, RepeatMode, UseQueue, use_queue};
@@ -53,6 +54,7 @@ pub use use_recommendations::{
 };
 pub use use_search::{UseSearch, use_search};
 pub use use_together::{UseTogether, use_together};
+pub use use_youtube::{UseYouTube, YouTubePreview, use_youtube};
 
 // Re-export the player- and provider-side types pages/components consume so
 // they never need to depend on those crates directly.
@@ -155,6 +157,10 @@ impl AppContext {
         // Spotify Liked Songs — singleton so the paginated sync runs once
         // at the root instead of restarting on every Home↔Library switch.
         use_library::install_library();
+
+        // yt-dlp preview/import state. Root-owned so a download keeps running
+        // when the user leaves Library.
+        use_youtube::install_youtube();
 
         // Local-file library — scans config.library_root once on boot,
         // re-scannable from Settings/Library. Empty until a folder is set.

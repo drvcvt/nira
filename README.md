@@ -38,7 +38,7 @@ picked.
 | Audio engine      | rodio for SC progressive streams + librespot 0.8 for Spotify. One canonical volume curve (60 dB log) so backend switches don't jolt the levels. |
 | SoundCloud        | Public `client_id` auto-detected from the web player. Search, track resolve, related-tracks feed. No login. |
 | Spotify           | OAuth PKCE (user brings their own Developer Client ID). Search, liked songs, artist/album detail. Playback via librespot — **requires Spotify Premium**. |
-| Local files       | `provider-local` scans `library_root` (tags via lofty), feeds the Library page's Local tab with lossless/lossy badges + filters. Rescan on demand; no filesystem watcher yet. |
+| Local files       | `provider-local` scans `library_root` (tags via lofty), feeds the Library page's Local tab with lossless/lossy badges + filters. YouTube links can be previewed and imported there as tagged MP3s through yt-dlp. Rescan on demand; no filesystem watcher yet. |
 | Discovery         | Cross-provider candidate merge from SoundCloud's `/related` and ListenBrainz's similarity graph, optional Last.fm third source. Dedup by (artist, title), provider badges per row. |
 | Queue             | Auto-advance watcher (polls `has_source` falling-edge). Manual next/prev/stop, per-row remove. **Gapless** on the rodio side (next track appended to the sink, boundary detected via per-source position). Queue + in-track position persist — a restart resumes where you stopped. |
 | Playlists         | Local cross-provider playlists (JSON, likes-tier). Tracks add as rows; whole albums embed as expandable widgets (right-click an album card/banner). Rename, reorder, play/shuffle across both. |
@@ -156,6 +156,10 @@ command cargo run -p nira --release
 ```
 
 `anvil check` is the offloaded "did I break anything" feedback loop.
+
+YouTube import needs `yt-dlp` with `ffmpeg` available to its post-processors.
+The project's `shell.nix` includes Nixpkgs' wrapped package; install both
+separately when running a standalone build outside that environment.
 
 ---
 

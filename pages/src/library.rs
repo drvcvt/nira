@@ -9,10 +9,11 @@
 
 use std::sync::Arc;
 
+use components::{Button, SearchBar};
 use dioxus::prelude::*;
 use hooks::{
     AlbumCtx, AlbumUri, LikedTrack, Playlist, PlaylistAlbum, Track, use_ctx_menu, use_detail,
-    use_library, use_likes, use_local_library, use_playlists, use_queue,
+    use_config, use_library, use_likes, use_local_library, use_playlists, use_queue, use_youtube,
 };
 
 use crate::parts::{ArtistLinks, format_duration, open_track_context, provider_badge_class};
@@ -613,6 +614,109 @@ fn PlaylistAlbumWidget(
 const LOCAL_ALBUM_PAGE: usize = 24;
 
 #[component]
+fn YouTubeImport() -> Element {
+    let youtube = use_youtube();
+    let local = use_local_library();
+    let config = use_config();
+    let mut url = use_signal(String::new);
+    let busy = *youtube.busy.read();
+    let failed = *youtube.failed.read();
+    let preview = youtube.preview.read().clone();
+    let status = youtube.status.read().clone();
+    let has_url = !url.read().trim().is_empty();
+
+    rsx! {
+        section { class: "yt-import",
+            div { class: "yt-import-copy",
+                span { class: "yt-import-kicker", "YouTube import" }
+                h2 { "Bring a song into Nira" }
+                p { "Preview one YouTube link, then save it locally as MP3." }
+            }
+            div { class: "yt-import-workspace",
+                div { class: "searchbar-row yt-import-form",
+                    SearchBar {
+                        icon: Some("fa-brands fa-youtube".to_string()),
+                        value: url.read().clone(),
+                        placeholder: "https://youtube.com/watch?v=…".to_string(),
+                        on_input: move |value: String| url.set(value),
+                        on_submit: move |_| {
+                            let value = url.peek().clone();
+                            if !*youtube.busy.peek() && !value.trim().is_empty() {
+                                youtube.preview(value);
+                            }
+                        },
+                    }
+                    Button {
+                        label: if busy { "Working".to_string() } else { "Preview".to_string() },
+                        icon: Some(if busy {
+                            "fa-solid fa-circle-notch fa-spin".to_string()
+                        } else {
+                            "fa-solid fa-arrow-right".to_string()
+                        }),
+                        disabled: busy || !has_url,
+                        on_click: move |_| youtube.preview(url.peek().clone()),
+                    }
+                }
+
+                if let Some(item) = preview.as_ref() {
+                    div { class: "yt-preview",
+                        div { class: "yt-preview-cover",
+                            if let Some(thumbnail) = item.thumbnail.as_ref() {
+                                img {
+                                    src: "{thumbnail}",
+                                    alt: "",
+                                    loading: "lazy",
+                                    decoding: "async",
+                                }
+                            } else {
+                                i { class: "fa-solid fa-music" }
+                            }
+                        }
+                        div { class: "yt-preview-meta",
+                            strong { "{item.title}" }
+                            span {
+                                "{item.uploader}"
+                                if let Some(duration) = item.duration {
+                                    " · {hooks::fmt_time(duration)}"
+                                }
+                            }
+                        }
+                        Button {
+                            label: if busy { "Working".to_string() } else { "Download MP3".to_string() },
+                            icon: Some(if busy {
+                                "fa-solid fa-circle-notch fa-spin".to_string()
+                            } else {
+                                "fa-solid fa-download".to_string()
+                            }),
+                            disabled: busy,
+                            on_click: move |_| {
+                                youtube.download(local, config.peek().library_root.clone())
+                            },
+                        }
+                    }
+                }
+
+                if let Some(message) = status.as_ref() {
+                    p {
+                        class: "yt-import-status",
+                        role: "status",
+                        "aria-live": "polite",
+                        if busy {
+                            i { class: "fa-solid fa-circle-notch fa-spin" }
+                        } else if failed {
+                            i { class: "fa-solid fa-circle-exclamation" }
+                        } else {
+                            i { class: "fa-solid fa-check" }
+                        }
+                        "{message}"
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 fn LocalList(context: TrackContext, is_scanning: bool, error: Option<String>) -> Element {
     let local = use_local_library();
     let queue = use_queue();
@@ -628,6 +732,8 @@ fn LocalList(context: TrackContext, is_scanning: bool, error: Option<String>) ->
     let shown = (*visible_albums.read()).min(album_total);
 
     rsx! {
+        YouTubeImport {}
+
         div { class: "lib-local-head",
             p { class: "hint",
                 "Albums from your local music folder. Click one to open it."
