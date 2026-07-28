@@ -13,6 +13,7 @@ pkgs.mkShell {
     pkg-config
     webkitgtk_4_1
     xdotool
+    ffmpeg
     yt-dlp
   ];
 }

@@ -64,7 +64,7 @@ pub use use_recommendations::{
 };
 pub use use_search::{UseSearch, use_search};
 pub use use_together::{UseTogether, use_together};
-pub use use_youtube::{UseYouTube, YouTubePreview, use_youtube};
+pub use use_youtube::{UseYouTube, YouTubePlaylist, YouTubePreview, use_youtube};
 
 // Re-export the player- and provider-side types pages/components consume so
 // they never need to depend on those crates directly.
