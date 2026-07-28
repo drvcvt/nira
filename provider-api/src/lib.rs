@@ -37,6 +37,9 @@ pub enum ProviderId {
     Spotify,
     SoundCloud,
     Local,
+    /// Keeps persisted tracks readable after their provider is removed.
+    #[serde(other)]
+    Unavailable,
 }
 
 impl ProviderId {
@@ -45,6 +48,7 @@ impl ProviderId {
             ProviderId::Spotify => "Spotify",
             ProviderId::SoundCloud => "SoundCloud",
             ProviderId::Local => "Local",
+            ProviderId::Unavailable => "Unavailable",
         }
     }
 
@@ -54,6 +58,7 @@ impl ProviderId {
             ProviderId::Spotify => "S",
             ProviderId::SoundCloud => "SC",
             ProviderId::Local => "L",
+            ProviderId::Unavailable => "?",
         }
     }
 }

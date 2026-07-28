@@ -114,6 +114,14 @@ impl UsePlaylists {
         id
     }
 
+    /// Import Spotify playlists once without overwriting later local edits.
+    /// Returns the number of newly added playlists.
+    pub fn import_spotify(&self, playlists: Vec<(String, String, Vec<Track>)>) -> usize {
+        let mut added = 0;
+        self.mutate(|items| added = merge_spotify_playlists(items, playlists));
+        added
+    }
+
     pub fn delete(&self, id: &str) {
         self.mutate(|items| items.retain(|p| p.id != id));
     }
@@ -234,6 +242,32 @@ impl UsePlaylists {
     }
 }
 
+fn merge_spotify_playlists(
+    items: &mut Vec<Playlist>,
+    playlists: Vec<(String, String, Vec<Track>)>,
+) -> usize {
+    let now = Utc::now();
+    let mut additions = Vec::new();
+    for (spotify_id, name, tracks) in playlists {
+        let id = format!("spotify-{spotify_id}");
+        if items.iter().chain(&additions).any(|p| p.id == id) {
+            continue;
+        }
+        additions.push(Playlist {
+            id,
+            name,
+            tracks,
+            albums: Vec::new(),
+            created_at: now,
+            updated_at: now,
+        });
+    }
+    let added = additions.len();
+    additions.append(items);
+    *items = additions;
+    added
+}
+
 /// Install the global signal. Loads from disk on first call — best-effort,
 /// a corrupted file logs and starts empty rather than crashing boot.
 pub fn install_playlists() {
@@ -261,4 +295,35 @@ pub fn install_playlists() {
 
 pub fn use_playlists() -> UsePlaylists {
     use_context::<UsePlaylists>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spotify_import_is_deduplicated_without_overwriting_local_edits() {
+        let now = Utc::now();
+        let mut items = vec![Playlist {
+            id: "spotify-kept".into(),
+            name: "My local rename".into(),
+            tracks: Vec::new(),
+            albums: Vec::new(),
+            created_at: now,
+            updated_at: now,
+        }];
+
+        let added = merge_spotify_playlists(
+            &mut items,
+            vec![
+                ("kept".into(), "Remote rename".into(), Vec::new()),
+                ("new".into(), "New playlist".into(), Vec::new()),
+            ],
+        );
+
+        assert_eq!(added, 1);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].name, "New playlist");
+        assert_eq!(items[1].name, "My local rename");
+    }
 }

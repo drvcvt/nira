@@ -658,7 +658,7 @@ async fn resolve_candidate(
             match id {
                 ProviderId::Spotify => spotify = Some(top),
                 ProviderId::SoundCloud => soundcloud = Some(top),
-                ProviderId::Local => {}
+                ProviderId::Local | ProviderId::Unavailable => {}
             }
         }
     }

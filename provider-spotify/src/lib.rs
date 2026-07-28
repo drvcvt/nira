@@ -30,7 +30,7 @@ use provider_api::{
     ProviderCaps, ProviderError, ProviderId, ProviderResult, Query, RelatedArtist, SearchResults,
     StreamHandle, Track, TrackUri,
 };
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -42,6 +42,7 @@ const SP_AUTH: &str = "https://accounts.spotify.com/authorize";
 const SP_TOKEN: &str = "https://accounts.spotify.com/api/token";
 const CALLBACK_PORT: u16 = 7777;
 const CALLBACK_PATH: &str = "/callback";
+const SEARCH_MAX: u32 = 10;
 
 /// Spotify OAuth scopes nira asks for. `streaming` is the librespot
 /// prerequisite — we request it now even though Phase 2A doesn't use it, so
@@ -53,6 +54,7 @@ const SCOPES: &[&str] = &[
     "user-top-read",
     "user-read-recently-played",
     "playlist-read-private",
+    "playlist-read-collaborative",
     "streaming",
 ];
 
@@ -368,10 +370,7 @@ impl SpotifyProvider {
         self.refresh_with(refresh).await
     }
 
-    async fn fetch_json<T>(&self, url: &str) -> ProviderResult<T>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
+    async fn fetch_response(&self, url: &str) -> ProviderResult<Response> {
         let token = self.access_token().await?;
         let mut resp = self
             .http
@@ -407,6 +406,14 @@ impl SpotifyProvider {
                 retry_after_ms: retry * 1000,
             });
         }
+        Ok(resp)
+    }
+
+    async fn fetch_json<T>(&self, url: &str) -> ProviderResult<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let resp = self.fetch_response(url).await?;
         if !resp.status().is_success() {
             return Err(ProviderError::Network(format!(
                 "{url} -> {}",
@@ -415,6 +422,26 @@ impl SpotifyProvider {
         }
         resp.json::<T>()
             .await
+            .map_err(|e| ProviderError::Malformed(e.to_string()))
+    }
+
+    async fn fetch_json_allow_forbidden<T>(&self, url: &str) -> ProviderResult<Option<T>>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let resp = self.fetch_response(url).await?;
+        if resp.status() == StatusCode::FORBIDDEN {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(ProviderError::Network(format!(
+                "{url} -> {}",
+                resp.status()
+            )));
+        }
+        resp.json::<T>()
+            .await
+            .map(Some)
             .map_err(|e| ProviderError::Malformed(e.to_string()))
     }
 }
@@ -440,9 +467,7 @@ impl Provider for SpotifyProvider {
     }
 
     async fn search(&self, q: &Query) -> ProviderResult<SearchResults> {
-        let limit = q.limit.unwrap_or(20).clamp(1, 50);
-        let encoded = url::form_urlencoded::byte_serialize(q.text.as_bytes()).collect::<String>();
-        let url = format!("{SP_API}/search?q={encoded}&type=track,artist&limit={limit}");
+        let url = spotify_search_url(&q.text, q.limit);
         let raw: SpSearchResp = self.fetch_json(&url).await?;
         Ok(SearchResults {
             tracks: raw.tracks.items.into_iter().map(sp_to_track).collect(),
@@ -554,6 +579,20 @@ pub struct LikedTracksPage {
     pub next_offset: Option<u32>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SpotifyPlaylist {
+    pub id: String,
+    pub name: String,
+    pub tracks: Vec<Track>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpotifyPlaylistImport {
+    pub playlists: Vec<SpotifyPlaylist>,
+    pub skipped_playlists: usize,
+    pub skipped_items: usize,
+}
+
 impl SpotifyProvider {
     /// Fetch a single page of liked songs starting at `offset`. The page size
     /// is capped at 50 by Spotify; we pass the value through directly.
@@ -599,6 +638,77 @@ impl SpotifyProvider {
             }
         }
     }
+
+    /// Fetch every playlist whose items Spotify lets the current user read.
+    /// Followed playlists owned by somebody else are listed by `/me/playlists`
+    /// but their items return 403 in current Development Mode, so omit them.
+    pub async fn playlists_for_import(&self) -> ProviderResult<SpotifyPlaylistImport> {
+        let me: SpProfile = self.fetch_json(&format!("{SP_API}/me")).await?;
+        let mut offset = 0;
+        let mut briefs = Vec::new();
+
+        loop {
+            let page: SpPlaylistsPage = self
+                .fetch_json(&format!("{SP_API}/me/playlists?limit=50&offset={offset}"))
+                .await?;
+            let received = page.items.len();
+            briefs.extend(page.items);
+            if page.next.is_none() || received == 0 {
+                break;
+            }
+            offset += received;
+        }
+
+        let mut imported = SpotifyPlaylistImport {
+            playlists: Vec::new(),
+            skipped_playlists: 0,
+            skipped_items: 0,
+        };
+        for playlist in briefs {
+            if playlist.owner.id != me.id && !playlist.collaborative {
+                imported.skipped_playlists += 1;
+                continue;
+            }
+            match self.playlist_tracks(&playlist.id).await? {
+                Some((tracks, skipped)) => {
+                    imported.skipped_items += skipped;
+                    imported.playlists.push(SpotifyPlaylist {
+                        id: playlist.id,
+                        name: playlist.name,
+                        tracks,
+                    });
+                }
+                None => imported.skipped_playlists += 1,
+            }
+        }
+        Ok(imported)
+    }
+
+    async fn playlist_tracks(&self, id: &str) -> ProviderResult<Option<(Vec<Track>, usize)>> {
+        let mut offset = 0;
+        let mut tracks = Vec::new();
+        let mut skipped = 0;
+
+        loop {
+            let Some(page): Option<SpPlaylistItemsPage> = self
+                .fetch_json_allow_forbidden(&format!(
+                    "{SP_API}/playlists/{id}/items?limit=50&offset={offset}"
+                ))
+                .await?
+            else {
+                return Ok(None);
+            };
+            let received = page.items.len();
+            let (mut page_tracks, page_skipped) = playlist_items_to_tracks(page.items);
+            tracks.append(&mut page_tracks);
+            skipped += page_skipped;
+            if page.next.is_none() || received == 0 {
+                break;
+            }
+            offset += received;
+        }
+        Ok(Some((tracks, skipped)))
+    }
 }
 
 #[derive(Deserialize)]
@@ -636,7 +746,39 @@ fn liked_items_to_tracks(items: Vec<SpLikedItem>) -> Vec<Track> {
         .collect()
 }
 
+fn playlist_items_to_tracks(items: Vec<SpPlaylistItem>) -> (Vec<Track>, usize) {
+    let mut tracks = Vec::new();
+    let mut skipped = 0;
+    for item in items {
+        let Some(value) = item.item else {
+            skipped += 1;
+            continue;
+        };
+        if value.get("type").and_then(|v| v.as_str()) != Some("track") {
+            skipped += 1;
+            continue;
+        }
+        match serde_json::from_value::<SpTrack>(value) {
+            Ok(track) => tracks.push(sp_to_track(track)),
+            Err(_) => skipped += 1,
+        }
+    }
+    (tracks, skipped)
+}
+
 // ── PKCE & callback helpers ────────────────────────────────────────────────
+
+fn spotify_search_url(text: &str, limit: Option<u32>) -> String {
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query
+        .append_pair("q", text)
+        .append_pair("type", "track,artist")
+        .append_pair(
+            "limit",
+            &limit.unwrap_or(SEARCH_MAX).clamp(1, SEARCH_MAX).to_string(),
+        );
+    format!("{SP_API}/search?{}", query.finish())
+}
 
 fn generate_pkce_pair() -> (String, String) {
     let verifier = random_unreserved(64);
@@ -764,6 +906,47 @@ struct SpArtistPage {
 #[derive(Deserialize)]
 struct SpTrackPage {
     items: Vec<SpTrack>,
+}
+
+#[derive(Deserialize)]
+struct SpProfile {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct SpPlaylistsPage {
+    #[serde(default)]
+    items: Vec<SpPlaylistBrief>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SpPlaylistBrief {
+    id: String,
+    name: String,
+    #[serde(default)]
+    collaborative: bool,
+    owner: SpPlaylistOwner,
+}
+
+#[derive(Deserialize)]
+struct SpPlaylistOwner {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct SpPlaylistItemsPage {
+    #[serde(default)]
+    items: Vec<SpPlaylistItem>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SpPlaylistItem {
+    #[serde(default)]
+    item: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -1093,5 +1276,40 @@ mod tests {
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].title, "Alive");
         assert!(tracks[0].added_at.is_some());
+    }
+
+    #[test]
+    fn playlist_items_keep_tracks_and_drop_unsupported_items() {
+        let json = r#"{
+            "items": [
+                { "item": {
+                    "type": "track",
+                    "id": "t1", "name": "Alive", "duration_ms": 1000,
+                    "artists": [{ "id": "a1", "name": "A" }],
+                    "album": { "id": "al1", "name": "Al", "images": [] }
+                }},
+                { "item": {
+                    "type": "episode",
+                    "id": "ep1", "name": "A podcast"
+                }}
+            ],
+            "next": null
+        }"#;
+        let page: SpPlaylistItemsPage = serde_json::from_str(json).expect("playlist page parses");
+        let (tracks, skipped) = playlist_items_to_tracks(page.items);
+
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].title, "Alive");
+        assert_eq!(skipped, 1);
+    }
+
+    #[test]
+    fn search_url_caps_limit_for_current_development_mode() {
+        let url = spotify_search_url("massive attack", Some(15));
+
+        assert_eq!(
+            url,
+            "https://api.spotify.com/v1/search?q=massive+attack&type=track%2Cartist&limit=10"
+        );
     }
 }

@@ -964,7 +964,7 @@ async fn prefetch_gapless(queue: UseQueue, generation: u64, target: usize) {
                 _ => false,
             }
         }
-        ProviderId::Spotify => false,
+        ProviderId::Spotify | ProviderId::Unavailable => false,
     };
     if appended {
         tracing::info!(target_idx = target, "gapless: next track appended to sink");
@@ -1030,6 +1030,7 @@ async fn play_one(
                 .map_err(|e| format!("Could not play local file: {e}")),
             None => Err("Malformed local track reference.".into()),
         },
+        ProviderId::Unavailable => Err("This provider is unavailable in this build.".into()),
     })
 }
 

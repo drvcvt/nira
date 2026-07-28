@@ -168,7 +168,7 @@ impl UseArtist {
         // the augmentation alias when one was found, otherwise stay empty.
         let uri = match provider_id {
             ProviderId::Spotify => Some(v.artist.uri.clone()),
-            ProviderId::SoundCloud | ProviderId::Local => {
+            ProviderId::SoundCloud | ProviderId::Local | ProviderId::Unavailable => {
                 v.via_spotify.clone()
             }
         };

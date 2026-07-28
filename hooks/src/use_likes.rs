@@ -100,3 +100,31 @@ pub fn install_likes() {
 pub fn use_likes() -> UseLikes {
     use_context::<UseLikes>()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::LikedTrack;
+
+    #[test]
+    fn saved_track_from_retired_provider_still_loads() {
+        let json = r#"[{
+            "track": {
+                "uri": "retired:track:1",
+                "provider": "RetiredProvider",
+                "title": "Legacy",
+                "artists": [],
+                "album": null,
+                "duration": {"secs": 1, "nanos": 0},
+                "cover_url": null,
+                "mbid": null,
+                "added_at": null
+            },
+            "liked_at": "2026-07-28T10:11:30Z"
+        }]"#;
+
+        let saved: Vec<LikedTrack> = serde_json::from_str(json).unwrap();
+
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].track.provider.label(), "Unavailable");
+    }
+}

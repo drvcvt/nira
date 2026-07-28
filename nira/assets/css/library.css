@@ -403,9 +403,10 @@
 
 .lib-pl-create {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 4px 0 16px;
-  max-width: 420px;
+  max-width: 640px;
 }
 
 .lib-pl-input {

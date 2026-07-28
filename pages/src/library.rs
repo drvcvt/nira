@@ -14,7 +14,7 @@ use dioxus::prelude::*;
 use hooks::{
     AlbumCtx, AlbumUri, LikedTrack, Playlist, PlaylistAlbum, Track, use_config, use_ctx_menu,
     use_detail, use_downloads, use_library, use_likes, use_local_library, use_playlists, use_queue,
-    use_youtube,
+    use_spotify, use_youtube,
 };
 
 use crate::parts::{ArtistLinks, format_duration, open_track_context, provider_badge_class};
@@ -196,10 +196,13 @@ fn SavedList(items: Vec<LikedTrack>) -> Element {
 #[component]
 fn PlaylistsPane() -> Element {
     let playlists = use_playlists();
+    let spotify = use_spotify();
     let queue = use_queue();
     let mut selected = use_signal(|| None::<String>);
     let mut new_name = use_signal(String::new);
     let mut confirm_delete = use_signal(|| false);
+    let mut importing = use_signal(|| false);
+    let mut import_status = use_signal(|| None::<String>);
     // In-place rename draft; None = showing the plain title.
     let mut editing_name = use_signal(|| None::<String>);
     // Leaving/entering a playlist resets the delete confirmation + rename.
@@ -210,6 +213,18 @@ fn PlaylistsPane() -> Element {
     });
 
     let items = playlists.list();
+    let spotify_connected = spotify.is_connected();
+    let is_importing = *importing.read();
+    let import_label = if is_importing {
+        " Importing…"
+    } else {
+        " Import from Spotify"
+    };
+    let import_title = if spotify_connected {
+        "Import owned and collaborative Spotify playlists"
+    } else {
+        "Connect Spotify in Settings first"
+    };
     let sel_pl: Option<Playlist> = selected
         .read()
         .as_ref()
@@ -406,6 +421,74 @@ fn PlaylistsPane() -> Element {
                 i { class: "fa-solid fa-plus" }
                 " Create"
             }
+            button {
+                class: "sq-btn sq-btn-ghost sq-sm",
+                disabled: !spotify_connected || is_importing,
+                title: "{import_title}",
+                onclick: {
+                    let spotify = spotify.clone();
+                    move |_| {
+                        let spotify = spotify.clone();
+                        importing.set(true);
+                        import_status.set(None);
+                        spawn(async move {
+                            match spotify.playlists_for_import().await {
+                                Ok(result) => {
+                                    let available = result.playlists.len();
+                                    let added = playlists.import_spotify(
+                                        result
+                                            .playlists
+                                            .into_iter()
+                                            .map(|p| (p.id, p.name, p.tracks))
+                                            .collect(),
+                                    );
+                                    let existing = available - added;
+                                    let mut parts = vec![format!(
+                                        "Imported {added} Spotify {}.",
+                                        if added == 1 { "playlist" } else { "playlists" }
+                                    )];
+                                    if existing > 0 {
+                                        parts.push(format!("{existing} already imported."));
+                                    }
+                                    if result.skipped_playlists > 0 {
+                                        parts.push(format!(
+                                            "{} followed {} skipped by Spotify.",
+                                            result.skipped_playlists,
+                                            if result.skipped_playlists == 1 {
+                                                "playlist was"
+                                            } else {
+                                                "playlists were"
+                                            }
+                                        ));
+                                    }
+                                    if result.skipped_items > 0 {
+                                        parts.push(format!(
+                                            "{} unavailable or non-track {} skipped.",
+                                            result.skipped_items,
+                                            if result.skipped_items == 1 {
+                                                "item was"
+                                            } else {
+                                                "items were"
+                                            }
+                                        ));
+                                    }
+                                    import_status.set(Some(parts.join(" ")));
+                                }
+                                Err(error) => {
+                                    import_status
+                                        .set(Some(format!("Spotify import failed: {error}")));
+                                }
+                            }
+                            importing.set(false);
+                        });
+                    }
+                },
+                i { class: "fa-brands fa-spotify" }
+                "{import_label}"
+            }
+        }
+        if let Some(status) = import_status.read().as_ref() {
+            p { class: "hint", role: "status", "{status}" }
         }
 
         if items.is_empty() {
@@ -415,7 +498,7 @@ fn PlaylistsPane() -> Element {
                 }
                 p { "No playlists yet." }
                 p { class: "hint",
-                    "Create one above — or right-click any track and pick \"Add to playlist\"."
+                    "Create one above, import from Spotify, or right-click any track and pick \"Add to playlist\"."
                 }
             }
         } else {
