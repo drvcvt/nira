@@ -22,6 +22,7 @@ pub mod use_artist;
 pub mod use_ctx_menu;
 pub mod use_detail;
 pub mod use_discovery;
+pub mod use_downloads;
 pub mod use_history;
 pub mod use_library;
 pub mod use_likes;
@@ -41,6 +42,7 @@ pub use use_artist::{ArtistView, UseArtist, is_long_play, use_artist};
 pub use use_ctx_menu::{AlbumCtx, CtxMenuState, CtxTarget, UseCtxMenu, use_ctx_menu};
 pub use use_detail::{DetailView, UseDetail, uri_has_detail_page, use_detail};
 pub use use_discovery::{DiscoveryMode, UseDiscovery, use_discovery};
+pub use use_downloads::{UseDownloads, use_downloads};
 pub use use_history::{UseHistory, install_history, use_history};
 pub use use_library::{UseLibrary, install_library, use_library};
 pub use use_likes::{LikedTrack, UseLikes, use_likes};
@@ -149,6 +151,9 @@ impl AppContext {
 
         // Local playlists — same persistence tier as likes.
         use_playlists::install_playlists();
+
+        // Provider-neutral background download status.
+        use_downloads::install_downloads();
 
         // Play-history singleton (Recently played + recommendation seed
         // pool). Installed here so `remove` can refresh every subscriber.

@@ -8,7 +8,7 @@ use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use serde::Deserialize;
 
-use crate::UseLocalLibrary;
+use crate::{UseDownloads, UseLocalLibrary};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct YouTubePreview {
@@ -68,17 +68,29 @@ impl UseYouTube {
         });
     }
 
-    pub fn download(&self, local: UseLocalLibrary, library_root: Option<PathBuf>) {
+    pub fn download(
+        &self,
+        local: UseLocalLibrary,
+        downloads: UseDownloads,
+        library_root: Option<PathBuf>,
+    ) {
         let Some(item) = self.preview.peek().clone() else {
-            self.fail("Preview a YouTube song first.");
+            let message = "Preview a YouTube song first.";
+            self.fail(message);
+            downloads.fail(format!("YouTube · {message}"));
             return;
         };
         let Some(root) = library_root else {
-            self.fail("Set a music folder in Settings → Library first.");
+            let message = "Set a music folder in Settings → Library first.";
+            self.fail(message);
+            downloads.fail(format!("YouTube · {message}"));
             return;
         };
 
-        self.start(format!("Downloading “{}”…", item.title));
+        let title = item.title.clone();
+        let start_message = download_start_message(&title);
+        self.start(start_message.clone());
+        downloads.start(start_message);
         let output_dir = root.join("YouTube");
         let state = *self;
         spawn_forever(async move {
@@ -105,11 +117,15 @@ impl UseYouTube {
             ];
 
             match run_ytdlp(args).await.and_then(successful_output) {
-                Ok(output) => {
+                Ok(_) => {
                     local.rescan();
-                    state.finish(saved_message(&output.stdout));
+                    state.finish("Saved to your YouTube downloads.");
+                    downloads.finish(download_saved_message(&title));
                 }
-                Err(error) => state.fail(error),
+                Err(error) => {
+                    state.fail(error.clone());
+                    downloads.fail(format!("YouTube · Download failed: {error}"));
+                }
             }
         });
     }
@@ -175,6 +191,14 @@ fn youtube_url(raw: &str) -> Result<reqwest::Url, String> {
     Ok(url)
 }
 
+fn download_start_message(title: &str) -> String {
+    format!("YouTube · Downloading “{title}” as MP3…")
+}
+
+fn download_saved_message(title: &str) -> String {
+    format!("YouTube · Saved “{title}”.")
+}
+
 async fn run_ytdlp(args: Vec<OsString>) -> Result<Output, String> {
     tokio::task::spawn_blocking(move || {
         Command::new("yt-dlp").args(args).output().map_err(|error| {
@@ -236,23 +260,9 @@ fn parse_preview(bytes: &[u8], url: String) -> Result<YouTubePreview, String> {
     })
 }
 
-fn saved_message(stdout: &[u8]) -> String {
-    let path = String::from_utf8_lossy(stdout);
-    let name = path
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .and_then(|line| std::path::Path::new(line.trim()).file_name())
-        .and_then(|name| name.to_str());
-    name.map_or_else(
-        || "Saved to the YouTube library folder.".to_string(),
-        |name| format!("Saved “{name}”."),
-    )
-}
-
 #[cfg(test)]
 mod tests {
-    use super::youtube_url;
+    use super::{download_saved_message, download_start_message, youtube_url};
 
     #[test]
     fn accepts_only_https_youtube_urls() {
@@ -260,5 +270,17 @@ mod tests {
         assert!(youtube_url("https://music.youtube.com/watch?v=dQw4w9WgXcQ").is_ok());
         assert!(youtube_url("http://youtube.com/watch?v=x").is_err());
         assert!(youtube_url("https://youtube.com.evil.test/watch?v=x").is_err());
+    }
+
+    #[test]
+    fn download_messages_name_youtube_and_the_track() {
+        assert_eq!(
+            download_start_message("A Song"),
+            "YouTube · Downloading “A Song” as MP3…"
+        );
+        assert_eq!(
+            download_saved_message("A Song"),
+            "YouTube · Saved “A Song”."
+        );
     }
 }

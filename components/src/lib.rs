@@ -8,6 +8,7 @@ pub mod bottombar;
 pub mod button;
 pub mod cover;
 pub mod ctx_menu;
+pub mod download_toast;
 pub mod hotkeys;
 pub mod searchbar;
 pub mod sidebar;

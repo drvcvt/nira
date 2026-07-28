@@ -554,6 +554,7 @@ fn App() -> Element {
             components::visualizer::Visualizer {}
             // Fullscreen cover / vinyl overlay (bottombar mini cover).
             components::cover::CoverOverlay {}
+            components::download_toast::DownloadToast {}
         }
     }
 }
