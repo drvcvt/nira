@@ -554,7 +554,123 @@ fn App() -> Element {
             components::visualizer::Visualizer {}
             // Fullscreen cover / vinyl overlay (bottombar mini cover).
             components::cover::CoverOverlay {}
+            TogetherIndicator {}
             components::download_toast::DownloadToast {}
+        }
+    }
+}
+
+fn together_indicator_copy(is_host: bool, peers: &[String], streaming: bool) -> String {
+    if peers.is_empty() {
+        return if is_host {
+            "Session ready".into()
+        } else {
+            "Connecting…".into()
+        };
+    }
+
+    let state = if streaming { "Streaming" } else { "Connected" };
+    if is_host && peers.len() > 1 {
+        format!("{state} with {} people · {}", peers.len(), peers.join(", "))
+    } else {
+        format!("{state} with {}", peers.join(", "))
+    }
+}
+
+fn guest_sync_label(
+    has_source: bool,
+    loading: bool,
+    unavailable: bool,
+    gap_ms: Option<u64>,
+) -> &'static str {
+    if unavailable {
+        "Not in sync"
+    } else if loading || !has_source || gap_ms.is_none_or(|gap| gap > 750) {
+        "Syncing"
+    } else {
+        "In sync"
+    }
+}
+
+#[component]
+fn TogetherIndicator() -> Element {
+    let together = hooks::use_together();
+    let player = hooks::use_player();
+    let queue = hooks::use_queue();
+    let snapshot = together.snapshot.read().clone();
+    let is_host = snapshot.ticket.is_some();
+    let connecting = snapshot.status == "connecting…";
+
+    if !is_host && snapshot.peers.is_empty() && !connecting {
+        return rsx! {};
+    }
+
+    let playback = player.snapshot();
+    let (copy, state_class) = if is_host {
+        let streaming = playback.has_source && !playback.is_paused;
+        (
+            together_indicator_copy(true, &snapshot.peers, streaming),
+            if streaming { "streaming" } else { "" },
+        )
+    } else {
+        let loading = *queue.is_loading_track.read();
+        let current = queue
+            .current_index
+            .read()
+            .and_then(|idx| queue.entries.read().get(idx).cloned());
+        let same_track = snapshot.target.as_ref().is_none_or(|target| {
+            current.as_ref().is_some_and(|track| {
+                track.uri.0 == target.track_uri
+                    || (hooks::match_key(&track.title) == hooks::match_key(&target.title)
+                        && track.artists.first().is_some_and(|artist| {
+                            hooks::match_key(&artist.name) == hooks::match_key(&target.artist)
+                        })
+                        && track
+                            .duration
+                            .as_secs()
+                            .abs_diff(target.duration_ns / 1_000_000_000)
+                            <= 3)
+            })
+        });
+        let unavailable = together.unmatched.read().is_some()
+            || queue.error.read().is_some()
+            || (playback.has_source && !loading && !same_track);
+        let gap_ms = snapshot.target.as_ref().map(|target| {
+            let elapsed = if target.playing {
+                together.handle().now_ns().saturating_sub(target.at_ns)
+            } else {
+                0
+            };
+            let expected = std::time::Duration::from_nanos(target.pos_ns.saturating_add(elapsed));
+            playback.position.abs_diff(expected).as_millis() as u64
+        });
+        let label = if snapshot.stopped && !unavailable {
+            "In sync"
+        } else {
+            guest_sync_label(playback.has_source, loading, unavailable, gap_ms)
+        };
+        let copy = if snapshot.peers.is_empty() {
+            "Connecting…".into()
+        } else {
+            format!("{label} with {}", snapshot.peers.join(", "))
+        };
+        let state_class = match label {
+            "In sync" => "in-sync",
+            "Not in sync" => "out-of-sync",
+            _ => "syncing",
+        };
+        (copy, state_class)
+    };
+    let class = format!("together-indicator {state_class}");
+
+    rsx! {
+        div {
+            class,
+            role: "status",
+            "aria-live": "polite",
+            title: "{copy}",
+            span { class: "together-indicator-dot", "aria-hidden": "true" }
+            span { class: "together-indicator-copy", "{copy}" }
         }
     }
 }
@@ -562,6 +678,28 @@ fn App() -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guest_sync_label_reports_real_local_health() {
+        assert_eq!(guest_sync_label(true, false, false, Some(120)), "In sync");
+        assert_eq!(guest_sync_label(true, false, false, Some(900)), "Syncing");
+        assert_eq!(guest_sync_label(false, true, false, None), "Syncing");
+        assert_eq!(guest_sync_label(true, false, true, Some(0)), "Not in sync");
+    }
+
+    #[test]
+    fn together_indicator_describes_the_visible_connection() {
+        assert_eq!(
+            together_indicator_copy(true, &["Alex".into(), "Sam".into()], true),
+            "Streaming with 2 people · Alex, Sam"
+        );
+        assert_eq!(
+            together_indicator_copy(false, &["Alex".into()], false),
+            "Connected with Alex"
+        );
+        assert_eq!(together_indicator_copy(true, &[], false), "Session ready");
+        assert_eq!(together_indicator_copy(false, &[], false), "Connecting…");
+    }
 
     #[test]
     fn second_instance_lock_is_rejected_until_first_is_dropped() {

@@ -120,11 +120,22 @@ struct PersistedPosition {
     secs: u64,
 }
 
+fn local_transport_allowed(following_host: bool) -> bool {
+    !following_host
+}
+
 impl UseQueue {
     /// Reset the queue to `tracks` and start playing `start_idx`. `start_idx`
     /// is clamped into bounds; a click on entry 17 of a 50-entry list ends
     /// up at index 17. No-op if `tracks` is empty.
     pub fn play_list(&self, tracks: Vec<Track>, start_idx: usize) {
+        if !local_transport_allowed(*self.follow_mode.peek()) {
+            return;
+        }
+        self.play_list_from_host(tracks, start_idx);
+    }
+
+    fn play_list_from_host(&self, tracks: Vec<Track>, start_idx: usize) {
         if tracks.is_empty() {
             return;
         }
@@ -162,10 +173,14 @@ impl UseQueue {
         self.play_list(vec![track], 0);
     }
 
+    pub(crate) fn play_track_from_host(&self, track: Track) {
+        self.play_list_from_host(vec![track], 0);
+    }
+
     /// Play `tracks` shuffled from a random starting point, switching the
     /// queue's shuffle mode on — the Library "Shuffle all" action.
     pub fn shuffle_all(&self, tracks: Vec<Track>) {
-        if tracks.is_empty() {
+        if !local_transport_allowed(*self.follow_mode.peek()) || tracks.is_empty() {
             return;
         }
         let mut shuffle = self.shuffle_enabled;
@@ -184,6 +199,9 @@ impl UseQueue {
     }
 
     pub fn next(&self) {
+        if !local_transport_allowed(*self.follow_mode.peek()) {
+            return;
+        }
         let cur = *self.current_index.peek();
         let entries = self.entries.peek();
         let Some(i) = cur else { return };
@@ -204,6 +222,10 @@ impl UseQueue {
     }
 
     pub fn advance_after_end(&self) {
+        if !local_transport_allowed(*self.follow_mode.peek()) {
+            self.stop_from_host();
+            return;
+        }
         let cur = *self.current_index.peek();
         let entries = self.entries.peek();
         let Some(i) = cur else { return };
@@ -263,6 +285,9 @@ impl UseQueue {
     /// re-seeds nor re-shuffles the queue — it's what the queue popover and
     /// the idle-play button use to start playback *within* the current queue.
     pub fn play_index(&self, idx: usize) {
+        if !local_transport_allowed(*self.follow_mode.peek()) {
+            return;
+        }
         let len = self.entries.peek().len();
         if len == 0 {
             return;
@@ -271,6 +296,9 @@ impl UseQueue {
     }
 
     pub fn previous(&self) {
+        if !local_transport_allowed(*self.follow_mode.peek()) {
+            return;
+        }
         let cur = *self.current_index.peek();
         let entries = self.entries.peek();
         let Some(i) = cur else { return };
@@ -294,6 +322,13 @@ impl UseQueue {
     /// shouldn't destroy what the user lined up; `clear_upcoming` is the
     /// destructive action.
     pub fn stop(&self) {
+        if !local_transport_allowed(*self.follow_mode.peek()) {
+            return;
+        }
+        self.stop_from_host();
+    }
+
+    pub(crate) fn stop_from_host(&self) {
         let mut state = self.advance_state;
         // Mark Idle *before* hitting the player so the watcher can't catch
         // the `has_source=false` transition and try to auto-advance.
@@ -1400,6 +1435,12 @@ pub fn use_queue() -> UseQueue {
 mod tests {
     use super::*;
     use provider_api::{ArtistRef, ArtistUri, TrackUri};
+
+    #[test]
+    fn following_a_host_rejects_local_transport_changes() {
+        assert!(!local_transport_allowed(true));
+        assert!(local_transport_allowed(false));
+    }
 
     fn track(artist: &str, title: &str) -> Track {
         Track {

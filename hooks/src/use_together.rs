@@ -91,6 +91,13 @@ pub fn use_together() -> UseTogether {
 /// Build the wire payload from what the player is actually doing. `None` when
 /// nothing is loaded, which reads on the guest side as "host stopped".
 fn describe(queue: &UseQueue, player: &player::Player) -> Option<RemoteNow> {
+    let snap = player.snapshot();
+    // A queue entry changes before its new source finishes loading. Publishing
+    // it with the previous source's playback_id makes guests mistake two songs
+    // for one, especially across an unavailable private-provider track.
+    if !snap.has_source {
+        return None;
+    }
     let idx = (*queue.current_index.peek())?;
     let entries = queue.entries.peek();
     // Deliberately the *queue entry*, not the player's now-playing: those can
@@ -99,7 +106,6 @@ fn describe(queue: &UseQueue, player: &player::Player) -> Option<RemoteNow> {
     let track = entries.get(idx)?.clone();
     drop(entries);
 
-    let snap = player.snapshot();
     let (pos, _at) = player.position_at();
     Some(RemoteNow {
         track_uri: track.uri.0.clone(),
@@ -155,6 +161,10 @@ fn expected_position(t: &Together, now: &RemoteNow) -> Duration {
     Duration::from_nanos(pos)
 }
 
+fn is_same_remote_playback(anchor: Option<&(u64, String)>, target: &RemoteNow) -> bool {
+    anchor.is_some_and(|(id, uri)| *id == target.playback_id && uri == &target.track_uri)
+}
+
 pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocalLibrary) {
     let together = use_signal(Together::new);
     let mut snapshot = use_signal(|| together.peek().snapshot());
@@ -172,7 +182,7 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
     spawn_forever(async move {
         // Tracks the playback we last lined ourselves up with, so a repeat of
         // the same track (same uri, new playback_id) still re-anchors.
-        let mut anchored: Option<u64> = None;
+        let mut anchored: Option<(u64, String)> = None;
         let mut since_compare = Duration::ZERO;
         // Set the moment we adopt a track, cleared once we have actually
         // lined up with the host. `play_track` always starts at zero, so
@@ -223,7 +233,7 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
                 Role::Guest => {
                     if snap.stopped {
                         if !host_stopped {
-                            queue.stop();
+                            queue.stop_from_host();
                             anchored = None;
                             pending_align = false;
                             last_seen = None;
@@ -238,12 +248,12 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
 
                     // New playback on the host — load our own copy and line up
                     // from scratch. Position is not comparable across this.
-                    if anchored != Some(target.playback_id) {
+                    if !is_same_remote_playback(anchored.as_ref(), &target) {
                         // Record the attempt whatever the outcome. Retrying a
                         // track we cannot play buys nothing and, before this,
                         // logged the same line twice a second for as long as
                         // the host kept playing it.
-                        anchored = Some(target.playback_id);
+                        anchored = Some((target.playback_id, target.track_uri.clone()));
                         since_compare = Duration::ZERO;
                         last_seen = None;
                         last_err_ns = None;
@@ -257,11 +267,12 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
                             }
                             AdoptOutcome::NotOurs => {
                                 pending_align = false;
+                                queue.stop_from_host();
                                 tracing::info!(
                                     title = %target.title,
                                     artist = %target.artist,
                                     uri = %target.track_uri,
-                                    "together: host is on a local file we do not have"
+                                    "together: host track is unavailable on this client"
                                 );
                                 unmatched.set(Some(format!(
                                     "{} — {}",
@@ -343,7 +354,7 @@ fn adopt(queue: &UseQueue, local: &UseLocalLibrary, target: &RemoteNow) -> Adopt
     if let Some(provider) = shared_provider(&target.track_uri) {
         let mut t = as_match_target(target);
         t.provider = provider;
-        queue.play_track(t);
+        queue.play_track_from_host(t);
         return AdoptOutcome::Playing;
     }
 
@@ -355,7 +366,7 @@ fn adopt(queue: &UseQueue, local: &UseLocalLibrary, target: &RemoteNow) -> Adopt
         return AdoptOutcome::NotOurs;
     };
     drop(library);
-    queue.play_track(found);
+    queue.play_track_from_host(found);
     AdoptOutcome::Playing
 }
 
@@ -547,5 +558,22 @@ mod tests {
             track.cover_url.as_deref(),
             Some("https://img.example/geogaddi.jpg")
         );
+    }
+
+    #[test]
+    fn unknown_provider_is_not_adopted_directly() {
+        assert_eq!(shared_provider("private:track:123"), None);
+    }
+
+    #[test]
+    fn remote_playback_identity_requires_both_id_and_uri() {
+        let target = now(0, 0, true);
+        let same = (target.playback_id, target.track_uri.clone());
+        let old_provider_track = (target.playback_id, "private:track:old".into());
+        let old_playback = (target.playback_id - 1, target.track_uri.clone());
+
+        assert!(is_same_remote_playback(Some(&same), &target));
+        assert!(!is_same_remote_playback(Some(&old_provider_track), &target));
+        assert!(!is_same_remote_playback(Some(&old_playback), &target));
     }
 }
