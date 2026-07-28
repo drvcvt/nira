@@ -432,7 +432,20 @@ fn PlaylistsPane() -> Element {
                         importing.set(true);
                         import_status.set(None);
                         spawn(async move {
-                            match spotify.playlists_for_import().await {
+                            let result = match spotify.playlist_catalog_for_import().await {
+                                Ok(catalog) => {
+                                    let skipped_catalog = catalog.skipped_playlists;
+                                    spotify
+                                        .playlists_for_import(catalog.playlists)
+                                        .await
+                                        .map(|mut result| {
+                                            result.skipped_playlists += skipped_catalog;
+                                            result
+                                        })
+                                }
+                                Err(error) => Err(error),
+                            };
+                            match result {
                                 Ok(result) => {
                                     let available = result.playlists.len();
                                     let added = playlists.import_spotify(

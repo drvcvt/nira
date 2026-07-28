@@ -11,7 +11,10 @@ use std::sync::Arc;
 use dioxus::prelude::*;
 use enrichment::EnrichmentClient;
 use provider_soundcloud::SoundCloudProvider;
-use provider_spotify::SpotifyProvider;
+pub use provider_spotify::{
+    SpotifyPlaylist, SpotifyPlaylistCatalog, SpotifyPlaylistImport,
+    SpotifyPlaylistSummary, SpotifyProvider,
+};
 
 pub mod matching;
 pub mod queue;

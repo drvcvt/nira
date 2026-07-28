@@ -580,6 +580,20 @@ pub struct LikedTracksPage {
 }
 
 #[derive(Debug, Clone)]
+pub struct SpotifyPlaylistSummary {
+    pub id: String,
+    pub name: String,
+    pub cover_url: Option<String>,
+    pub track_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpotifyPlaylistCatalog {
+    pub playlists: Vec<SpotifyPlaylistSummary>,
+    pub skipped_playlists: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct SpotifyPlaylist {
     pub id: String,
     pub name: String,
@@ -639,36 +653,43 @@ impl SpotifyProvider {
         }
     }
 
-    /// Fetch every playlist whose items Spotify lets the current user read.
-    /// Followed playlists owned by somebody else are listed by `/me/playlists`
-    /// but their items return 403 in current Development Mode, so omit them.
-    pub async fn playlists_for_import(&self) -> ProviderResult<SpotifyPlaylistImport> {
+    /// List importable playlists without loading their track pages.
+    pub async fn playlist_catalog_for_import(
+        &self,
+    ) -> ProviderResult<SpotifyPlaylistCatalog> {
         let me: SpProfile = self.fetch_json(&format!("{SP_API}/me")).await?;
         let mut offset = 0;
-        let mut briefs = Vec::new();
+        let mut catalog = SpotifyPlaylistCatalog {
+            playlists: Vec::new(),
+            skipped_playlists: 0,
+        };
 
         loop {
             let page: SpPlaylistsPage = self
                 .fetch_json(&format!("{SP_API}/me/playlists?limit=50&offset={offset}"))
                 .await?;
             let received = page.items.len();
-            briefs.extend(page.items);
-            if page.next.is_none() || received == 0 {
-                break;
+            let page_catalog = playlist_summaries(&me.id, page.items);
+            catalog.playlists.extend(page_catalog.playlists);
+            catalog.skipped_playlists += page_catalog.skipped_playlists;
+            match next_playlist_offset(offset, received, page.next.is_some()) {
+                Some(next) => offset = next,
+                None => return Ok(catalog),
             }
-            offset += received;
         }
+    }
 
+    /// Load only the playlists selected in the import dialog.
+    pub async fn playlists_for_import(
+        &self,
+        selected: Vec<SpotifyPlaylistSummary>,
+    ) -> ProviderResult<SpotifyPlaylistImport> {
         let mut imported = SpotifyPlaylistImport {
             playlists: Vec::new(),
             skipped_playlists: 0,
             skipped_items: 0,
         };
-        for playlist in briefs {
-            if playlist.owner.id != me.id && !playlist.collaborative {
-                imported.skipped_playlists += 1;
-                continue;
-            }
+        for playlist in selected {
             match self.playlist_tracks(&playlist.id).await? {
                 Some((tracks, skipped)) => {
                     imported.skipped_items += skipped;
@@ -702,10 +723,10 @@ impl SpotifyProvider {
             let (mut page_tracks, page_skipped) = playlist_items_to_tracks(page.items);
             tracks.append(&mut page_tracks);
             skipped += page_skipped;
-            if page.next.is_none() || received == 0 {
-                break;
+            match next_playlist_offset(offset, received, page.next.is_some()) {
+                Some(next) => offset = next,
+                None => break,
             }
-            offset += received;
         }
         Ok(Some((tracks, skipped)))
     }
@@ -928,11 +949,58 @@ struct SpPlaylistBrief {
     #[serde(default)]
     collaborative: bool,
     owner: SpPlaylistOwner,
+    #[serde(default)]
+    images: Vec<SpImage>,
+    #[serde(default)]
+    items: Option<SpPlaylistItemsRef>,
+    #[serde(default)]
+    tracks: Option<SpPlaylistItemsRef>,
 }
 
 #[derive(Deserialize)]
 struct SpPlaylistOwner {
     id: String,
+}
+
+#[derive(Deserialize)]
+struct SpPlaylistItemsRef {
+    #[serde(default)]
+    total: usize,
+}
+
+fn playlist_summaries(
+    current_user_id: &str,
+    items: Vec<SpPlaylistBrief>,
+) -> SpotifyPlaylistCatalog {
+    let mut catalog = SpotifyPlaylistCatalog {
+        playlists: Vec::new(),
+        skipped_playlists: 0,
+    };
+    for playlist in items {
+        if playlist.owner.id != current_user_id && !playlist.collaborative {
+            catalog.skipped_playlists += 1;
+            continue;
+        }
+        catalog.playlists.push(SpotifyPlaylistSummary {
+            id: playlist.id,
+            name: playlist.name,
+            cover_url: playlist.images.into_iter().next().map(|image| image.url),
+            track_count: playlist
+                .items
+                .or(playlist.tracks)
+                .map(|items| items.total)
+                .unwrap_or_default(),
+        });
+    }
+    catalog
+}
+
+fn next_playlist_offset(
+    offset: usize,
+    received: usize,
+    has_next: bool,
+) -> Option<usize> {
+    (has_next && received > 0).then_some(offset + received)
 }
 
 #[derive(Deserialize)]
@@ -1301,6 +1369,60 @@ mod tests {
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].title, "Alive");
         assert_eq!(skipped, 1);
+    }
+
+    #[test]
+    fn playlist_catalog_keeps_owned_and_collaborative_summaries() {
+        let json = r#"{
+            "items": [
+                {
+                    "id": "owned",
+                    "name": "Owned",
+                    "collaborative": false,
+                    "owner": { "id": "me" },
+                    "images": [{ "url": "https://i.scdn.co/owned.jpg" }],
+                    "items": { "total": 12 },
+                    "tracks": { "total": 12 }
+                },
+                {
+                    "id": "collab",
+                    "name": "Collab",
+                    "collaborative": true,
+                    "owner": { "id": "friend" },
+                    "images": [],
+                    "tracks": { "total": 4 }
+                },
+                {
+                    "id": "followed",
+                    "name": "Followed",
+                    "collaborative": false,
+                    "owner": { "id": "friend" },
+                    "images": [],
+                    "items": { "total": 9 }
+                }
+            ],
+            "next": null
+        }"#;
+        let page: SpPlaylistsPage =
+            serde_json::from_str(json).expect("playlist page parses");
+        let catalog = playlist_summaries("me", page.items);
+
+        assert_eq!(catalog.playlists.len(), 2);
+        assert_eq!(catalog.skipped_playlists, 1);
+        assert_eq!(catalog.playlists[0].track_count, 12);
+        assert_eq!(
+            catalog.playlists[0].cover_url.as_deref(),
+            Some("https://i.scdn.co/owned.jpg")
+        );
+        assert_eq!(catalog.playlists[1].track_count, 4);
+    }
+
+    #[test]
+    fn playlist_pagination_advances_by_received_items_only() {
+        assert_eq!(next_playlist_offset(0, 50, true), Some(50));
+        assert_eq!(next_playlist_offset(50, 17, true), Some(67));
+        assert_eq!(next_playlist_offset(50, 0, true), None);
+        assert_eq!(next_playlist_offset(50, 17, false), None);
     }
 
     #[test]
