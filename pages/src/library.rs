@@ -660,7 +660,6 @@ fn YouTubeDownloader(mut open: Signal<bool>) -> Element {
                 "aria-labelledby": "yt-downloader-title",
                 header { class: "yt-downloader-head",
                     div {
-                        span { class: "yt-downloader-kicker", "Powered by yt-dlp" }
                         h2 { id: "yt-downloader-title", "YouTube downloader" }
                         p { "Paste a song or video. Nira previews it before saving an MP3." }
                     }
