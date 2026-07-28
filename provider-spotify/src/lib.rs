@@ -949,8 +949,7 @@ struct SpPlaylistBrief {
     #[serde(default)]
     collaborative: bool,
     owner: SpPlaylistOwner,
-    #[serde(default)]
-    images: Vec<SpImage>,
+    images: Option<Vec<SpImage>>,
     #[serde(default)]
     items: Option<SpPlaylistItemsRef>,
     #[serde(default)]
@@ -984,7 +983,12 @@ fn playlist_summaries(
         catalog.playlists.push(SpotifyPlaylistSummary {
             id: playlist.id,
             name: playlist.name,
-            cover_url: playlist.images.into_iter().next().map(|image| image.url),
+            cover_url: playlist
+                .images
+                .unwrap_or_default()
+                .into_iter()
+                .next()
+                .map(|image| image.url),
             track_count: playlist
                 .items
                 .or(playlist.tracks)
@@ -1389,7 +1393,7 @@ mod tests {
                     "name": "Collab",
                     "collaborative": true,
                     "owner": { "id": "friend" },
-                    "images": [],
+                    "images": null,
                     "tracks": { "total": 4 }
                 },
                 {
