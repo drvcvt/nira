@@ -161,6 +161,13 @@ YouTube import needs `yt-dlp` with `ffmpeg` available to its post-processors.
 The project's `shell.nix` includes Nixpkgs' wrapped package; install both
 separately when running a standalone build outside that environment.
 
+### YouTube downloads
+
+Set a local library folder in Settings, then open **Library → Local → YouTube
+download**. Paste a YouTube link, preview it, and download the MP3. Nira saves
+it under `<library_root>/YouTube`, shows progress in the download toast, and
+rescans the local library when it finishes.
+
 ---
 
 ## First-run setup
