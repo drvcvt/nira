@@ -9,6 +9,7 @@ pub mod artist;
 pub mod discover;
 pub mod home;
 pub mod library;
+mod library_import;
 pub mod parts;
 pub mod search_overlay;
 pub mod settings;

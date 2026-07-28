@@ -135,22 +135,6 @@ impl UsePlaylists {
         added
     }
 
-    /// Compatibility for the current Library button. Removed with the
-    /// provider-neutral import dialog.
-    pub fn import_spotify(&self, playlists: Vec<(String, String, Vec<Track>)>) -> usize {
-        self.import_external(
-            "spotify",
-            playlists
-                .into_iter()
-                .map(|(source_id, name, tracks)| PlaylistImport {
-                    source_id,
-                    name,
-                    tracks,
-                })
-                .collect(),
-        )
-    }
-
     pub fn delete(&self, id: &str) {
         self.mutate(|items| items.retain(|p| p.id != id));
     }
