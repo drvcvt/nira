@@ -41,6 +41,32 @@ pub struct SoundCloudProvider {
     client_id: RwLock<Option<String>>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SoundCloudPlaylistSummary {
+    pub id: u64,
+    pub title: String,
+    pub cover_url: Option<String>,
+    pub track_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SoundCloudPlaylist {
+    pub id: u64,
+    pub title: String,
+    pub tracks: Vec<Track>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SoundCloudPlaylistCatalog {
+    pub playlists: Vec<SoundCloudPlaylistSummary>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SoundCloudPlaylistImport {
+    pub playlists: Vec<SoundCloudPlaylist>,
+    pub skipped_items: usize,
+}
+
 impl SoundCloudProvider {
     pub fn new() -> ProviderResult<Self> {
         let http = Client::builder()
@@ -214,6 +240,166 @@ impl SoundCloudProvider {
             other => other,
         }
     }
+
+    pub async fn playlist_catalog_from_url(
+        &self,
+        raw_url: &str,
+    ) -> ProviderResult<SoundCloudPlaylistCatalog> {
+        validate_soundcloud_url(raw_url)?;
+        let raw_url = raw_url.trim().to_string();
+
+        self.with_client_id(|client_id| {
+            let raw_url = raw_url.clone();
+            async move {
+                let mut resolve = url::Url::parse(&format!("{SC_API}/resolve"))
+                    .map_err(|e| ProviderError::Other(format!("SoundCloud resolve URL: {e}")))?;
+                resolve
+                    .query_pairs_mut()
+                    .append_pair("url", &raw_url)
+                    .append_pair("client_id", &client_id);
+                let resolved: ScResolved = self.fetch_json(resolve.as_str()).await?;
+
+                match resolved.kind.as_str() {
+                    "user" => self.user_playlist_catalog(resolved.id, &client_id).await,
+                    "playlist" | "system-playlist" => {
+                        let title = resolved.title.ok_or_else(|| {
+                            ProviderError::Malformed("SoundCloud playlist has no title".to_string())
+                        })?;
+                        Ok(SoundCloudPlaylistCatalog {
+                            playlists: vec![SoundCloudPlaylistSummary {
+                                id: resolved.id,
+                                title,
+                                cover_url: resolved.artwork_url.map(upgrade_artwork),
+                                track_count: resolved.track_count,
+                            }],
+                        })
+                    }
+                    _ => Err(ProviderError::Other(
+                        "Paste a SoundCloud profile or playlist URL.".to_string(),
+                    )),
+                }
+            }
+        })
+        .await
+    }
+
+    async fn user_playlist_catalog(
+        &self,
+        user_id: u64,
+        client_id: &str,
+    ) -> ProviderResult<SoundCloudPlaylistCatalog> {
+        let mut next = Some(format!(
+            "{SC_API}/users/{user_id}/playlists?representation=compact&linked_partitioning=true&limit=200&client_id={client_id}"
+        ));
+        let mut playlists = Vec::new();
+
+        while let Some(url) = next {
+            let page: ScPage<ScPlaylistBrief> = self.fetch_json(&url).await?;
+            playlists.extend(page.collection.into_iter().map(soundcloud_summary));
+            next = page
+                .next_href
+                .as_deref()
+                .map(|href| soundcloud_api_url(href, client_id))
+                .transpose()?;
+        }
+
+        Ok(SoundCloudPlaylistCatalog { playlists })
+    }
+
+    pub async fn playlists_for_import(
+        &self,
+        selected: &[SoundCloudPlaylistSummary],
+    ) -> ProviderResult<SoundCloudPlaylistImport> {
+        let selected = selected.to_vec();
+        self.with_client_id(|client_id| {
+            let selected = selected.clone();
+            async move {
+                let mut playlists = Vec::with_capacity(selected.len());
+                let mut skipped_items = 0;
+
+                for summary in selected {
+                    let mut next = Some(format!(
+                        "{SC_API}/playlists/{}/tracks?access=playable&linked_partitioning=true&limit=200&client_id={client_id}",
+                        summary.id
+                    ));
+                    let mut tracks = Vec::new();
+
+                    while let Some(url) = next {
+                        let page: ScPage<ScTrack> = self.fetch_json(&url).await?;
+                        tracks.extend(page.collection.into_iter().map(sc_to_track));
+                        next = page
+                            .next_href
+                            .as_deref()
+                            .map(|href| soundcloud_api_url(href, &client_id))
+                            .transpose()?;
+                    }
+
+                    skipped_items += summary.track_count.saturating_sub(tracks.len());
+                    playlists.push(SoundCloudPlaylist {
+                        id: summary.id,
+                        title: summary.title,
+                        tracks,
+                    });
+                }
+
+                Ok(SoundCloudPlaylistImport {
+                    playlists,
+                    skipped_items,
+                })
+            }
+        })
+        .await
+    }
+}
+
+pub fn validate_soundcloud_url(raw: &str) -> ProviderResult<()> {
+    let url = url::Url::parse(raw.trim())
+        .map_err(|e| ProviderError::Other(format!("Invalid SoundCloud URL: {e}")))?;
+    let allowed_host = matches!(
+        url.host_str(),
+        Some("soundcloud.com" | "www.soundcloud.com" | "on.soundcloud.com")
+    );
+    if url.scheme() != "https"
+        || !allowed_host
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(ProviderError::Other(
+            "Use an HTTPS soundcloud.com profile or playlist URL.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn soundcloud_api_url(raw: &str, client_id: &str) -> ProviderResult<String> {
+    let mut url = url::Url::parse(raw)
+        .map_err(|e| ProviderError::Malformed(format!("SoundCloud pagination URL: {e}")))?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("api-v2.soundcloud.com")
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(ProviderError::Malformed(
+            "SoundCloud pagination left api-v2.soundcloud.com".to_string(),
+        ));
+    }
+
+    let query: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| key != "client_id")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    url.set_query(None);
+    {
+        let mut pairs = url.query_pairs_mut();
+        for (key, value) in query {
+            pairs.append_pair(&key, &value);
+        }
+        pairs.append_pair("client_id", client_id);
+    }
+    Ok(url.to_string())
 }
 
 fn extract_client_id(js: &str) -> Option<String> {
@@ -612,6 +798,44 @@ impl SoundCloudProvider {
 // ── SoundCloud API shapes (minimal) ─────────────────────────────────────────
 
 #[derive(Deserialize)]
+struct ScResolved {
+    kind: String,
+    id: u64,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    artwork_url: Option<String>,
+    #[serde(default)]
+    track_count: usize,
+}
+
+#[derive(Deserialize)]
+struct ScPlaylistBrief {
+    id: u64,
+    title: String,
+    #[serde(default)]
+    artwork_url: Option<String>,
+    #[serde(default)]
+    track_count: usize,
+}
+
+#[derive(Deserialize)]
+struct ScPage<T> {
+    collection: Vec<T>,
+    #[serde(default)]
+    next_href: Option<String>,
+}
+
+fn soundcloud_summary(raw: ScPlaylistBrief) -> SoundCloudPlaylistSummary {
+    SoundCloudPlaylistSummary {
+        id: raw.id,
+        title: raw.title,
+        cover_url: raw.artwork_url.map(upgrade_artwork),
+        track_count: raw.track_count,
+    }
+}
+
+#[derive(Deserialize)]
 struct ScSearchResp {
     collection: Vec<ScTrack>,
 }
@@ -706,6 +930,82 @@ fn parse_m3u8_segments(m3u8: &str, playlist_url: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_only_https_soundcloud_urls() {
+        assert!(validate_soundcloud_url("https://soundcloud.com/ninja-tune").is_ok());
+        assert!(validate_soundcloud_url("https://on.soundcloud.com/abc123").is_ok());
+        assert!(validate_soundcloud_url("http://soundcloud.com/ninja-tune").is_err());
+        assert!(validate_soundcloud_url("https://soundcloud.com.evil.test/x").is_err());
+        assert!(validate_soundcloud_url("https://soundcloud.com:444/ninja-tune").is_err());
+    }
+
+    #[test]
+    fn public_playlist_page_keeps_summary_metadata() {
+        let json = r#"{
+            "collection": [{
+                "id": 42,
+                "title": "Night drive",
+                "artwork_url": "https://i1.sndcdn.com/artworks-large.jpg",
+                "track_count": 3
+            }],
+            "next_href": null
+        }"#;
+        let page: ScPage<ScPlaylistBrief> =
+            serde_json::from_str(json).expect("playlist page parses");
+        let summary = soundcloud_summary(page.collection.into_iter().next().unwrap());
+
+        assert_eq!(summary.id, 42);
+        assert_eq!(summary.title, "Night drive");
+        assert_eq!(summary.track_count, 3);
+        assert!(summary.cover_url.unwrap().contains("-t500x500."));
+    }
+
+    #[test]
+    fn next_page_must_remain_on_soundcloud_api() {
+        assert!(
+            soundcloud_api_url(
+                "https://api-v2.soundcloud.com/users/1/playlists?cursor=next",
+                "client"
+            )
+            .is_ok()
+        );
+        assert!(soundcloud_api_url("https://evil.test/steal", "client").is_err());
+        assert!(
+            soundcloud_api_url(
+                "https://api-v2.soundcloud.com:444/users/1/playlists",
+                "client"
+            )
+            .is_err()
+        );
+        assert_eq!(
+            soundcloud_api_url(
+                "https://api-v2.soundcloud.com/users/1/playlists?cursor=next&client_id=stale",
+                "fresh"
+            )
+            .unwrap(),
+            "https://api-v2.soundcloud.com/users/1/playlists?cursor=next&client_id=fresh"
+        );
+    }
+
+    #[test]
+    fn cursor_page_deserializes_and_keeps_next_href() {
+        let json = r#"{
+            "collection": [{
+                "id": 42,
+                "title": "Page one",
+                "track_count": 1
+            }],
+            "next_href": "https://api-v2.soundcloud.com/users/1/playlists?cursor=next"
+        }"#;
+        let page: ScPage<ScPlaylistBrief> = serde_json::from_str(json).unwrap();
+
+        assert_eq!(page.collection.len(), 1);
+        assert_eq!(
+            soundcloud_api_url(page.next_href.as_deref().unwrap(), "client").unwrap(),
+            "https://api-v2.soundcloud.com/users/1/playlists?cursor=next&client_id=client"
+        );
+    }
 
     #[test]
     fn m3u8_parses_absolute_segments() {

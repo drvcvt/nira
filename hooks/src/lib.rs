@@ -10,10 +10,13 @@ use std::sync::Arc;
 
 use dioxus::prelude::*;
 use enrichment::EnrichmentClient;
-use provider_soundcloud::SoundCloudProvider;
+pub use provider_soundcloud::{
+    SoundCloudPlaylist, SoundCloudPlaylistCatalog, SoundCloudPlaylistImport,
+    SoundCloudPlaylistSummary, SoundCloudProvider, validate_soundcloud_url,
+};
 pub use provider_spotify::{
-    SpotifyPlaylist, SpotifyPlaylistCatalog, SpotifyPlaylistImport,
-    SpotifyPlaylistSummary, SpotifyProvider,
+    SpotifyPlaylist, SpotifyPlaylistCatalog, SpotifyPlaylistImport, SpotifyPlaylistSummary,
+    SpotifyProvider,
 };
 
 pub mod matching;
