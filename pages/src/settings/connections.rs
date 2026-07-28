@@ -3,7 +3,9 @@
 
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
-use hooks::{use_config, use_soundcloud, use_spotify, use_together};
+use hooks::{
+    use_config, use_soundcloud, use_spotify, use_together, validate_soundcloud_url,
+};
 use together::Role;
 
 use super::{SettingsCard, StatusPill};
@@ -37,6 +39,10 @@ pub(super) fn ConnectionsSettings() -> Element {
 
     let mut sc_status = use_signal(|| None::<String>);
     let mut sc_refreshing = use_signal(|| false);
+    let mut sc_profile_draft = use_signal({
+        let cfg = config.read();
+        move || cfg.soundcloud_profile_url.clone().unwrap_or_default()
+    });
 
     let provider_client_id = sp.client_id();
     let spotify_connected = sp.is_connected();
@@ -158,6 +164,41 @@ pub(super) fn ConnectionsSettings() -> Element {
                 icon: "fa-brands fa-soundcloud".to_string(),
                 p { class: "settings-card-copy",
                     "No login needed. nira extracts and caches the public web-player client_id, then refreshes it after auth failures."
+                }
+                div { class: "settings-row",
+                    label { r#for: "sc-profile-url", "Import profile" }
+                    input {
+                        id: "sc-profile-url",
+                        r#type: "url",
+                        class: "settings-input",
+                        placeholder: "https://soundcloud.com/your-profile",
+                        value: "{sc_profile_draft.read()}",
+                        oninput: move |e| sc_profile_draft.set(e.value()),
+                    }
+                    Button {
+                        label: "Save".to_string(),
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::Sm,
+                        on_click: move |_| {
+                            let profile = sc_profile_draft.read().trim().to_string();
+                            if !profile.is_empty() {
+                                if let Err(e) = validate_soundcloud_url(&profile) {
+                                    sc_status.set(Some(e.to_string()));
+                                    return;
+                                }
+                            }
+                            let save_result = {
+                                let mut w = config.write();
+                                w.soundcloud_profile_url =
+                                    if profile.is_empty() { None } else { Some(profile) };
+                                w.save()
+                            };
+                            match save_result {
+                                Ok(()) => sc_status.set(Some("SoundCloud import profile saved.".into())),
+                                Err(e) => sc_status.set(Some(format!("Save failed: {e}"))),
+                            }
+                        },
+                    }
                 }
                 div { class: "settings-actions",
                     Button {

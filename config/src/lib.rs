@@ -106,6 +106,11 @@ pub struct AppConfig {
     #[serde(default)]
     pub spotify_client_id: Option<String>,
 
+    /// Optional public SoundCloud profile used as the default playlist
+    /// import source. Arbitrary public playlist links can still be pasted.
+    #[serde(default)]
+    pub soundcloud_profile_url: Option<String>,
+
     /// User-supplied ListenBrainz token (https://listenbrainz.org/profile/).
     /// Enables outbound scrobbling. Empty = scrobbling disabled.
     #[serde(default)]
@@ -142,6 +147,7 @@ impl Default for AppConfig {
             ui_font: None,
             volume: default_volume(),
             spotify_client_id: None,
+            soundcloud_profile_url: None,
             listenbrainz_token: None,
             listenbrainz_username: None,
             lastfm_api_key: None,
@@ -494,6 +500,12 @@ mod tests {
     fn missing_volume_deserialises_to_default() {
         let cfg: AppConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(cfg.volume, 0.8);
+    }
+
+    #[test]
+    fn missing_soundcloud_profile_url_defaults_to_none() {
+        let cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.soundcloud_profile_url, None);
     }
 
     #[test]
