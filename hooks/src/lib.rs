@@ -46,7 +46,9 @@ pub use use_downloads::{UseDownloads, use_downloads};
 pub use use_history::{UseHistory, install_history, use_history};
 pub use use_library::{UseLibrary, install_library, use_library};
 pub use use_likes::{LikedTrack, UseLikes, use_likes};
-pub use use_playlists::{Playlist, PlaylistAlbum, UsePlaylists, use_playlists};
+pub use use_playlists::{
+    Playlist, PlaylistAlbum, PlaylistImport, UsePlaylists, use_playlists,
+};
 pub use use_local_library::{UseLocalLibrary, use_local_library};
 pub use use_listenbrainz_feed::{UseListenBrainzFeed, use_listenbrainz_feed};
 pub use use_player::{PlayerContext, UsePlayer, use_player};

@@ -52,6 +52,13 @@ pub struct Playlist {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PlaylistImport {
+    pub source_id: String,
+    pub name: String,
+    pub tracks: Vec<Track>,
+}
+
 impl Playlist {
     pub fn is_empty(&self) -> bool {
         self.tracks.is_empty() && self.albums.is_empty()
@@ -114,12 +121,34 @@ impl UsePlaylists {
         id
     }
 
-    /// Import Spotify playlists once without overwriting later local edits.
+    /// True when a source playlist has already been imported.
+    pub fn has_import(&self, source: &str, source_id: &str) -> bool {
+        let id = external_playlist_id(source, source_id);
+        self.items.read().iter().any(|playlist| playlist.id == id)
+    }
+
+    /// Import source playlists once without overwriting later local edits.
     /// Returns the number of newly added playlists.
-    pub fn import_spotify(&self, playlists: Vec<(String, String, Vec<Track>)>) -> usize {
+    pub fn import_external(&self, source: &str, playlists: Vec<PlaylistImport>) -> usize {
         let mut added = 0;
-        self.mutate(|items| added = merge_spotify_playlists(items, playlists));
+        self.mutate(|items| added = merge_external_playlists(items, source, playlists));
         added
+    }
+
+    /// Compatibility for the current Library button. Removed with the
+    /// provider-neutral import dialog.
+    pub fn import_spotify(&self, playlists: Vec<(String, String, Vec<Track>)>) -> usize {
+        self.import_external(
+            "spotify",
+            playlists
+                .into_iter()
+                .map(|(source_id, name, tracks)| PlaylistImport {
+                    source_id,
+                    name,
+                    tracks,
+                })
+                .collect(),
+        )
     }
 
     pub fn delete(&self, id: &str) {
@@ -242,21 +271,26 @@ impl UsePlaylists {
     }
 }
 
-fn merge_spotify_playlists(
+fn external_playlist_id(source: &str, source_id: &str) -> String {
+    format!("{}-{}", source.trim().to_ascii_lowercase(), source_id.trim())
+}
+
+fn merge_external_playlists(
     items: &mut Vec<Playlist>,
-    playlists: Vec<(String, String, Vec<Track>)>,
+    source: &str,
+    playlists: Vec<PlaylistImport>,
 ) -> usize {
     let now = Utc::now();
     let mut additions = Vec::new();
-    for (spotify_id, name, tracks) in playlists {
-        let id = format!("spotify-{spotify_id}");
+    for playlist in playlists {
+        let id = external_playlist_id(source, &playlist.source_id);
         if items.iter().chain(&additions).any(|p| p.id == id) {
             continue;
         }
         additions.push(Playlist {
             id,
-            name,
-            tracks,
+            name: playlist.name,
+            tracks: playlist.tracks,
             albums: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -302,7 +336,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spotify_import_is_deduplicated_without_overwriting_local_edits() {
+    fn external_imports_are_source_scoped_and_non_destructive() {
         let now = Utc::now();
         let mut items = vec![Playlist {
             id: "spotify-kept".into(),
@@ -313,17 +347,76 @@ mod tests {
             updated_at: now,
         }];
 
-        let added = merge_spotify_playlists(
+        let added = merge_external_playlists(
             &mut items,
+            "spotify",
             vec![
-                ("kept".into(), "Remote rename".into(), Vec::new()),
-                ("new".into(), "New playlist".into(), Vec::new()),
+                PlaylistImport {
+                    source_id: "kept".into(),
+                    name: "Remote rename".into(),
+                    tracks: Vec::new(),
+                },
+                PlaylistImport {
+                    source_id: "new".into(),
+                    name: "New playlist".into(),
+                    tracks: Vec::new(),
+                },
             ],
         );
 
         assert_eq!(added, 1);
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].name, "New playlist");
+        assert_eq!(items[0].id, "spotify-new");
         assert_eq!(items[1].name, "My local rename");
+    }
+
+    #[test]
+    fn equal_provider_ids_do_not_collide_across_sources() {
+        let mut items = Vec::new();
+        let spotify = PlaylistImport {
+            source_id: "42".into(),
+            name: "Spotify".into(),
+            tracks: Vec::new(),
+        };
+        let soundcloud = PlaylistImport {
+            source_id: "42".into(),
+            name: "SoundCloud".into(),
+            tracks: Vec::new(),
+        };
+
+        assert_eq!(
+            merge_external_playlists(&mut items, "spotify", vec![spotify]),
+            1
+        );
+        assert_eq!(
+            merge_external_playlists(&mut items, "soundcloud", vec![soundcloud]),
+            1
+        );
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|playlist| playlist.id == "spotify-42"));
+        assert!(
+            items
+                .iter()
+                .any(|playlist| playlist.id == "soundcloud-42")
+        );
+    }
+
+    #[test]
+    fn removed_import_can_be_imported_again() {
+        let mut items = Vec::new();
+        let imported = PlaylistImport {
+            source_id: "road-trip".into(),
+            name: "Road trip".into(),
+            tracks: Vec::new(),
+        };
+
+        assert_eq!(
+            merge_external_playlists(&mut items, "spotify", vec![imported.clone()]),
+            1
+        );
+        items.retain(|playlist| playlist.id != "spotify-road-trip");
+        assert_eq!(
+            merge_external_playlists(&mut items, "spotify", vec![imported]),
+            1
+        );
     }
 }
