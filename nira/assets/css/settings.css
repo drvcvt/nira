@@ -52,6 +52,7 @@
   font-family: "Geist Mono", monospace;
   font-size: 0.82em;
   color: var(--text);
+  -webkit-user-select: all;
   user-select: all;
 }
 

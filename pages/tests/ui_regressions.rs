@@ -1,8 +1,15 @@
 #[test]
 fn playlist_import_dialog_owns_top_layer_and_checkbox_glyph() {
     let css = include_str!("../../nira/assets/css/library.css");
-    assert!(css.contains(".content:has(.yt-downloader.open)"));
+    assert!(css.contains(".content:has(.yt-downloader.open) { contain: none; }"));
+    assert!(!css.contains(".content:has(.yt-downloader.open) { z-index:"));
     assert!(css.contains(".playlist-import-row input:checked::before"));
+}
+
+#[test]
+fn desktop_webkit_does_not_partially_select_titles() {
+    let css = include_str!("../../nira/assets/css/base.css");
+    assert!(css.contains("-webkit-user-select: none;"));
 }
 
 #[test]

@@ -166,6 +166,7 @@
      whole message is always readable, and selectable despite the app-wide
      user-select:none so it can be copied into a bug report. */
   overflow-wrap: anywhere;
+  -webkit-user-select: text;
   user-select: text;
   cursor: text;
 }
