@@ -97,11 +97,15 @@ impl UsePlayer {
         self.player.stop();
     }
     pub fn seek(&self, target: std::time::Duration) {
+        let mut snapshot = self.snapshot;
+        snapshot.write().position = target;
         self.player.seek(target);
     }
 
     pub fn set_volume(&self, v: f32) {
         let v = v.clamp(0.0, 1.0);
+        let mut snapshot = self.snapshot;
+        snapshot.write().volume = v;
         self.player.set_volume(v);
 
         let mut config = self.config;

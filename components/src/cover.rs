@@ -47,9 +47,8 @@ pub fn CoverOverlay() -> Element {
         crate::overlay_focus(is_open, ".cover-overlay .cover-play");
     });
 
-    // Scrub-hold state — same proven pattern as the bottombar seek (see
-    // bottombar.rs for the full rationale): paint from `scrub` while it
-    // exists, seek once on release, clear once the engine converges on the
+    // Scrub-hold state — same pattern as the bottombar seek: paint from
+    // `scrub` while it exists and clear once the engine converges on the
     // drop point or the 3 s backstop expires.
     let mut scrub: Signal<Option<(String, f64)>> = use_signal(|| None);
     let mut scrub_dragging = use_signal(|| false);
@@ -247,23 +246,7 @@ pub fn CoverOverlay() -> Element {
                                 scrub.set(None);
                                 scrub_dragging.set(true);
                             },
-                            onpointerup: {
-                                let player = player.clone();
-                                let dur = duration;
-                                let track_key = track_key.clone();
-                                move |_| {
-                                    scrub_dragging.set(false);
-                                    let Some(d) = dur else { return; };
-                                    if let Some((key, pct)) = scrub.peek().clone()
-                                        && key == track_key
-                                    {
-                                        let target =
-                                            Duration::from_secs_f64(d.as_secs_f64() * pct / 100.0);
-                                        player.seek(target);
-                                        scrub_committed.set(Some(Instant::now()));
-                                    }
-                                }
-                            },
+                            onpointerup: move |_| scrub_dragging.set(false),
                             onpointercancel: move |_| {
                                 scrub_dragging.set(false);
                                 scrub.set(None);
@@ -277,12 +260,10 @@ pub fn CoverOverlay() -> Element {
                                     let Some(d) = dur else { return; };
                                     let pct = (v / 10.0).clamp(0.0, 100.0);
                                     scrub.set(Some((track_key.clone(), pct)));
-                                    if !*scrub_dragging.peek() {
-                                        let target =
-                                            Duration::from_secs_f64(d.as_secs_f64() * pct / 100.0);
-                                        player.seek(target);
-                                        scrub_committed.set(Some(Instant::now()));
-                                    }
+                                    let target =
+                                        Duration::from_secs_f64(d.as_secs_f64() * pct / 100.0);
+                                    player.seek(target);
+                                    scrub_committed.set(Some(Instant::now()));
                                 }
                             },
                         }

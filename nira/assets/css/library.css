@@ -96,6 +96,8 @@
 
 /* Focused yt-dlp surface, opened from Local rather than taking over a
    permanent chunk of the library page. */
+.content:has(.yt-downloader.open) { z-index: 11; }
+
 .yt-downloader {
   position: fixed;
   inset: 0;
@@ -384,9 +386,35 @@
 }
 
 .playlist-import-row input {
+  appearance: none;
+  display: grid;
+  place-content: center;
   width: 16px;
   height: 16px;
-  accent-color: var(--text);
+  margin: 0;
+  overflow: hidden;
+  border: none;
+  border-radius: 4px;
+  background: var(--raise1);
+  color: var(--chip-on-fg);
+}
+
+.playlist-import-row input::before {
+  content: "";
+  width: 8px;
+  height: 5px;
+  box-sizing: border-box;
+  border: solid currentColor;
+  border-width: 0 0 2px 2px;
+  transform: translateY(-1px) rotate(-45deg) scale(0);
+}
+
+.playlist-import-row input:checked {
+  background: var(--chip-on);
+}
+
+.playlist-import-row input:checked::before {
+  transform: translateY(-1px) rotate(-45deg) scale(1);
 }
 
 .playlist-import-row input:focus-visible {

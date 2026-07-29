@@ -51,11 +51,10 @@ pub fn Bottombar() -> Element {
     // fill there for the rest of the track (labels kept counting).
     let mut scrub: Signal<Option<(String, f64)>> = use_signal(|| None);
     // True between pointerdown and pointerup on the slider. While set, the
-    // bar paints from `scrub` unconditionally and the seek is deferred to
-    // release — seeking live per input tick made backwards drags fight the
-    // still-advancing snapshot.
+    // bar paints from `scrub` unconditionally so the still-advancing engine
+    // snapshot cannot fight a backwards drag.
     let mut scrub_dragging = use_signal(|| false);
-    // When the release actually dispatched a seek. Drives the janitor's
+    // When the latest input dispatched a seek. Drives the janitor's
     // failed-seek backstop: no convergence within 3 s → drop the hold and
     // show the honest live position again.
     let mut scrub_committed: Signal<Option<Instant>> = use_signal(|| None);
@@ -77,8 +76,8 @@ pub fn Bottombar() -> Element {
                 .filter(|d| d.as_secs() > 0)
                 .map(|d| (snap.position.as_secs_f64() / d.as_secs_f64()) * 100.0)
                 .unwrap_or(0.0);
-            // No commit timestamp while not dragging = the release never
-            // seeked (cancelled drag, missing duration) — stale, clear now.
+            // No commit timestamp while not dragging means a stale local
+            // value survived without a seek — clear it now.
             let expired = (*scrub_committed.peek())
                 .map(|t0| t0.elapsed() > Duration::from_secs(3))
                 .unwrap_or(true);
@@ -353,41 +352,12 @@ pub fn Bottombar() -> Element {
                             value: "{(progress_pct * 10.0) as i64}",
                             disabled: duration.is_none() || duration.map(|d| d.as_secs() == 0).unwrap_or(true),
                             "aria-label": "Seek",
-                            // wry's webview doesn't fire `change` reliably
-                            // for <input type=range>, so drag commits are
-                            // driven by pointer events instead: `input`
-                            // only records the drag position (and seeks
-                            // directly for keyboard arrows, which have no
-                            // pointer session), the actual seek happens
-                            // once on pointerup.
                             onpointerdown: move |_| {
-                                // Fresh pointer session — drop any stale
-                                // scrub value so a clean click on the thumb
-                                // (which fires no `input`) can't commit an
-                                // old drag position on release.
                                 scrub.set(None);
                                 scrub_dragging.set(true);
                             },
-                            onpointerup: {
-                                let player = player.clone();
-                                let dur = duration;
-                                let track_key = track_key.clone();
-                                move |_| {
-                                    scrub_dragging.set(false);
-                                    let Some(d) = dur else { return; };
-                                    if let Some((key, pct)) = scrub.peek().clone()
-                                        && key == track_key
-                                    {
-                                        let target =
-                                            Duration::from_secs_f64(d.as_secs_f64() * pct / 100.0);
-                                        player.seek(target);
-                                        scrub_committed.set(Some(Instant::now()));
-                                    }
-                                }
-                            },
+                            onpointerup: move |_| scrub_dragging.set(false),
                             onpointercancel: move |_| {
-                                // Aborted drag — drop the hold outright, no
-                                // seek was dispatched.
                                 scrub_dragging.set(false);
                                 scrub.set(None);
                             },
@@ -400,14 +370,10 @@ pub fn Bottombar() -> Element {
                                     let Some(d) = dur else { return; };
                                     let pct = (v / 10.0).clamp(0.0, 100.0);
                                     scrub.set(Some((track_key.clone(), pct)));
-                                    if !*scrub_dragging.peek() {
-                                        // Keyboard arrows: no pointer session,
-                                        // seek immediately and start the hold.
-                                        let target =
-                                            Duration::from_secs_f64(d.as_secs_f64() * pct / 100.0);
-                                        player.seek(target);
-                                        scrub_committed.set(Some(Instant::now()));
-                                    }
+                                    let target =
+                                        Duration::from_secs_f64(d.as_secs_f64() * pct / 100.0);
+                                    player.seek(target);
+                                    scrub_committed.set(Some(Instant::now()));
                                 }
                             },
                         }
@@ -719,4 +685,3 @@ fn QueueRow(track: Track, index: usize, current: bool) -> Element {
         }
     }
 }
-
