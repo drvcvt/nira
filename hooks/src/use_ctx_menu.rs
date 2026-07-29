@@ -32,6 +32,11 @@ pub struct AlbumCtx {
 pub enum CtxTarget {
     Track(Track),
     Album(AlbumCtx),
+    Playlist {
+        id: String,
+        name: String,
+        source: String,
+    },
 }
 
 /// One open-menu invocation. Carries everything the menu needs to render
@@ -81,6 +86,16 @@ impl UseCtxMenu {
             x,
             y,
             target: CtxTarget::Album(album),
+            history_entry: None,
+        }));
+    }
+
+    pub fn open_playlist(&self, x: f64, y: f64, id: String, name: String, source: String) {
+        let mut current = self.current;
+        current.set(Some(CtxMenuState {
+            x,
+            y,
+            target: CtxTarget::Playlist { id, name, source },
             history_entry: None,
         }));
     }

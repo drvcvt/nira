@@ -197,6 +197,7 @@ fn SavedList(items: Vec<LikedTrack>) -> Element {
 fn PlaylistsPane() -> Element {
     let playlists = use_playlists();
     let queue = use_queue();
+    let ctx = use_ctx_menu();
     let mut selected = use_signal(|| None::<String>);
     let mut new_name = use_signal(String::new);
     let mut importer_open = use_signal(|| false);
@@ -432,6 +433,9 @@ fn PlaylistsPane() -> Element {
                     {
                         let id = pl.id.clone();
                         let name = pl.name.clone();
+                        let context_id = id.clone();
+                        let context_name = name.clone();
+                        let import_source = pl.import_source().map(str::to_owned);
                         let count = pl.tracks.len() + pl.albums.iter().map(|a| a.tracks.len()).sum::<usize>();
                         let cover = pl
                             .tracks
@@ -455,6 +459,20 @@ fn PlaylistsPane() -> Element {
                                 r#type: "button",
                                 title: "{name}",
                                 onclick: move |_| selected.set(Some(id.clone())),
+                                oncontextmenu: move |e: Event<MouseData>| {
+                                    let Some(source) = import_source.clone() else {
+                                        return;
+                                    };
+                                    e.prevent_default();
+                                    let pos = e.data.client_coordinates();
+                                    ctx.open_playlist(
+                                        pos.x,
+                                        pos.y,
+                                        context_id.clone(),
+                                        context_name.clone(),
+                                        source,
+                                    );
+                                },
                                 div { class: "album-cover",
                                     if let Some(src) = cover.as_ref() {
                                         img { src: "{src}", alt: "", loading: "lazy", decoding: "async" }

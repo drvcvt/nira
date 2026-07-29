@@ -64,6 +64,10 @@ impl Playlist {
         self.tracks.is_empty() && self.albums.is_empty()
     }
 
+    pub fn import_source(&self) -> Option<&'static str> {
+        import_source(&self.id)
+    }
+
     /// Loose tracks followed by every album's tracks, in display order —
     /// what Play/Shuffle on the playlist header feed the queue.
     pub fn all_tracks(&self) -> Vec<Track> {
@@ -259,6 +263,15 @@ fn external_playlist_id(source: &str, source_id: &str) -> String {
     format!("{}-{}", source.trim().to_ascii_lowercase(), source_id.trim())
 }
 
+fn import_source(id: &str) -> Option<&'static str> {
+    match id.split_once('-')?.0 {
+        "spotify" => Some("Spotify"),
+        "soundcloud" => Some("SoundCloud"),
+        "youtube" => Some("YouTube"),
+        _ => None,
+    }
+}
+
 fn merge_external_playlists(
     items: &mut Vec<Playlist>,
     source: &str,
@@ -402,5 +415,13 @@ mod tests {
             merge_external_playlists(&mut items, "spotify", vec![imported]),
             1
         );
+    }
+
+    #[test]
+    fn imported_playlist_ids_report_their_source() {
+        assert_eq!(import_source("spotify-42"), Some("Spotify"));
+        assert_eq!(import_source("soundcloud-42"), Some("SoundCloud"));
+        assert_eq!(import_source("youtube-42"), Some("YouTube"));
+        assert_eq!(import_source("pl-42"), None);
     }
 }

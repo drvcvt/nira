@@ -79,9 +79,11 @@ pub fn ContextMenu() -> Element {
     // Inline "Add to playlist" expansion state — reset whenever the menu
     // opens/closes so every fresh right-click starts collapsed.
     let mut show_playlists = use_signal(|| false);
+    let mut confirm_playlist_delete = use_signal(|| false);
     use_effect(move || {
         let open = ctx.current.read().is_some();
         show_playlists.set(false);
+        confirm_playlist_delete.set(false);
         // Seed the roving keyboard focus on the first item once the menu
         // exists in the DOM, and hand focus back to whatever had it when the
         // menu closes — otherwise Escape drops focus on <body> and the next
@@ -93,6 +95,19 @@ pub fn ContextMenu() -> Element {
     let Some(state) = current else {
         return rsx! {};
     };
+
+    if let CtxTarget::Playlist { id, name, source } = &state.target {
+        return rsx! {
+            PlaylistCtxMenu {
+                x: state.x,
+                y: state.y,
+                id: id.clone(),
+                name: name.clone(),
+                source: source.clone(),
+                confirm_delete: confirm_playlist_delete,
+            }
+        };
+    }
 
     // Album target renders its own, smaller menu.
     if let CtxTarget::Album(album) = &state.target {
@@ -593,6 +608,70 @@ fn AlbumCtxMenu(x: f64, y: f64, album: AlbumCtx, show_playlists: Signal<bool>) -
                     i { class: "ctx-icon fa-solid fa-compact-disc" }
                     div { class: "ctx-item-body",
                         div { class: "ctx-item-label", "Go to album" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn PlaylistCtxMenu(
+    x: f64,
+    y: f64,
+    id: String,
+    name: String,
+    source: String,
+    confirm_delete: Signal<bool>,
+) -> Element {
+    let ctx = use_ctx_menu();
+    let playlists = use_playlists();
+    let mut confirm = confirm_delete;
+    let label = if *confirm.read() {
+        "Really remove?"
+    } else {
+        "Remove imported playlist"
+    };
+    let (h_anchor, v_anchor) = anchor_style(x, y);
+
+    rsx! {
+        button {
+            class: "ctx-overlay",
+            r#type: "button",
+            tabindex: "-1",
+            "aria-hidden": "true",
+            onclick: move |_| ctx.close(),
+            oncontextmenu: move |e: Event<MouseData>| {
+                e.prevent_default();
+                ctx.close();
+            },
+        }
+        div {
+            class: "ctx-menu",
+            role: "menu",
+            "aria-label": "Playlist actions",
+            onkeydown: ctx_menu_keynav,
+            style: "{h_anchor} {v_anchor}",
+
+            div { class: "ctx-header",
+                div { class: "ctx-title", "{name}" }
+                div { class: "ctx-sub", "Imported from {source}" }
+            }
+            div { class: "ctx-group",
+                button {
+                    class: "ctx-item",
+                    role: "menuitem",
+                    onclick: move |_| {
+                        if *confirm.peek() {
+                            playlists.delete(&id);
+                            ctx.close();
+                        } else {
+                            confirm.set(true);
+                        }
+                    },
+                    i { class: "ctx-icon fa-solid fa-trash-can" }
+                    div { class: "ctx-item-body",
+                        div { class: "ctx-item-label", "{label}" }
                     }
                 }
             }
