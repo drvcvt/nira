@@ -24,16 +24,11 @@
   padding: 5px;
   font-size: 13px;
   color: var(--text);
-  /* --line is transparent by design (no borders anywhere), but a menu
-     needs visible group separation — a faint fg wash reads as a
-     brightness step on raise2, not as a border. */
-  --ctx-line: color-mix(in srgb, var(--fg) 9%, transparent);
 }
 
 .ctx-header {
   padding: 8px 10px 9px;
-  margin-bottom: 3px;
-  border-bottom: 1px solid var(--ctx-line);
+  margin-bottom: 6px;
 }
 
 .ctx-title {
@@ -134,9 +129,7 @@
 }
 
 .ctx-sep {
-  height: 1px;
-  background: var(--ctx-line);
-  margin: 4px 6px;
+  height: 6px;
 }
 
 
