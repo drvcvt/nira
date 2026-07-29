@@ -27,11 +27,16 @@ and `git worktree list`.
 - Make shared changes on `public`, verify and commit them there, then
   cherry-pick only those exact commits into `master`, preserving Qobuz when
   resolving conflicts.
+- The standard finish procedure is: test and release-build `public`,
+  cherry-pick the exact shared commits into `master`, test and release-build
+  `master`, verify the installed launcher uses the private release, then push
+  only `public`.
 - The installed launcher is private and must point at the release built from
   `/home/mt/projects/nira-private`.
 - Before pushing `public`, verify a clean worktree and audit the diff for
-  private code, paths, credentials, and Qobuz wiring. Never push `master`
-  unless the user explicitly asks.
+  private code, paths, credentials, and Qobuz wiring.
+- Never push `master` or any other private branch to any remote. A request to
+  publish Nira means `public` only.
 
 ## User data and input safety
 
