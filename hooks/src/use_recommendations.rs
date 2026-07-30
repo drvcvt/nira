@@ -585,13 +585,33 @@ async fn load_mix(
 /// likes keep deliberate duplicates.
 fn dedupe_canonical(tracks: Vec<Track>) -> Vec<Track> {
     let mut seen = HashSet::<String>::new();
-    tracks
-        .into_iter()
-        .filter(|t| {
-            let canon = discovery::canonical_title(&t.title);
-            canon.is_empty() || seen.insert(canon)
-        })
-        .collect()
+    let mut out: Vec<Track> = Vec::new();
+    for track in tracks {
+        let canon = discovery::canonical_title(&track.title);
+        if !canon.is_empty() && seen.contains(&canon) {
+            continue;
+        }
+        let artist = track
+            .artists
+            .first()
+            .map(|artist| artist.name.as_str())
+            .unwrap_or_default();
+        if out.iter().any(|existing| {
+            let existing_artist = existing
+                .artists
+                .first()
+                .map(|artist| artist.name.as_str())
+                .unwrap_or_default();
+            discovery::same_recording(existing_artist, &existing.title, artist, &track.title)
+        }) {
+            continue;
+        }
+        if !canon.is_empty() {
+            seen.insert(canon);
+        }
+        out.push(track);
+    }
+    out
 }
 
 /// Curate a raw related feed into a row: dedupe (exact + canonical title),
@@ -748,6 +768,7 @@ async fn related_for_seed(
         artist: seed.artist.clone(),
         title: seed.title.clone(),
         mbid: None,
+        track_uri: seed.track_uri.clone(),
     };
     engine
         .similar_to(seed_input)
@@ -771,18 +792,23 @@ async fn related_for_seed(
 /// engine does on its own paths: drop reuploads/covers of the seed itself
 /// and low-quality variants (sped up, nightcore, …) the seed isn't one of.
 fn filter_seed_variants(tracks: Vec<Track>, seed: &RecommendationSeed) -> Vec<Track> {
-    let seed_canon = discovery::canonical_title(&seed.title);
     let seed_ref = SimilarToSeed {
         artist: seed.artist.clone(),
         title: seed.title.clone(),
         mbid: None,
+        track_uri: seed.track_uri.clone(),
     };
     tracks
         .into_iter()
         .filter(|t| {
-            let canon = discovery::canonical_title(&t.title);
-            (canon.is_empty() || canon != seed_canon)
+            let artist = t
+                .artists
+                .first()
+                .map(|a| a.name.as_str())
+                .unwrap_or_default();
+            !discovery::is_seed_variant(artist, &t.title, &seed_ref)
                 && !discovery::is_low_quality_variant(&t.title, &seed_ref)
+                && !discovery::is_hashtag_collision(&t.title, &seed.title)
         })
         .collect()
 }
@@ -1279,13 +1305,22 @@ fn weighted_seed_pool(
     liked: &[Track],
     now: DateTime<Utc>,
 ) -> Vec<WeightedSeed> {
-    let mut index: HashMap<String, usize> = HashMap::new();
     let mut out: Vec<WeightedSeed> = Vec::new();
-    let mut upsert = |seed: RecommendationSeed, weight: f64| match index.get(&seed_key(&seed)) {
-        Some(&i) => out[i].weight += weight,
-        None => {
-            index.insert(seed_key(&seed), out.len());
-            out.push(WeightedSeed { weight, seed });
+    let mut upsert = |seed: RecommendationSeed, weight: f64| {
+        // ponytail: history is capped at 500; index identities only if this
+        // bounded pairwise scan ever shows up in profiling.
+        match out.iter_mut().find(|entry| {
+            discovery::same_recording(
+                &entry.seed.artist,
+                &entry.seed.title,
+                &seed.artist,
+                &seed.title,
+            )
+        }) {
+            Some(entry) => entry.weight += weight,
+            None => {
+                out.push(WeightedSeed { weight, seed });
+            }
         }
     };
     for e in history {
@@ -1313,14 +1348,17 @@ fn recent_play_pool(
     now: DateTime<Utc>,
     cap: usize,
 ) -> Vec<(f64, RecommendationSeed)> {
-    let mut seen = HashSet::new();
     let mut out = Vec::new();
     for e in history {
         let Some(seed) = seed_from_parts(&e.artist, &e.title, e.track_uri.clone().map(TrackUri))
         else {
             continue;
         };
-        if !seen.insert(seed_key(&seed)) {
+        // ponytail: history is capped at 500; index identities only if this
+        // bounded pairwise scan ever shows up in profiling.
+        if out.iter().any(|(_, existing): &(f64, RecommendationSeed)| {
+            discovery::same_recording(&existing.artist, &existing.title, &seed.artist, &seed.title)
+        }) {
             continue;
         }
         out.push((play_weight(now, e.played_at), seed));
@@ -1682,6 +1720,49 @@ mod tests {
     }
 
     #[test]
+    fn history_pools_merge_logged_newlove_upload_variants() {
+        let history_log = vec![
+            history(
+                "Sewerslvt / Cynthoni",
+                "Newlove",
+                Some("soundcloud:track:original"),
+            ),
+            history(
+                "t349z",
+                "sewerslvt-newlove",
+                Some("soundcloud:track:reupload"),
+            ),
+            history(
+                "Sewerslvt (Unofficial 1)",
+                "Sewerslvt - Newlove",
+                Some("soundcloud:track:unofficial"),
+            ),
+        ];
+
+        let weighted = weighted_seed_pool(&history_log, &[], Utc::now());
+        assert_eq!(weighted.len(), 1, "upload variants became separate seeds");
+        assert_eq!(
+            weighted[0]
+                .seed
+                .track_uri
+                .as_ref()
+                .map(|uri| uri.0.as_str()),
+            Some("soundcloud:track:original")
+        );
+
+        let recent = recent_play_pool(&history_log, Utc::now(), 30);
+        assert_eq!(
+            recent.len(),
+            1,
+            "upload variants became separate recent plays"
+        );
+        assert_eq!(
+            recent[0].1.track_uri.as_ref().map(|uri| uri.0.as_str()),
+            Some("soundcloud:track:original")
+        );
+    }
+
+    #[test]
     fn cluster_seeds_recent_history_beats_old_like() {
         // A non-SC like vs a non-SC recent play. With time decay the fresh
         // play carries far more weight than a like's flat base.
@@ -1760,6 +1841,19 @@ mod tests {
         ];
         let kept = curate_tracks(tracks, &HashSet::new(), 3, 10);
         assert_eq!(kept.len(), 2, "duplicate song copies survived: {kept:?}");
+    }
+
+    #[test]
+    fn curate_tracks_collapses_prefixed_reuploads() {
+        let tracks = vec![
+            track("soundcloud:track:1", "Sewerslvt / Cynthoni", "Newlove"),
+            track("soundcloud:track:2", "t349z", "sewerslvt-newlove"),
+            track("soundcloud:track:3", "Other", "Different Song"),
+        ];
+
+        let kept = curate_tracks(tracks, &HashSet::new(), 3, 10);
+        let titles: Vec<_> = kept.iter().map(|track| track.title.as_str()).collect();
+        assert_eq!(titles, vec!["Newlove", "Different Song"]);
     }
 
     #[test]

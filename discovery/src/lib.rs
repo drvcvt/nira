@@ -7,10 +7,10 @@
 //!
 //! Two candidate sources, run in parallel:
 //!
-//! 1. **SoundCloud's own related-tracks feed.** We resolve the seed by
-//!    searching SC for "artist title", take the top hit, and pull its
-//!    `/tracks/{id}/related`. SC has unmatched coverage for niche electronic
-//!    so this works where LB's similarity graph is silent.
+//! 1. **SoundCloud's own related-tracks feed.** We use an exact track URI when
+//!    available, otherwise search SC for "artist title" and validate the hit
+//!    before pulling `/tracks/{id}/related`. SC has unmatched coverage for
+//!    niche electronic so this works where LB's similarity graph is silent.
 //! 2. **ListenBrainz similar-recordings.** MusicBrainz resolves the seed to
 //!    an MBID; LB returns neighbouring MBIDs with co-listening scores. Great
 //!    for popular catalog, sparse for underground.
@@ -28,7 +28,7 @@ use std::sync::{Arc, RwLock};
 
 use enrichment::EnrichmentClient;
 use futures::stream::{FuturesUnordered, StreamExt};
-use provider_api::{Provider, ProviderError, ProviderId, Query, Track};
+use provider_api::{Provider, ProviderError, ProviderId, Query, Track, TrackUri};
 use provider_soundcloud::SoundCloudProvider;
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +57,7 @@ pub struct SimilarToSeed {
     pub artist: String,
     pub title: String,
     pub mbid: Option<String>,
+    pub track_uri: Option<TrackUri>,
 }
 
 impl SimilarToSeed {
@@ -67,12 +68,14 @@ impl SimilarToSeed {
                 artist: artist.trim().to_string(),
                 title: title.trim().to_string(),
                 mbid: None,
+                track_uri: None,
             }
         } else {
             Self {
                 artist: String::new(),
                 title: trimmed.to_string(),
                 mbid: None,
+                track_uri: None,
             }
         }
     }
@@ -313,25 +316,36 @@ impl DiscoveryEngine {
     /// Resolve seed → SC track → SC related. Empty Vec if SC can't find the
     /// seed at all; an Err only if the SC API itself misbehaves.
     async fn sc_candidates(&self, seed: &SimilarToSeed) -> Result<Vec<Candidate>, DiscoveryError> {
-        let query = if seed.artist.is_empty() {
-            seed.title.clone()
+        let seed_uri = if let Some(uri) = exact_soundcloud_seed_uri(seed) {
+            uri.clone()
         } else {
-            format!("{} {}", seed.artist, seed.title)
+            let query = if seed.artist.is_empty() {
+                seed.title.clone()
+            } else {
+                format!("{} {}", seed.artist, seed.title)
+            };
+            if query.trim().is_empty() {
+                return Ok(Vec::new());
+            }
+            let search = self
+                .sc
+                .search(&Query {
+                    text: query,
+                    limit: Some(5),
+                })
+                .await?;
+            let Some(top) = validated_soundcloud_seed(&search.tracks, seed) else {
+                tracing::debug!(
+                    artist = %seed.artist,
+                    title = %seed.title,
+                    hits = search.tracks.len(),
+                    "soundcloud seed search had no validated match"
+                );
+                return Ok(Vec::new());
+            };
+            top.uri.clone()
         };
-        if query.trim().is_empty() {
-            return Ok(Vec::new());
-        }
-        let search = self
-            .sc
-            .search(&Query {
-                text: query,
-                limit: Some(5),
-            })
-            .await?;
-        let Some(top) = search.tracks.first().cloned() else {
-            return Ok(Vec::new());
-        };
-        let related = self.sc.related_tracks(&top.uri, 50).await?;
+        let related = self.sc.related_tracks(&seed_uri, 50).await?;
         let len = related.len().max(1) as f32;
         Ok(related
             .into_iter()
@@ -461,10 +475,19 @@ impl DiscoveryEngine {
 }
 
 fn clean_candidates(candidates: Vec<Candidate>, seed: &SimilarToSeed) -> Vec<Candidate> {
-    let mut out = Vec::new();
+    let mut out: Vec<Candidate> = Vec::new();
     let mut seen = HashSet::<String>::new();
     for c in candidates {
-        if is_seed_reupload(&c, seed) || is_low_quality_variant(&c.title, seed) {
+        if is_seed_variant(&c.artist, &c.title, seed)
+            || is_low_quality_variant(&c.title, seed)
+            || is_hashtag_collision(&c.title, &seed.title)
+        {
+            continue;
+        }
+        if out
+            .iter()
+            .any(|seen| same_recording(&seen.artist, &seen.title, &c.artist, &c.title))
+        {
             continue;
         }
         if seen.insert(dedupe_key(&c.artist, &c.title)) {
@@ -583,6 +606,88 @@ fn normalise_text(s: &str) -> String {
         .join(" ")
 }
 
+fn artist_aliases(artist: &str) -> impl Iterator<Item = String> + '_ {
+    artist
+        .split(['/', '&', ','])
+        .map(normalise_text)
+        .filter(|alias| !alias.is_empty())
+}
+
+fn artists_compatible(left: &str, right: &str) -> bool {
+    let right: Vec<_> = artist_aliases(right).collect();
+    artist_aliases(left).any(|left| right.iter().any(|right| *right == left))
+}
+
+fn title_without_artist_prefix(title: &str, artist: &str) -> Option<String> {
+    let title = canonical_title(title);
+    for alias in artist_aliases(artist) {
+        if let Some(rest) = title.strip_prefix(&format!("{alias} ")) {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+fn exact_soundcloud_seed_uri(seed: &SimilarToSeed) -> Option<&TrackUri> {
+    seed.track_uri
+        .as_ref()
+        .filter(|uri| uri.0.starts_with("soundcloud:track:"))
+}
+
+fn validated_soundcloud_seed<'a>(tracks: &'a [Track], seed: &SimilarToSeed) -> Option<&'a Track> {
+    tracks.iter().find(|track| {
+        track
+            .artists
+            .iter()
+            .any(|artist| same_recording(&seed.artist, &seed.title, &artist.name, &track.title))
+    })
+}
+
+/// Conservative identity for one recording across uploader-title variants.
+/// Artist aliases must match, or one complete artist alias must prefix the
+/// other title. Generic equal titles from unrelated artists stay distinct.
+pub fn same_recording(
+    left_artist: &str,
+    left_title: &str,
+    right_artist: &str,
+    right_title: &str,
+) -> bool {
+    let left = canonical_title(left_title);
+    let right = canonical_title(right_title);
+    if left.is_empty() || right.is_empty() {
+        return false;
+    }
+    if left == right {
+        return artists_compatible(left_artist, right_artist);
+    }
+    title_without_artist_prefix(right_title, left_artist).as_deref() == Some(left.as_str())
+        || title_without_artist_prefix(left_title, right_artist).as_deref() == Some(right.as_str())
+}
+
+/// Feed-level seed exclusion. Related feeds may treat an exact canonical title
+/// as the seed even when the uploader name differs.
+pub fn is_seed_variant(
+    candidate_artist: &str,
+    candidate_title: &str,
+    seed: &SimilarToSeed,
+) -> bool {
+    if seed.title.trim().is_empty() {
+        return false;
+    }
+    canonical_title(candidate_title) == canonical_title(&seed.title)
+        || same_recording(&seed.artist, &seed.title, candidate_artist, candidate_title)
+}
+
+/// Reject a candidate whose only visible seed match is a complete hashtag.
+pub fn is_hashtag_collision(candidate_title: &str, seed_title: &str) -> bool {
+    let seed_tag = canonical_title(seed_title).replace(' ', "");
+    !seed_tag.is_empty()
+        && candidate_title
+            .split_whitespace()
+            .filter_map(|word| word.strip_prefix('#'))
+            .any(|tag| normalise_text(tag).replace(' ', "") == seed_tag)
+}
+
 fn has_variant_token(title: &str) -> bool {
     let t = title.to_lowercase();
     [
@@ -607,18 +712,6 @@ fn has_variant_token(title: &str) -> bool {
 /// is one. Public for the same reason as [`canonical_title`].
 pub fn is_low_quality_variant(title: &str, seed: &SimilarToSeed) -> bool {
     !has_variant_token(&seed.title) && has_variant_token(title)
-}
-
-fn is_seed_reupload(c: &Candidate, seed: &SimilarToSeed) -> bool {
-    if seed.title.trim().is_empty() || canonical_title(&c.title) != canonical_title(&seed.title) {
-        return false;
-    }
-    let seed_artist = normalise_text(&seed.artist);
-    if seed_artist.is_empty() {
-        return true;
-    }
-    let artist = normalise_text(&c.artist);
-    artist.contains(&seed_artist) || seed_artist.contains(&artist)
 }
 
 struct ResolvedAcrossProviders {
@@ -696,6 +789,7 @@ mod tests {
             artist: "Snow Strippers".into(),
             title: "Drench".into(),
             mbid: None,
+            track_uri: None,
         }
     }
 
@@ -745,6 +839,78 @@ mod tests {
     }
 
     #[test]
+    fn same_recording_is_conservative_about_upload_prefixes() {
+        assert!(same_recording(
+            "Sewerslvt / Cynthoni",
+            "Newlove",
+            "t349z",
+            "sewerslvt-newlove",
+        ));
+        assert!(same_recording(
+            "Sewerslvt / Cynthoni",
+            "Newlove",
+            "Cynthoni",
+            "Newlove",
+        ));
+        assert!(!same_recording(
+            "Artist A", "Newlove", "Artist B", "Newlove",
+        ));
+        assert!(!same_recording("Artist A", "Love", "Artist A", "Love-Hate",));
+        assert!(!same_recording(
+            "Artist A",
+            "Love",
+            "Artist A",
+            "Lovely Day",
+        ));
+    }
+
+    #[test]
+    fn hashtag_collision_requires_a_complete_seed_tag() {
+        assert!(is_hashtag_collision(
+            "Um filho teu não foge da luta - Himura #newgen #newlove #newmantras",
+            "Newlove",
+        ));
+        assert!(!is_hashtag_collision("A genuinely lovely day", "Love"));
+        assert!(!is_hashtag_collision("Song #newlover", "Newlove"));
+    }
+
+    #[test]
+    fn exact_soundcloud_seed_uri_wins_without_search() {
+        let seed = SimilarToSeed {
+            track_uri: Some(provider_api::TrackUri("soundcloud:track:734527003".into())),
+            ..seed()
+        };
+
+        assert_eq!(
+            exact_soundcloud_seed_uri(&seed).map(|uri| uri.0.as_str()),
+            Some("soundcloud:track:734527003")
+        );
+    }
+
+    #[test]
+    fn validated_soundcloud_seed_skips_unrelated_first_hit() {
+        let unrelated = sc_candidate("Newlove", "Different Artist")
+            .soundcloud_track
+            .unwrap();
+        let matching = sc_candidate("sewerslvt-newlove", "t349z")
+            .soundcloud_track
+            .unwrap();
+        let hits = vec![unrelated, matching.clone()];
+        let seed = SimilarToSeed {
+            artist: "Sewerslvt / Cynthoni".into(),
+            title: "Newlove".into(),
+            mbid: None,
+            track_uri: None,
+        };
+
+        assert_eq!(
+            validated_soundcloud_seed(&hits, &seed).map(|track| &track.uri),
+            Some(&matching.uri)
+        );
+        assert!(validated_soundcloud_seed(&hits[..1], &seed).is_none());
+    }
+
+    #[test]
     fn filters_variants_unless_seed_is_variant() {
         let normal = seed();
         assert!(is_low_quality_variant("Drench slowed + reverb", &normal));
@@ -757,12 +923,70 @@ mod tests {
     }
 
     #[test]
-    fn detects_seed_reuploads_from_same_artist() {
-        let c = candidate("Drench (upload)", "Snow Strippers", 0.8, "Last.fm");
-        assert!(is_seed_reupload(&c, &seed()));
+    fn detects_seed_variants_in_related_feeds() {
+        assert!(is_seed_variant(
+            "Snow Strippers",
+            "Drench (upload)",
+            &seed(),
+        ));
+        assert!(is_seed_variant("Different Artist", "Drench", &seed()));
+        assert!(!same_recording(
+            "Snow Strippers",
+            "Drench",
+            "Different Artist",
+            "Drench",
+        ));
+    }
 
-        let other = candidate("Drench", "Different Artist", 0.8, "Last.fm");
-        assert!(!is_seed_reupload(&other, &seed()));
+    #[test]
+    fn filters_logged_newlove_reuploads_and_hashtag_collision() {
+        let seed = SimilarToSeed {
+            artist: "Sewerslvt / Cynthoni".into(),
+            title: "Newlove".into(),
+            mbid: None,
+            track_uri: None,
+        };
+        let candidates = vec![
+            candidate("sewerslvt-newlove", "t349z", 0.9, "SoundCloud"),
+            candidate(
+                "Sewerslvt - Newlove",
+                "Sewerslvt (Unofficial 1)",
+                0.8,
+                "SoundCloud",
+            ),
+            candidate(
+                "Um filho teu não foge da luta - Himura #newgen #newlove #newmantras",
+                "Himura #Newgen",
+                0.7,
+                "SoundCloud",
+            ),
+            candidate("Love-Hate", "Sewerslvt", 0.6, "SoundCloud"),
+            candidate("Lovely Day", "Different Artist", 0.5, "SoundCloud"),
+            candidate("Fresh Song", "Different Artist", 0.4, "SoundCloud"),
+        ];
+
+        let kept: Vec<_> = clean_candidates(candidates, &seed)
+            .into_iter()
+            .map(|candidate| candidate.title)
+            .collect();
+
+        assert_eq!(kept, vec!["Love-Hate", "Lovely Day", "Fresh Song"]);
+    }
+
+    #[test]
+    fn clean_candidates_collapses_prefixed_reuploads_of_other_tracks() {
+        let candidates = vec![
+            candidate("Different Song", "Artist / Alias", 0.9, "SoundCloud"),
+            candidate("Artist - Different Song", "Uploader", 0.8, "SoundCloud"),
+            candidate("Fresh Song", "Other", 0.7, "SoundCloud"),
+        ];
+
+        let kept = clean_candidates(candidates, &seed());
+        let titles: Vec<_> = kept
+            .iter()
+            .map(|candidate| candidate.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["Different Song", "Fresh Song"]);
     }
 
     #[test]

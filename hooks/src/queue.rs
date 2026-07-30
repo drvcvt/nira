@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use discovery::{DiscoveryEngine, DiscoveryResult, SimilarToSeed, canonical_title};
-use player::{Active, NowPlaying, Player, PlayerSnapshot, TransportCmd};
+use discovery::{DiscoveryEngine, DiscoveryResult, SimilarToSeed, canonical_title, same_recording};
+use player::{Active, HistoryEntry, NowPlaying, Player, PlayerSnapshot, TransportCmd};
 use provider_api::{Provider, ProviderId, StreamHandle, Track};
 use provider_soundcloud::SoundCloudProvider;
 use provider_spotify::SpotifyProvider;
@@ -529,6 +529,7 @@ impl UseQueue {
                     .unwrap_or_default(),
                 title: seed.title.clone(),
                 mbid: None,
+                track_uri: (seed.provider == ProviderId::SoundCloud).then(|| seed.uri.clone()),
             };
             let superseded = |q: &UseQueue| *q.load_generation.peek() != generation_at_start;
             // The profile path is best-effort: its failure never fails the
@@ -565,13 +566,15 @@ impl UseQueue {
                 status.set(RadioStatus::Idle);
                 return;
             }
-            let mut list = Vec::with_capacity(results.len() + 1);
+            let recommended: Vec<_> = results
+                .iter()
+                .take(40)
+                .filter(|result| !radio_result_is_seed_leak(&seed, result))
+                .filter_map(DiscoveryResult::play_target)
+                .collect();
+            let mut list = Vec::with_capacity(recommended.len() + 1);
             list.push(seed);
-            for r in results.iter().take(40) {
-                if let Some(t) = r.play_target() {
-                    list.push(t);
-                }
-            }
+            list.extend(recommended);
             // Keep the clicked seed at 0 but pull same-artist runs apart.
             spread_artists(&mut list);
             tracing::info!(count = list.len(), "song radio queued");
@@ -584,22 +587,13 @@ impl UseQueue {
     /// current taste dominates, restricted to artists other than the radio
     /// seed itself. Repeat plays of a track naturally stack its weight.
     fn radio_profile_seed(&self, seed: &Track) -> Option<SimilarToSeed> {
-        let seed_artist = seed
-            .artists
-            .first()
-            .map(|a| a.name.to_lowercase())
-            .unwrap_or_default();
         let now = chrono::Utc::now();
         let pool: Vec<(f64, SimilarToSeed)> = self
             .player
             .history()
             .recent(50)
             .into_iter()
-            .filter(|e| {
-                !e.artist.is_empty()
-                    && !e.title.is_empty()
-                    && e.artist.to_lowercase() != seed_artist
-            })
+            .filter(|entry| radio_profile_entry_allowed(entry, seed))
             .map(|e| {
                 (
                     crate::taste::play_weight(now, e.played_at),
@@ -607,6 +601,10 @@ impl UseQueue {
                         artist: e.artist,
                         title: e.title,
                         mbid: None,
+                        track_uri: e
+                            .track_uri
+                            .filter(|uri| uri.starts_with("soundcloud:track:"))
+                            .map(provider_api::TrackUri),
                     },
                 )
             })
@@ -791,6 +789,12 @@ fn interleave_radio(
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::with_capacity(main.len() + profile.len());
     let mut push = |r: DiscoveryResult, out: &mut Vec<DiscoveryResult>| {
+        if out
+            .iter()
+            .any(|seen| same_recording(&seen.artist, &seen.title, &r.artist, &r.title))
+        {
+            return;
+        }
         let canon = canonical_title(&r.title);
         let key = if canon.is_empty() {
             format!("{}|{}", r.artist.to_lowercase(), r.title.to_lowercase())
@@ -820,6 +824,28 @@ fn interleave_radio(
         }
     }
     out
+}
+
+fn radio_result_is_seed_leak(seed: &Track, result: &DiscoveryResult) -> bool {
+    let seed_artist = seed
+        .artists
+        .first()
+        .map(|artist| artist.name.as_str())
+        .unwrap_or_default();
+    same_recording(seed_artist, &seed.title, &result.artist, &result.title)
+        || discovery::is_hashtag_collision(&result.title, &seed.title)
+}
+
+fn radio_profile_entry_allowed(entry: &HistoryEntry, seed: &Track) -> bool {
+    let seed_artist = seed
+        .artists
+        .first()
+        .map(|artist| artist.name.as_str())
+        .unwrap_or_default();
+    !entry.artist.is_empty()
+        && !entry.title.is_empty()
+        && entry.artist.to_lowercase() != seed_artist.to_lowercase()
+        && !same_recording(seed_artist, &seed.title, &entry.artist, &entry.title)
 }
 
 /// Spawn the load task for the queue's current_index entry. Used by
@@ -1539,5 +1565,54 @@ mod tests {
         let blended = interleave_radio(main, profile);
         assert_eq!(blended.len(), 1);
         assert_eq!(blended[0].artist, "M");
+    }
+
+    #[test]
+    fn interleave_radio_collapses_logged_newlove_upload_variants() {
+        let main = vec![result("Sewerslvt / Cynthoni", "Newlove")];
+        let profile = vec![
+            result("t349z", "sewerslvt-newlove"),
+            result("Other", "Different Song"),
+            result("Sewerslvt (Unofficial 1)", "Sewerslvt - Newlove"),
+        ];
+
+        let blended = interleave_radio(main, profile);
+        let titles: Vec<_> = blended.iter().map(|result| result.title.as_str()).collect();
+        assert_eq!(titles, vec!["Newlove", "Different Song"]);
+    }
+
+    #[test]
+    fn final_radio_gate_rejects_seed_variants_and_hashtag_collisions() {
+        let seed = track("Sewerslvt / Cynthoni", "Newlove");
+        assert!(radio_result_is_seed_leak(
+            &seed,
+            &result("t349z", "sewerslvt-newlove"),
+        ));
+        assert!(radio_result_is_seed_leak(
+            &seed,
+            &result(
+                "Himura #Newgen",
+                "Um filho teu não foge da luta - Himura #newgen #newlove #newmantras",
+            ),
+        ));
+        assert!(!radio_result_is_seed_leak(
+            &seed,
+            &result("Other", "Different Song"),
+        ));
+    }
+
+    #[test]
+    fn profile_seed_rejects_another_upload_of_clicked_recording() {
+        let seed = track("Sewerslvt / Cynthoni", "Newlove");
+        let entry = player::HistoryEntry {
+            title: "sewerslvt-newlove".into(),
+            artist: "t349z".into(),
+            provider: "SoundCloud".into(),
+            track_uri: Some("soundcloud:track:reupload".into()),
+            cover_url: None,
+            played_at: chrono::Utc::now(),
+        };
+
+        assert!(!radio_profile_entry_allowed(&entry, &seed));
     }
 }
