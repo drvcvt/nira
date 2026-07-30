@@ -1,12 +1,13 @@
 //! Activity rails — recently played (local play-log) and recently liked
-//! (Spotify Liked Songs).
+//! (local hearts plus Spotify Liked Songs).
 
 use std::sync::Arc;
 
 use dioxus::prelude::*;
 use hooks::{
-    ArtistRef, ArtistUri, HistoryEntry, Provider, ProviderId, Query, Track, TrackUri, UseLibrary,
-    use_ctx_menu, use_local_library, use_queue, use_soundcloud, use_spotify,
+    ArtistRef, ArtistUri, HistoryEntry, LikedTrack, Provider, ProviderId, Query, Track, TrackUri,
+    UseLibrary, track_match_key, use_ctx_menu, use_likes, use_local_library, use_queue,
+    use_soundcloud, use_spotify,
 };
 
 use super::rails::{Rail, SkeletonRow};
@@ -196,9 +197,39 @@ async fn resolve_history_entry(
     }
 }
 
+fn merge_recent_likes(local: Vec<LikedTrack>, spotify: Vec<Track>) -> Vec<Track> {
+    let mut timestamped: Vec<_> = local
+        .into_iter()
+        .map(|liked| (liked.liked_at, liked.track))
+        .chain(spotify.into_iter().map(|track| {
+            (
+                track
+                    .added_at
+                    .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC),
+                track,
+            )
+        }))
+        .collect();
+    timestamped.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut seen_uri = std::collections::HashSet::new();
+    let mut seen_recording = std::collections::HashSet::new();
+    let mut tracks = Vec::new();
+    for (_, track) in timestamped {
+        if seen_uri.insert(track.uri.0.clone()) && seen_recording.insert(track_match_key(&track)) {
+            tracks.push(track);
+            if tracks.len() == 8 {
+                break;
+            }
+        }
+    }
+    tracks
+}
+
 #[component]
 pub(super) fn RecentlyLikedRail(library: UseLibrary) -> Element {
-    let tracks = library.recently_liked.read().clone();
+    let likes = use_likes();
+    let tracks = merge_recent_likes(likes.list(), library.recently_liked.read().clone());
     let is_loading = *library.is_loading.read();
     let error = library.error.read().clone();
     let context_ctx = TrackCtx::new(tracks.clone());
@@ -213,7 +244,7 @@ pub(super) fn RecentlyLikedRail(library: UseLibrary) -> Element {
                 EmptyState {
                     icon: "fa-solid fa-heart",
                     title: "No liked songs yet.",
-                    body: "Connect Spotify in Settings — your liked-songs library shows up here once the first sync finishes.",
+                    body: "Like a track in Nira, or connect Spotify in Settings to include its liked songs.",
                 }
             } else {
                 div { class: "home-rail-row",
@@ -228,5 +259,77 @@ pub(super) fn RecentlyLikedRail(library: UseLibrary) -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    fn track(
+        uri: &str,
+        provider: ProviderId,
+        title: &str,
+        added_at: Option<chrono::DateTime<Utc>>,
+    ) -> Track {
+        Track {
+            uri: TrackUri(uri.into()),
+            provider,
+            title: title.into(),
+            artists: vec![ArtistRef {
+                uri: ArtistUri("artist:1".into()),
+                name: "Artist".into(),
+            }],
+            album: None,
+            duration: std::time::Duration::from_secs(180),
+            cover_url: None,
+            mbid: None,
+            added_at,
+        }
+    }
+
+    #[test]
+    fn local_like_appears_without_spotify() {
+        let liked_at = Utc.with_ymd_and_hms(2026, 7, 30, 12, 0, 0).unwrap();
+        let local = LikedTrack {
+            track: track("soundcloud:track:1", ProviderId::SoundCloud, "Local like", None),
+            liked_at,
+        };
+
+        let merged = merge_recent_likes(vec![local], Vec::new());
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].title, "Local like");
+    }
+
+    #[test]
+    fn newest_duplicate_wins_and_orders_first() {
+        let older = Utc.with_ymd_and_hms(2026, 7, 29, 12, 0, 0).unwrap();
+        let newer = Utc.with_ymd_and_hms(2026, 7, 30, 12, 0, 0).unwrap();
+        let newest = Utc.with_ymd_and_hms(2026, 7, 31, 12, 0, 0).unwrap();
+        let local = LikedTrack {
+            track: track("soundcloud:track:1", ProviderId::SoundCloud, "Same song", None),
+            liked_at: newer,
+        };
+        let spotify_duplicate = track(
+            "spotify:track:1",
+            ProviderId::Spotify,
+            "Same song",
+            Some(older),
+        );
+        let spotify_newest = track(
+            "spotify:track:2",
+            ProviderId::Spotify,
+            "Newest",
+            Some(newest),
+        );
+
+        let merged =
+            merge_recent_likes(vec![local], vec![spotify_duplicate, spotify_newest]);
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].title, "Newest");
+        assert_eq!(merged[1].uri.0, "soundcloud:track:1");
     }
 }

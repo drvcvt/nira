@@ -289,7 +289,7 @@ pub fn install_together(queue: UseQueue, player: player::Player, local: UseLocal
                         if player.snapshot().has_source {
                             let to = expected_position(&t, &target);
                             tracing::info!(at_ms = to.as_millis(), "together: aligning to host");
-                            player.seek(to);
+                            player.sync_seek(to);
                             pending_align = false;
                             since_compare = Duration::ZERO;
                         }
@@ -411,9 +411,9 @@ fn correct(player: &player::Player, t: &Together, target: &RemoteNow) -> Option<
     let we_are_playing = !snap.is_paused;
     if target.playing != we_are_playing {
         if target.playing {
-            player.resume();
+            player.sync_resume();
         } else {
-            player.pause();
+            player.sync_pause();
         }
         return None;
     }
@@ -425,7 +425,7 @@ fn correct(player: &player::Player, t: &Together, target: &RemoteNow) -> Option<
         } else {
             tracing::info!(ahead_ms = gap.as_millis(), "together: resyncing back");
         }
-        player.seek(expected);
+        player.sync_seek(expected);
     }
     Some(gap.as_nanos() as u64)
 }

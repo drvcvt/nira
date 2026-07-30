@@ -130,6 +130,7 @@ pub fn Bottombar() -> Element {
     let progress_pct = scrub_val.unwrap_or(live_pct);
 
     let now_active = snap.has_source && !snap.is_paused;
+    let transport_locked = snap.transport_locked;
     let queue_len = queue.entries.read().len();
     // With nothing loaded but a (restored) queue pointing somewhere, show
     // that entry's identity instead of a blank "Nothing loaded" — the play
@@ -263,7 +264,7 @@ pub fn Bottombar() -> Element {
                         title: if shuffle_on { "Shuffle on" } else { "Shuffle off" },
                         "aria-label": if shuffle_on { "Shuffle on" } else { "Shuffle off" },
                         "aria-pressed": if shuffle_on { "true" } else { "false" },
-                        disabled: queue_len < 2,
+                        disabled: transport_locked || queue_len < 2,
                         onclick: {
                             let queue = queue.clone();
                             move |_| queue.toggle_shuffle()
@@ -272,9 +273,9 @@ pub fn Bottombar() -> Element {
                     }
                     button {
                         class: "player-btn",
-                        title: "Previous",
-                        "aria-label": "Previous track",
-                        disabled: !has_prev,
+                        title: if transport_locked { "Following host" } else { "Previous" },
+                        "aria-label": if transport_locked { "Following host" } else { "Previous track" },
+                        disabled: transport_locked || !has_prev,
                         onclick: {
                             let queue = queue.clone();
                             move |_| queue.previous()
@@ -283,8 +284,9 @@ pub fn Bottombar() -> Element {
                     }
                     button {
                         class: "player-btn play",
-                        title: if now_active { "Pause" } else { "Play" },
-                        "aria-label": if now_active { "Pause" } else { "Play" },
+                        title: if transport_locked { "Following host" } else if now_active { "Pause" } else { "Play" },
+                        "aria-label": if transport_locked { "Following host" } else if now_active { "Pause" } else { "Play" },
+                        disabled: transport_locked,
                         onclick: {
                             let player = player.clone();
                             let queue = queue.clone();
@@ -307,9 +309,9 @@ pub fn Bottombar() -> Element {
                     }
                     button {
                         class: "player-btn",
-                        title: "Next",
-                        "aria-label": "Next track",
-                        disabled: !has_next,
+                        title: if transport_locked { "Following host" } else { "Next" },
+                        "aria-label": if transport_locked { "Following host" } else { "Next track" },
+                        disabled: transport_locked || !has_next,
                         onclick: {
                             let queue = queue.clone();
                             move |_| queue.next()
@@ -324,6 +326,7 @@ pub fn Bottombar() -> Element {
                         },
                         title: "{repeat_title}",
                         "aria-label": "{repeat_title}",
+                        disabled: transport_locked,
                         onclick: {
                             let queue = queue.clone();
                             move |_| queue.cycle_repeat()
@@ -350,8 +353,9 @@ pub fn Bottombar() -> Element {
                             max: "1000",
                             step: "1",
                             value: "{(progress_pct * 10.0) as i64}",
-                            disabled: duration.is_none() || duration.map(|d| d.as_secs() == 0).unwrap_or(true),
-                            "aria-label": "Seek",
+                            disabled: transport_locked || duration.is_none() || duration.map(|d| d.as_secs() == 0).unwrap_or(true),
+                            title: if transport_locked { "Following host" } else { "Seek" },
+                            "aria-label": if transport_locked { "Following host" } else { "Seek" },
                             onpointerdown: move |_| {
                                 scrub.set(None);
                                 scrub_dragging.set(true);
@@ -639,9 +643,13 @@ fn QueueRow(track: Track, index: usize, current: bool) -> Element {
             onkeydown: {
                 let queue = queue.clone();
                 move |e: Event<KeyboardData>| {
-                    // Enter only: Space stays the global play/pause bind.
-                    if e.key() == Key::Enter {
+                    let key = e.key();
+                    let is_space = key.to_string() == " ";
+                    if key == Key::Enter || is_space {
                         e.prevent_default();
+                        if is_space {
+                            e.stop_propagation();
+                        }
                         queue.play_index(index);
                     }
                 }
@@ -673,6 +681,7 @@ fn QueueRow(track: Track, index: usize, current: bool) -> Element {
                 r#type: "button",
                 title: "Remove from queue",
                 "aria-label": "Remove {title} from queue",
+                onkeydown: |e: KeyboardEvent| e.stop_propagation(),
                 onclick: {
                     let queue = queue.clone();
                     move |e: Event<MouseData>| {

@@ -459,3 +459,20 @@
   font-size: 0.85em;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .for-you-skeleton-card .cover-card-art,
+  .for-you-skeleton-line {
+    animation: none;
+    background-position: 0 0;
+  }
+
+  .cover-card.clickable,
+  .cover-card-art,
+  .rail-scroll-btn {
+    transition: none;
+  }
+
+  .cover-card.clickable:hover {
+    transform: none;
+  }
+}

@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
-use config::AppConfig;
+use config::{AppConfig, JsonLoad, load_json};
 use dioxus::prelude::*;
 use provider_api::{Track, TrackUri};
 use serde::{Deserialize, Serialize};
@@ -71,24 +71,21 @@ impl UseLikes {
     }
 }
 
-/// Install the global signal. Loads from disk on first call (best-effort —
-/// any read/parse error is logged and treated as "empty list"; we don't
-/// want a corrupted file to crash the app on boot).
-pub fn install_likes() {
-    let path = AppConfig::likes_path();
-    let initial: Vec<LikedTrack> = match &path {
-        Some(p) if p.exists() => match std::fs::read_to_string(p) {
-            Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|e| {
-                tracing::warn!("likes load: parse failed: {e}; starting empty");
-                Vec::new()
-            }),
-            Err(e) => {
-                tracing::warn!("likes load: read failed: {e}; starting empty");
-                Vec::new()
-            }
-        },
-        _ => Vec::new(),
+fn load_likes(path: Option<PathBuf>) -> (Vec<LikedTrack>, Option<PathBuf>) {
+    let Some(path) = path else {
+        return (Vec::new(), None);
     };
+    match load_json(&path) {
+        JsonLoad::Loaded(items) => (items, Some(path)),
+        JsonLoad::Missing | JsonLoad::Quarantined { .. } => (Vec::new(), Some(path)),
+        JsonLoad::Blocked { .. } => (Vec::new(), None),
+    }
+}
+
+/// Install the global signal. Invalid bytes are preserved before recovery;
+/// an unreadable original disables writes rather than risking replacement.
+pub fn install_likes() {
+    let (initial, path) = load_likes(AppConfig::likes_path());
     let items = use_signal(|| initial);
     let path_sig = use_signal(|| path);
     use_context_provider(move || UseLikes {
@@ -103,7 +100,7 @@ pub fn use_likes() -> UseLikes {
 
 #[cfg(test)]
 mod tests {
-    use super::LikedTrack;
+    use super::{LikedTrack, load_likes};
 
     #[test]
     fn saved_track_from_retired_provider_still_loads() {
@@ -126,5 +123,22 @@ mod tests {
 
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].track.provider.label(), "Unavailable");
+    }
+
+    #[test]
+    fn blocked_likes_file_disables_persistence() {
+        let path = std::env::temp_dir().join(format!(
+            "nira-likes-blocked-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir(&path).unwrap();
+
+        let (likes, writable_path) = load_likes(Some(path.clone()));
+
+        assert!(likes.is_empty());
+        assert!(writable_path.is_none());
+        assert!(path.is_dir());
+        std::fs::remove_dir(path).unwrap();
     }
 }

@@ -3,7 +3,7 @@
 //! Lives behind a `load`/`save` pair so the rest of the app can treat config
 //! as a plain struct and not worry about IO or directory resolution.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -21,6 +21,12 @@ static PERSIST_TX: std::sync::OnceLock<std::sync::mpsc::Sender<PersistJob>> =
 /// order; a delete enqueued after a write can never be undone by it.
 enum PersistJob {
     Write(PathBuf, Vec<u8>, Option<u32>),
+    WriteConfirmed(
+        PathBuf,
+        Vec<u8>,
+        Option<u32>,
+        std::sync::mpsc::SyncSender<Result<(), String>>,
+    ),
     Remove(PathBuf),
     /// Rendezvous marker: answered once everything enqueued before it hit
     /// the disk. Used by the atexit drain and tests.
@@ -39,6 +45,11 @@ fn persist_tx() -> &'static std::sync::mpsc::Sender<PersistJob> {
                             if let Err(error) = AppConfig::atomic_write_mode(&path, &bytes, mode) {
                                 tracing::warn!(%error, path = %path.display(), "background persist failed");
                             }
+                        }
+                        PersistJob::WriteConfirmed(path, bytes, mode, done) => {
+                            let result = AppConfig::atomic_write_mode(&path, &bytes, mode)
+                                .map_err(|error| error.to_string());
+                            let _ = done.send(result);
                         }
                         PersistJob::Remove(path) => {
                             if let Err(error) = std::fs::remove_file(&path)
@@ -67,6 +78,131 @@ fn persist_tx() -> &'static std::sync::mpsc::Sender<PersistJob> {
 
 extern "C" fn drain_persist_queue_at_exit() {
     AppConfig::flush_persist_queue(std::time::Duration::from_secs(5));
+}
+
+pub enum JsonLoad<T> {
+    Missing,
+    Loaded(T),
+    Quarantined { backup: PathBuf, reason: String },
+    Blocked { reason: String },
+}
+
+/// Read durable JSON without ever turning malformed bytes into an empty
+/// replacement. Invalid files are hard-linked to a unique sibling before
+/// the original name is removed; if either step fails, callers must disable
+/// persistence for that path.
+pub fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> JsonLoad<T> {
+    let raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return JsonLoad::Missing,
+        Err(error) => {
+            let reason = format!("could not read {}: {error}", path.display());
+            tracing::warn!(%reason, "durable JSON load blocked");
+            return JsonLoad::Blocked { reason };
+        }
+    };
+    match serde_json::from_slice(&raw) {
+        Ok(value) => JsonLoad::Loaded(value),
+        Err(error) => {
+            let parse_reason = error.to_string();
+            match quarantine_invalid_json(path, &raw) {
+                Ok(backup) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        backup = %backup.display(),
+                        reason = %parse_reason,
+                        "invalid JSON preserved before recovery"
+                    );
+                    JsonLoad::Quarantined {
+                        backup,
+                        reason: parse_reason,
+                    }
+                }
+                Err(quarantine_error) => {
+                    let reason = format!(
+                        "invalid JSON at {} ({parse_reason}); preservation failed: {quarantine_error}",
+                        path.display()
+                    );
+                    tracing::warn!(%reason, "durable JSON load blocked");
+                    JsonLoad::Blocked { reason }
+                }
+            }
+        }
+    }
+}
+
+fn quarantine_invalid_json(path: &Path, expected: &[u8]) -> Result<PathBuf, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("{} has no file name", path.display()))?
+        .to_string_lossy();
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    loop {
+        let backup = parent.join(format!(
+            ".{name}.corrupt-{seconds}-{}-{}",
+            std::process::id(),
+            TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        match std::fs::hard_link(path, &backup) {
+            Ok(()) => {
+                match std::fs::read(&backup) {
+                    Ok(actual) if actual == expected => {}
+                    Ok(_) => {
+                        let _ = std::fs::remove_file(&backup);
+                        return Err("backup verification did not match original bytes".into());
+                    }
+                    Err(error) => {
+                        let _ = std::fs::remove_file(&backup);
+                        return Err(format!("could not verify {}: {error}", backup.display()));
+                    }
+                }
+                if let Err(error) = std::fs::remove_file(path) {
+                    let _ = std::fs::remove_file(&backup);
+                    return Err(format!(
+                        "could not retire invalid original {}: {error}",
+                        path.display()
+                    ));
+                }
+                return Ok(backup);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "could not preserve {} beside the original: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+}
+
+fn persist_confirmed(
+    path: PathBuf,
+    bytes: Vec<u8>,
+    mode: Option<u32>,
+    timeout: std::time::Duration,
+) -> anyhow::Result<()> {
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+    persist_tx()
+        .send(PersistJob::WriteConfirmed(path, bytes, mode, done_tx))
+        .map_err(|_| anyhow::anyhow!("persistence writer thread gone"))?;
+    match done_rx.recv_timeout(timeout) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(anyhow::anyhow!(error)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            Err(anyhow::anyhow!("save confirmation timed out"))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(anyhow::anyhow!("persistence writer thread gone"))
+        }
+    }
 }
 
 /// UI theme preference. `System` defers to the OS/portal colour scheme via
@@ -137,6 +273,9 @@ pub struct AppConfig {
     pub discovery_listenbrainz: bool,
     #[serde(default = "default_true")]
     pub discovery_lastfm: bool,
+
+    #[serde(skip)]
+    persistence_blocked: bool,
 }
 
 impl Default for AppConfig {
@@ -154,6 +293,7 @@ impl Default for AppConfig {
             discovery_soundcloud: true,
             discovery_listenbrainz: false,
             discovery_lastfm: true,
+            persistence_blocked: false,
         }
     }
 }
@@ -340,6 +480,9 @@ impl AppConfig {
     /// Secret-tier: config.json carries the ListenBrainz/Last.fm
     /// tokens, so it gets the same 0600 treatment as the auth caches.
     pub fn save_bg(&self) -> anyhow::Result<()> {
+        if self.persistence_blocked {
+            anyhow::bail!("config persistence is disabled because the existing file is unreadable");
+        }
         let Some(path) = Self::config_path() else {
             return Ok(());
         };
@@ -385,23 +528,39 @@ impl AppConfig {
         let Some(path) = Self::config_path() else {
             return Ok(Self::default());
         };
-        if !path.exists() {
-            return Ok(Self::default());
-        }
         // Retro-tighten files written before saves went 0600; the write
         // path keeps them that way from here on.
-        tighten_secret_perms(&path);
-        let raw = std::fs::read_to_string(&path)?;
-        Ok(serde_json::from_str(&raw)?)
+        if path.is_file() {
+            tighten_secret_perms(&path);
+        }
+        Ok(match load_json(&path) {
+            JsonLoad::Loaded(config) => config,
+            JsonLoad::Missing | JsonLoad::Quarantined { .. } => Self::default(),
+            JsonLoad::Blocked { .. } => Self {
+                persistence_blocked: true,
+                ..Self::default()
+            },
+        })
     }
 
     /// Queued like every other state write: a synchronous bypass here could
     /// be overtaken by an older `save_bg` snapshot still sitting in the
     /// writer queue (volume drag → Settings change → boot reverts it).
-    /// Disk errors surface in the writer's log; callers only see enqueue
-    /// failures.
+    /// Low-frequency callers wait for this exact FIFO job, so success means
+    /// the bytes reached disk rather than merely reaching the queue.
     pub fn save(&self) -> anyhow::Result<()> {
-        self.save_bg()
+        if self.persistence_blocked {
+            anyhow::bail!("config persistence is disabled because the existing file is unreadable");
+        }
+        let Some(path) = Self::config_path() else {
+            return Ok(());
+        };
+        persist_confirmed(
+            path,
+            serde_json::to_vec_pretty(self)?,
+            Some(0o600),
+            std::time::Duration::from_secs(10),
+        )
     }
 }
 
@@ -582,6 +741,87 @@ mod tests {
         let saved: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["version"], 2);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn missing_json_is_reported_without_creating_a_file() {
+        let dir = temp_dir("json-missing");
+        let path = dir.join("state.json");
+
+        assert!(matches!(
+            load_json::<serde_json::Value>(&path),
+            JsonLoad::Missing
+        ));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn valid_json_loads_normally() {
+        let dir = temp_dir("json-valid");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.json");
+        std::fs::write(&path, br#"{"version":2}"#).unwrap();
+
+        let JsonLoad::Loaded(value) = load_json::<serde_json::Value>(&path) else {
+            panic!("valid JSON was not loaded");
+        };
+        assert_eq!(value["version"], 2);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn malformed_json_is_quarantined_byte_for_byte() {
+        let dir = temp_dir("json-corrupt");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.json");
+        let invalid = b"{ definitely not json";
+        std::fs::write(&path, invalid).unwrap();
+
+        let JsonLoad::Quarantined { backup, .. } = load_json::<serde_json::Value>(&path) else {
+            panic!("malformed JSON was not quarantined");
+        };
+        assert!(!path.exists());
+        assert_eq!(std::fs::read(&backup).unwrap(), invalid);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unreadable_json_is_blocked_without_touching_the_path() {
+        let dir = temp_dir("json-unreadable");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.json");
+        std::fs::create_dir(&path).unwrap();
+
+        assert!(matches!(
+            load_json::<serde_json::Value>(&path),
+            JsonLoad::Blocked { .. }
+        ));
+        assert!(path.is_dir());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn confirmed_write_returns_the_disk_error() {
+        let dir = temp_dir("confirmed-error");
+        std::fs::create_dir_all(&dir).unwrap();
+        let parent_is_file = dir.join("not-a-directory");
+        std::fs::write(&parent_is_file, b"keep").unwrap();
+        let target = parent_is_file.join("config.json");
+
+        let error = persist_confirmed(
+            target,
+            b"{}".to_vec(),
+            Some(0o600),
+            std::time::Duration::from_secs(10),
+        )
+        .unwrap_err();
+        assert!(!error.to_string().is_empty());
+        assert_eq!(std::fs::read(&parent_is_file).unwrap(), b"keep");
 
         std::fs::remove_dir_all(dir).unwrap();
     }

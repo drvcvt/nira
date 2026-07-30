@@ -200,6 +200,20 @@ impl std::io::Write for TeeWriter {
 }
 
 #[component]
+fn AudioStartupFailure(error: String) -> Element {
+    rsx! {
+        main { class: "audio-startup-failure",
+            section { class: "audio-startup-failure-copy",
+                h1 { "Audio output could not start" }
+                p { class: "audio-startup-failure-error", "{error}" }
+                p { "The output device may be missing or busy." }
+                p { "Check the system audio output, close any app holding it exclusively, then restart Nira." }
+            }
+        }
+    }
+}
+
+#[component]
 fn App() -> Element {
     // Boot-time singletons. The construction itself is cheap and synchronous
     // — Player::spawn is the slowest at ~10-20 ms (it blocks on cpal handing
@@ -207,13 +221,17 @@ fn App() -> Element {
     // *do* fire one background task to pre-warm the SC client_id so the
     // first user-visible search doesn't pay the JS-scrape cost.
     let app_cfg = use_hook(|| AppConfig::load().unwrap_or_default());
-    let player = use_hook({
+    let player_result = use_hook({
         let app_cfg = app_cfg.clone();
         move || {
             Player::spawn(AppConfig::play_history_path(), app_cfg.volume)
-                .expect("audio engine failed to start")
+                .map_err(|error| error.to_string())
         }
     });
+    let player = match &player_result {
+        Ok(player) => player.clone(),
+        Err(error) => return rsx! { AudioStartupFailure { error: error.to_string() } },
+    };
     let sc = use_hook(|| Arc::new(SoundCloudProvider::new().expect("SoundCloud provider init")));
     let sp = use_hook(|| {
         let client_id = app_cfg.spotify_client_id.clone().unwrap_or_default();
@@ -419,16 +437,14 @@ fn App() -> Element {
                             return;\
                         }}\
                         if (typing(e)) return;\
-                        /* Space must still activate a focused button. The\
+                        /* Space must still activate a focused button/row. The\
                            typing() guard above only exempts text inputs, and\
                            this listener stopPropagation()s, so without this\
-                           no button in the app responded to Space. Real\
-                           <button> only — track rows are role=button and keep\
-                           Space as the global play/pause bind on purpose. */\
+                           no button in the app responded to Space. */\
                         if (isSpace &&\
                             e.target &&\
                             e.target.closest &&\
-                            e.target.closest('button:not(.hotkey-bridge)')\
+                            e.target.closest('button:not(.hotkey-bridge), [role=button]')\
                         ) return;\
                         var acted = false;\
                         if (mod && !e.altKey && !e.shiftKey) {{\

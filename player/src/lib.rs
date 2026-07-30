@@ -23,7 +23,7 @@ pub use viz::VizFrame;
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -181,6 +181,9 @@ pub struct Player {
     /// in a Mutex/Option so subsequent calls return None — guards against
     /// accidental double-install.
     transport_rx: Arc<Mutex<Option<tokio_mpsc::UnboundedReceiver<TransportCmd>>>>,
+    /// Local transport is disabled while this client follows a host.
+    /// Host alignment uses the explicit `sync_*` methods below.
+    transport_locked: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -197,6 +200,7 @@ pub struct PlayerSnapshot {
     /// Which backend produced this snapshot. Used by hooks for routing
     /// decisions and by the bottombar for the source dot colour.
     pub active: Active,
+    pub transport_locked: bool,
 }
 
 impl Player {
@@ -283,6 +287,7 @@ impl Player {
             viz: viz::VizBus::new(),
             transport_tx,
             transport_rx: Arc::new(Mutex::new(Some(transport_rx))),
+            transport_locked: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -292,15 +297,28 @@ impl Player {
     /// best-effort, losing a media-key press is preferable to blocking the
     /// audio thread.
     pub fn request_next(&self) {
+        if !local_transport_is_allowed(self.transport_locked.load(Ordering::Relaxed)) {
+            return;
+        }
         let _ = self.transport_tx.send(TransportCmd::Next);
     }
 
     pub fn request_previous(&self) {
+        if !local_transport_is_allowed(self.transport_locked.load(Ordering::Relaxed)) {
+            return;
+        }
         let _ = self.transport_tx.send(TransportCmd::Previous);
     }
 
     pub fn request_stop(&self) {
+        if !local_transport_is_allowed(self.transport_locked.load(Ordering::Relaxed)) {
+            return;
+        }
         let _ = self.transport_tx.send(TransportCmd::Stop);
+    }
+
+    pub fn set_transport_locked(&self, locked: bool) {
+        self.transport_locked.store(locked, Ordering::Relaxed);
     }
 
     /// Take the single receiver. Returns `Some` exactly once per Player —
@@ -909,6 +927,13 @@ impl Player {
     }
 
     pub fn pause(&self) {
+        if !local_transport_is_allowed(self.transport_locked.load(Ordering::Relaxed)) {
+            return;
+        }
+        self.sync_pause();
+    }
+
+    pub fn sync_pause(&self) {
         match *self.active.read().unwrap_or_else(|p| p.into_inner()) {
             Active::Spotify => {
                 if let Some(b) = self
@@ -925,6 +950,13 @@ impl Player {
     }
 
     pub fn resume(&self) {
+        if !local_transport_is_allowed(self.transport_locked.load(Ordering::Relaxed)) {
+            return;
+        }
+        self.sync_resume();
+    }
+
+    pub fn sync_resume(&self) {
         match *self.active.read().unwrap_or_else(|p| p.into_inner()) {
             Active::Spotify => {
                 if let Some(b) = self
@@ -941,6 +973,13 @@ impl Player {
     }
 
     pub fn stop(&self) {
+        if !local_transport_is_allowed(self.transport_locked.load(Ordering::Relaxed)) {
+            return;
+        }
+        self.sync_stop();
+    }
+
+    pub fn sync_stop(&self) {
         self.stop_for_load();
         self.set_now_playing(None);
     }
@@ -967,6 +1006,13 @@ impl Player {
     /// support it (we log and move on); librespot accepts a ms target
     /// and dispatches a `Seeked` event when done.
     pub fn seek(&self, target: Duration) {
+        if !local_transport_is_allowed(self.transport_locked.load(Ordering::Relaxed)) {
+            return;
+        }
+        self.sync_seek(target);
+    }
+
+    pub fn sync_seek(&self, target: Duration) {
         match *self.active.read().unwrap_or_else(|p| p.into_inner()) {
             Active::Spotify => {
                 if let Some(b) = self
@@ -1208,7 +1254,11 @@ impl Player {
                     if let Some(d) = self.duration.read().ok().and_then(|d| *d) {
                         position = position.min(d);
                     }
-                    (s.is_paused, position, s.has_track)
+                    (
+                        s.is_paused,
+                        position,
+                        spotify_source_is_live(s.has_track, b.session_is_invalid()),
+                    )
                 }
                 None => (false, Duration::ZERO, false),
             },
@@ -1231,6 +1281,7 @@ impl Player {
             now_playing: self.now_playing.read().ok().and_then(|n| n.clone()),
             playback_id: self.playback_id.load(Ordering::Relaxed),
             active,
+            transport_locked: self.transport_locked.load(Ordering::Relaxed),
         }
     }
 
@@ -1289,9 +1340,30 @@ fn gain_db_to_factor(raw: &str) -> f32 {
     }
 }
 
+fn spotify_source_is_live(has_track: bool, session_is_invalid: bool) -> bool {
+    has_track && !session_is_invalid
+}
+
+fn local_transport_is_allowed(locked: bool) -> bool {
+    !locked
+}
+
 #[cfg(test)]
 mod tests {
-    use super::gain_db_to_factor;
+    use super::{gain_db_to_factor, local_transport_is_allowed, spotify_source_is_live};
+
+    #[test]
+    fn invalid_spotify_session_has_no_live_source() {
+        assert!(spotify_source_is_live(true, false));
+        assert!(!spotify_source_is_live(true, true));
+        assert!(!spotify_source_is_live(false, false));
+    }
+
+    #[test]
+    fn transport_lock_rejects_local_commands() {
+        assert!(local_transport_is_allowed(false));
+        assert!(!local_transport_is_allowed(true));
+    }
 
     #[test]
     fn replaygain_parse_and_clamp() {

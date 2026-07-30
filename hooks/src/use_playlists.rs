@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
-use config::AppConfig;
+use config::{AppConfig, JsonLoad, load_json};
 use dioxus::prelude::*;
 use provider_api::{Track, TrackUri};
 use serde::{Deserialize, Serialize};
@@ -299,23 +299,21 @@ fn merge_external_playlists(
     added
 }
 
-/// Install the global signal. Loads from disk on first call — best-effort,
-/// a corrupted file logs and starts empty rather than crashing boot.
-pub fn install_playlists() {
-    let path = AppConfig::playlists_path();
-    let initial: Vec<Playlist> = match &path {
-        Some(p) if p.exists() => match std::fs::read_to_string(p) {
-            Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|e| {
-                tracing::warn!("playlists load: parse failed: {e}; starting empty");
-                Vec::new()
-            }),
-            Err(e) => {
-                tracing::warn!("playlists load: read failed: {e}; starting empty");
-                Vec::new()
-            }
-        },
-        _ => Vec::new(),
+fn load_playlists(path: Option<PathBuf>) -> (Vec<Playlist>, Option<PathBuf>) {
+    let Some(path) = path else {
+        return (Vec::new(), None);
     };
+    match load_json(&path) {
+        JsonLoad::Loaded(items) => (items, Some(path)),
+        JsonLoad::Missing | JsonLoad::Quarantined { .. } => (Vec::new(), Some(path)),
+        JsonLoad::Blocked { .. } => (Vec::new(), None),
+    }
+}
+
+/// Install the global signal. Invalid bytes are preserved before recovery;
+/// an unreadable original disables writes rather than risking replacement.
+pub fn install_playlists() {
+    let (initial, path) = load_playlists(AppConfig::playlists_path());
     let items = use_signal(|| initial);
     let path_sig = use_signal(|| path);
     use_context_provider(move || UsePlaylists {
@@ -331,6 +329,23 @@ pub fn use_playlists() -> UsePlaylists {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocked_playlists_file_disables_persistence() {
+        let path = std::env::temp_dir().join(format!(
+            "nira-playlists-blocked-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir(&path).unwrap();
+
+        let (playlists, writable_path) = load_playlists(Some(path.clone()));
+
+        assert!(playlists.is_empty());
+        assert!(writable_path.is_none());
+        assert!(path.is_dir());
+        std::fs::remove_dir(path).unwrap();
+    }
 
     #[test]
     fn external_imports_are_source_scoped_and_non_destructive() {

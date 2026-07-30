@@ -400,3 +400,28 @@ button.player-art {
 
 .player-art:hover .player-art-expand,
 .player-art:focus-visible .player-art-expand { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cover-overlay,
+  .cover-content {
+    animation: none;
+  }
+
+  .cover-overlay.closing {
+    animation: none;
+    opacity: 0;
+  }
+
+  .cover-overlay.closing .cover-content {
+    animation: none;
+  }
+
+  .cover-bg-pane,
+  .cover-glow,
+  .cover-seek-input::-webkit-slider-thumb,
+  .cover-seek-input::-moz-range-thumb,
+  .cover-btn,
+  .player-art-expand {
+    transition: none;
+  }
+}

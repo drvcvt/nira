@@ -373,8 +373,13 @@ fn DiscoveryRow(result: DiscoveryResult, on_play: EventHandler<()>) -> Element {
             role: "button",
             onclick: move |_| on_play.call(()),
             onkeydown: move |e: KeyboardEvent| {
-                if e.key() == Key::Enter {
+                let key = e.key();
+                let is_space = key.to_string() == " ";
+                if key == Key::Enter || is_space {
                     e.prevent_default();
+                    if is_space {
+                        e.stop_propagation();
+                    }
                     on_play.call(());
                 }
             },

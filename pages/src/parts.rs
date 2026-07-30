@@ -159,7 +159,13 @@ pub fn PlayableLi(
                 }
             },
             onkeydown: move |e: KeyboardEvent| {
-                if e.key() == Key::Enter {
+                let key = e.key();
+                let is_space = key.to_string() == " ";
+                if key == Key::Enter || is_space {
+                    e.prevent_default();
+                    if is_space {
+                        e.stop_propagation();
+                    }
                     key_queue.play_context(key_tracks.to_vec(), index);
                     if let Some(cb) = on_played.as_ref() {
                         cb.call(());
@@ -228,14 +234,9 @@ pub fn ArtistLinks(artists: Vec<ArtistRef>) -> Element {
                             detail.open_artist(uri.clone());
                         }
                     },
-                    // Keyboard Enter activates the button's click natively;
-                    // without this stop the keydown ALSO bubbles to the
-                    // surrounding PlayableLi and starts playback.
-                    onkeydown: |e: KeyboardEvent| {
-                        if e.key() == Key::Enter {
-                            e.stop_propagation();
-                        }
-                    },
+                    // Native button activation must not also trigger a
+                    // surrounding role=button row.
+                    onkeydown: |e: KeyboardEvent| e.stop_propagation(),
                     "{artist.name}"
                 }
             }
@@ -262,12 +263,8 @@ pub fn AlbumLink(album: AlbumRef) -> Element {
                         detail.open_album(uri.clone());
                     }
                 },
-                // Same Enter-bubbling guard as ArtistLinks.
-                onkeydown: |e: KeyboardEvent| {
-                    if e.key() == Key::Enter {
-                        e.stop_propagation();
-                    }
-                },
+                // Same bubbling guard as ArtistLinks.
+                onkeydown: |e: KeyboardEvent| e.stop_propagation(),
                 "{title}"
             }
         }

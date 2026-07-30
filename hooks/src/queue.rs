@@ -98,7 +98,7 @@ pub enum RepeatMode {
 /// On-disk shape of the queue (cache tier). Written on every queue-shape
 /// change, read once on boot so a restart resumes where the session left
 /// off — paused, at the same entry; pressing play starts it.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct PersistedQueue {
     entries: Vec<Track>,
     current_index: Option<usize>,
@@ -118,6 +118,19 @@ struct PersistedQueue {
 struct PersistedPosition {
     uri: String,
     secs: u64,
+}
+
+fn restore_queue(
+    path: Option<std::path::PathBuf>,
+) -> (Option<PersistedQueue>, Option<std::path::PathBuf>) {
+    let Some(path) = path else {
+        return (None, None);
+    };
+    match config::load_json(&path) {
+        config::JsonLoad::Loaded(state) => (Some(state), Some(path)),
+        config::JsonLoad::Missing | config::JsonLoad::Quarantined { .. } => (None, Some(path)),
+        config::JsonLoad::Blocked { .. } => (None, None),
+    }
 }
 
 fn local_transport_allowed(following_host: bool) -> bool {
@@ -192,6 +205,7 @@ impl UseQueue {
     /// Hand the watcher its follow-mode gate. Owned here rather than in
     /// `use_together` so the queue never has to know that crate exists.
     pub fn set_follow_mode(&self, on: bool) {
+        self.player.set_transport_locked(on);
         let mut f = self.follow_mode;
         if *f.peek() != on {
             f.set(on);
@@ -336,7 +350,7 @@ impl UseQueue {
         self.bump_load_generation();
         let mut is_loading = self.is_loading_track;
         is_loading.set(false);
-        self.player.stop();
+        self.player.sync_stop();
     }
 
     /// Drop everything except the currently-playing entry; playback keeps
@@ -615,6 +629,9 @@ impl UseQueue {
     }
 
     pub fn toggle_shuffle(&self) {
+        if !local_transport_allowed(*self.follow_mode.peek()) {
+            return;
+        }
         // Re-ordering moves the "next" slot — any queued hand-off is stale.
         self.invalidate_gapless();
         let next = !*self.shuffle_enabled.peek();
@@ -692,6 +709,9 @@ impl UseQueue {
     }
 
     pub fn cycle_repeat(&self) {
+        if !local_transport_allowed(*self.follow_mode.peek()) {
+            return;
+        }
         let next = match *self.repeat_mode.peek() {
             RepeatMode::Off => RepeatMode::All,
             RepeatMode::All => RepeatMode::One,
@@ -1180,6 +1200,11 @@ pub fn install(
     sc: Arc<SoundCloudProvider>,
     sp: Arc<SpotifyProvider>,
 ) {
+    let restored_queue = use_hook(|| restore_queue(config::AppConfig::queue_state_path()));
+    let queue_persist_path = use_signal({
+        let path = restored_queue.1.clone();
+        move || path
+    });
     let entries = use_signal(Vec::<Track>::new);
     let current_index = use_signal(|| None::<usize>);
     let shuffle_enabled = use_signal(|| false);
@@ -1221,15 +1246,12 @@ pub fn install(
     // stopped — the bottombar's play button already starts the queue at
     // current_index when nothing is loaded. Mid-track position is not
     // restored; resume starts the entry from the top.
-    use_hook(move || {
-        let Some(path) = config::AppConfig::queue_state_path() else {
-            return;
-        };
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            return;
-        };
-        match serde_json::from_str::<PersistedQueue>(&raw) {
-            Ok(saved) if !saved.entries.is_empty() => {
+    use_hook({
+        let restored = restored_queue.0.clone();
+        move || {
+            if let Some(saved) = restored
+                && !saved.entries.is_empty()
+            {
                 let idx = saved
                     .current_index
                     .map(|i| i.min(saved.entries.len() - 1))
@@ -1241,7 +1263,10 @@ pub fn install(
                     && let Ok(pos_raw) = std::fs::read_to_string(&pos_path)
                     && let Ok(saved_pos) = serde_json::from_str::<PersistedPosition>(&pos_raw)
                     && saved_pos.secs > 5
-                    && saved.entries.get(idx).is_some_and(|t| t.uri.0 == saved_pos.uri)
+                    && saved
+                        .entries
+                        .get(idx)
+                        .is_some_and(|t| t.uri.0 == saved_pos.uri)
                 {
                     let mut hint = resume_hint;
                     hint.set(Some((saved_pos.uri, Duration::from_secs(saved_pos.secs))));
@@ -1257,8 +1282,6 @@ pub fn install(
                 repeat_sig.set(saved.repeat);
                 pre_shuffle_sig.set(saved.pre_shuffle.filter(|_| saved.shuffle));
             }
-            Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "queue restore: parse failed; starting empty"),
         }
     });
 
@@ -1267,6 +1290,7 @@ pub fn install(
     // thread — this effect runs on the UI thread, and a synchronous disk
     // write per queue click was a visible input stall.
     let mut persist_prev_len = use_signal(|| usize::MAX);
+    let mut skip_initial_persist = use_signal(|| true);
     use_effect(move || {
         let state = PersistedQueue {
             entries: entries.read().clone(),
@@ -1275,6 +1299,11 @@ pub fn install(
             repeat: *repeat_mode.read(),
             pre_shuffle: pre_shuffle.read().clone(),
         };
+        if *skip_initial_persist.peek() {
+            skip_initial_persist.set(false);
+            persist_prev_len.set(state.entries.len());
+            return;
+        }
         // Diagnosis for "queue entries vanish": every shrink is logged with
         // both lengths so nira.log shows which mutation ate them.
         let prev = *persist_prev_len.peek();
@@ -1287,7 +1316,7 @@ pub fn install(
             );
         }
         persist_prev_len.set(state.entries.len());
-        let Some(path) = config::AppConfig::queue_state_path() else {
+        let Some(path) = queue_persist_path.peek().clone() else {
             return;
         };
         if let Err(e) = config::AppConfig::atomic_write_json_bg(path, &state) {
@@ -1462,6 +1491,23 @@ pub fn use_queue() -> UseQueue {
 mod tests {
     use super::*;
     use provider_api::{ArtistRef, ArtistUri, TrackUri};
+
+    #[test]
+    fn blocked_queue_file_disables_persistence() {
+        let path = std::env::temp_dir().join(format!(
+            "nira-queue-blocked-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir(&path).unwrap();
+
+        let (restored, writable_path) = restore_queue(Some(path.clone()));
+
+        assert!(restored.is_none());
+        assert!(writable_path.is_none());
+        assert!(path.is_dir());
+        std::fs::remove_dir(path).unwrap();
+    }
 
     #[test]
     fn following_a_host_rejects_local_transport_changes() {

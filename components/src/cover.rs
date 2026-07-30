@@ -97,6 +97,7 @@ pub fn CoverOverlay() -> Element {
     let snap = player.snapshot();
     let np = snap.now_playing.clone();
     let playing = snap.has_source && !snap.is_paused;
+    let transport_locked = snap.transport_locked;
     // Same idle fallback the bottombar has: with a restored queue but nothing
     // loaded yet, show the pending entry rather than "Nothing playing" — the
     // play button below starts exactly that track, so claiming nothing is
@@ -240,8 +241,9 @@ pub fn CoverOverlay() -> Element {
                             max: "1000",
                             step: "1",
                             value: "{(progress_pct * 10.0) as i64}",
-                            disabled: duration.map(|d| d.as_secs() == 0).unwrap_or(true),
-                            "aria-label": "Seek",
+                            disabled: transport_locked || duration.map(|d| d.as_secs() == 0).unwrap_or(true),
+                            title: if transport_locked { "Following host" } else { "Seek" },
+                            "aria-label": if transport_locked { "Following host" } else { "Seek" },
                             onpointerdown: move |_| {
                                 scrub.set(None);
                                 scrub_dragging.set(true);
@@ -277,7 +279,7 @@ pub fn CoverOverlay() -> Element {
                         title: if shuffle_on { "Shuffle on" } else { "Shuffle off" },
                         "aria-label": if shuffle_on { "Shuffle on" } else { "Shuffle off" },
                         "aria-pressed": if shuffle_on { "true" } else { "false" },
-                        disabled: queue_len < 2,
+                        disabled: transport_locked || queue_len < 2,
                         onclick: {
                             let queue = queue.clone();
                             move |_| queue.toggle_shuffle()
@@ -286,9 +288,9 @@ pub fn CoverOverlay() -> Element {
                     }
                     button {
                         class: "cover-btn",
-                        title: "Previous",
-                        "aria-label": "Previous track",
-                        disabled: !has_prev,
+                        title: if transport_locked { "Following host" } else { "Previous" },
+                        "aria-label": if transport_locked { "Following host" } else { "Previous track" },
+                        disabled: transport_locked || !has_prev,
                         onclick: {
                             let queue = queue.clone();
                             move |_| queue.previous()
@@ -297,8 +299,9 @@ pub fn CoverOverlay() -> Element {
                     }
                     button {
                         class: "cover-btn cover-play",
-                        title: if playing { "Pause" } else { "Play" },
-                        "aria-label": if playing { "Pause" } else { "Play" },
+                        title: if transport_locked { "Following host" } else if playing { "Pause" } else { "Play" },
+                        "aria-label": if transport_locked { "Following host" } else if playing { "Pause" } else { "Play" },
+                        disabled: transport_locked,
                         onclick: {
                             let player = player.clone();
                             let queue = queue.clone();
@@ -318,9 +321,9 @@ pub fn CoverOverlay() -> Element {
                     }
                     button {
                         class: "cover-btn",
-                        title: "Next",
-                        "aria-label": "Next track",
-                        disabled: !has_next,
+                        title: if transport_locked { "Following host" } else { "Next" },
+                        "aria-label": if transport_locked { "Following host" } else { "Next track" },
+                        disabled: transport_locked || !has_next,
                         onclick: {
                             let queue = queue.clone();
                             move |_| queue.next()
@@ -335,6 +338,7 @@ pub fn CoverOverlay() -> Element {
                         },
                         title: "{repeat_title}",
                         "aria-label": "{repeat_title}",
+                        disabled: transport_locked,
                         onclick: {
                             let queue = queue.clone();
                             move |_| queue.cycle_repeat()
@@ -372,6 +376,7 @@ const VINYL_JS: &str = r#"
       return;
     }
     const retired = () => !disc.isConnected || gen !== window.__niraVinylGen;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     // -- background crossfade: two panes, back pane gets the new art and
     //    fades over the front (600ms InOutQuart transition in CSS).
@@ -379,6 +384,9 @@ const VINYL_JS: &str = r#"
       document.getElementById('nira-cover-bg-a'),
       document.getElementById('nira-cover-bg-b'),
     ];
+    if (reduceMotion) {
+      for (const pane of panes) if (pane) pane.style.transition = 'none';
+    }
     let front = 0, shownSrc = null;
     const setPane = (pane, src) => {
       for (const el of pane.children)
@@ -396,7 +404,7 @@ const VINYL_JS: &str = r#"
       ) * 180 / Math.PI;
     };
     disc.addEventListener('pointerdown', (e) => {
-      if (retired()) return;
+      if (retired() || reduceMotion) return;
       dragging = true;
       vel = 0;
       prevAngle = angleAt(e);
@@ -433,7 +441,7 @@ const VINYL_JS: &str = r#"
       requestAnimationFrame(frame);
       const dt = Math.min(now - last, 100);
       last = now;
-      if (!dragging) {
+      if (!reduceMotion && !dragging) {
         const n = dt / 4; // spec ticks elapsed this frame
         const target = overlay.dataset.playing === 'true' ? BASE : 0;
         const speed = Math.abs(vel);
@@ -502,5 +510,12 @@ mod tests {
         // No top-level await — the eval handle is dropped immediately, so
         // the script must finish synchronously and live on via rAF.
         assert!(!VINYL_JS.contains("await"));
+    }
+
+    #[test]
+    fn vinyl_respects_reduced_motion_without_hiding_track_changes() {
+        assert!(VINYL_JS.contains("prefers-reduced-motion: reduce"));
+        assert!(VINYL_JS.contains("if (!reduceMotion && !dragging)"));
+        assert!(VINYL_JS.contains("src !== shownSrc"));
     }
 }

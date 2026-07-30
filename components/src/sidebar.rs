@@ -63,6 +63,8 @@ fn NavList(items: &'static [NavItem], section: Signal<Section>) -> Element {
             for item in items {
                 button {
                     class: if *section.read() == item.section { "nav-item active" } else { "nav-item" },
+                    title: "{item.label}",
+                    "aria-label": "{item.label}",
                     onclick: {
                         let mut section = section;
                         let s = item.section;

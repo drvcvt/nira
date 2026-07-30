@@ -28,3 +28,64 @@ fn player_controls_publish_each_input_before_the_poller() {
     assert!(player.contains(&reflected_seek));
     assert!(player.contains(&reflected_volume));
 }
+
+#[test]
+fn custom_button_rows_own_space_instead_of_global_playback() {
+    let rows = [
+        include_str!("../src/parts.rs"),
+        include_str!("../src/discover.rs"),
+        include_str!("../src/library.rs"),
+        include_str!("../../components/src/bottombar.rs"),
+    ];
+    for source in rows {
+        assert!(source.contains("let is_space = key.to_string() == \" \";"));
+        assert!(source.contains("e.stop_propagation();"));
+    }
+
+    let shell = include_str!("../../nira/src/main.rs");
+    assert!(shell.contains("e.target.closest('button:not(.hotkey-bridge), [role=button]')"));
+    assert!(!shell.contains("Enter only: Space stays the global play/pause bind."));
+
+    let nested_controls = [
+        include_str!("../src/parts.rs"),
+        include_str!("../src/library.rs"),
+        include_str!("../../components/src/bottombar.rs"),
+    ];
+    for source in nested_controls {
+        assert!(source.contains("onkeydown: |e: KeyboardEvent| e.stop_propagation()"));
+    }
+}
+
+#[test]
+fn home_and_cover_respect_reduced_motion() {
+    let home = include_str!("../../nira/assets/css/home.css");
+    let cover = include_str!("../../nira/assets/css/cover.css");
+
+    for css in [home, cover] {
+        assert!(css.contains("@media (prefers-reduced-motion: reduce)"));
+        assert!(css.contains("animation: none"));
+        assert!(css.contains("transition: none"));
+    }
+    assert!(home.contains("transform: none"));
+    assert!(cover.contains(".cover-overlay.closing"));
+}
+
+#[test]
+fn narrow_layout_keeps_sidebar_and_player_geometry_in_sync() {
+    let css = include_str!("../../nira/assets/css/responsive.css");
+
+    assert!(css.contains("@media (max-width: 900px)"));
+    assert!(css.contains("--sidebar-w: 72px"));
+    assert!(css.contains("@media (max-width: 700px)"));
+    assert!(css.contains("--player-h: 142px"));
+    assert!(css.contains(".settings-shell"));
+}
+
+#[test]
+fn audio_startup_failure_is_rendered_instead_of_panicking() {
+    let source = include_str!("../../nira/src/main.rs");
+
+    assert!(!source.contains(".expect(\"audio engine failed to start\")"));
+    assert!(source.contains("Audio output could not start"));
+    assert!(source.contains("The output device may be missing or busy."));
+}

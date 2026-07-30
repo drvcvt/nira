@@ -77,7 +77,8 @@ async fn run(player: Player) -> Result<(), Box<dyn std::error::Error>> {
         };
         let metadata = build_metadata(&snap);
         let volume: Volume = snap.volume as f64;
-        let can_seek = snap.has_source;
+        let can_transport = !snap.transport_locked;
+        let can_seek = snap.has_source && can_transport;
 
         {
             let mut s = state.lock().unwrap();
@@ -92,6 +93,13 @@ async fn run(player: Player) -> Result<(), Box<dyn std::error::Error>> {
             if s.volume != Some(volume) {
                 s.volume = Some(volume);
                 changes.push(Property::Volume(volume));
+            }
+            if s.can_transport != Some(can_transport) {
+                s.can_transport = Some(can_transport);
+                changes.push(Property::CanGoNext(can_transport));
+                changes.push(Property::CanGoPrevious(can_transport));
+                changes.push(Property::CanPlay(can_transport));
+                changes.push(Property::CanPause(can_transport));
             }
             if s.can_seek != Some(can_seek) {
                 s.can_seek = Some(can_seek);
@@ -168,6 +176,7 @@ struct MprisState {
     playback_status: Option<PlaybackStatus>,
     metadata: Option<Metadata>,
     volume: Option<Volume>,
+    can_transport: Option<bool>,
     can_seek: Option<bool>,
 }
 
@@ -338,19 +347,20 @@ impl PlayerInterface for NiraMprisImpl {
         // widgets) hide the buttons entirely when they're false. The
         // transport bus tolerates a Next/Previous arriving with nothing in
         // the queue: queue.next() returns early if there's no current_index.
-        Ok(true)
+        Ok(!self.player.snapshot().transport_locked)
     }
     async fn can_go_previous(&self) -> fdo::Result<bool> {
-        Ok(true)
+        Ok(!self.player.snapshot().transport_locked)
     }
     async fn can_play(&self) -> fdo::Result<bool> {
-        Ok(true)
+        Ok(!self.player.snapshot().transport_locked)
     }
     async fn can_pause(&self) -> fdo::Result<bool> {
-        Ok(true)
+        Ok(!self.player.snapshot().transport_locked)
     }
     async fn can_seek(&self) -> fdo::Result<bool> {
-        Ok(self.player.snapshot().has_source)
+        let snap = self.player.snapshot();
+        Ok(snap.has_source && !snap.transport_locked)
     }
     async fn can_control(&self) -> fdo::Result<bool> {
         Ok(true)

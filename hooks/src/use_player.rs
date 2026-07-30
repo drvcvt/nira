@@ -97,6 +97,9 @@ impl UsePlayer {
         self.player.stop();
     }
     pub fn seek(&self, target: std::time::Duration) {
+        if self.snapshot.peek().transport_locked {
+            return;
+        }
         let mut snapshot = self.snapshot;
         snapshot.write().position = target;
         self.player.seek(target);

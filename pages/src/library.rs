@@ -1247,7 +1247,13 @@ fn TrackRow(
             role: "button",
             onclick: move |_| queue.play_context(play_context.to_vec(), index),
             onkeydown: move |e: KeyboardEvent| {
-                if e.key() == Key::Enter {
+                let key = e.key();
+                let is_space = key.to_string() == " ";
+                if key == Key::Enter || is_space {
+                    e.prevent_default();
+                    if is_space {
+                        e.stop_propagation();
+                    }
                     key_queue.play_context(key_context.to_vec(), index);
                 }
             },
@@ -1285,6 +1291,7 @@ fn TrackRow(
                         class: "track-row-move",
                         title: "Move up",
                         disabled: on_move_up.is_none(),
+                        onkeydown: |e: KeyboardEvent| e.stop_propagation(),
                         onclick: move |e: MouseEvent| {
                             e.stop_propagation();
                             if let Some(h) = on_move_up {
@@ -1297,6 +1304,7 @@ fn TrackRow(
                         class: "track-row-move",
                         title: "Move down",
                         disabled: on_move_down.is_none(),
+                        onkeydown: |e: KeyboardEvent| e.stop_propagation(),
                         onclick: move |e: MouseEvent| {
                             e.stop_propagation();
                             if let Some(h) = on_move_down {
@@ -1311,6 +1319,7 @@ fn TrackRow(
                 button {
                     class: "track-row-unlike",
                     title: remove_title.as_deref().unwrap_or("Remove from Liked"),
+                    onkeydown: |e: KeyboardEvent| e.stop_propagation(),
                     onclick: move |e: MouseEvent| {
                         e.stop_propagation();
                         on_unlike.call(());
