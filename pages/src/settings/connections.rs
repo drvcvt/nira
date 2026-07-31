@@ -39,6 +39,8 @@ pub(super) fn ConnectionsSettings() -> Element {
 
     let mut sc_status = use_signal(|| None::<String>);
     let mut sc_refreshing = use_signal(|| false);
+    let mut discord_status = use_signal(|| None::<String>);
+    let discord_presence_on = config.read().discord_presence;
     let mut sc_profile_draft = use_signal({
         let cfg = config.read();
         move || cfg.soundcloud_profile_url.clone().unwrap_or_default()
@@ -52,6 +54,47 @@ pub(super) fn ConnectionsSettings() -> Element {
         section { class: "settings-group settings-stack",
             h2 { "Connections" }
             p { class: "hint", "Provider credentials and service status." }
+
+            SettingsCard {
+                title: "Discord activity".to_string(),
+                icon: "fa-brands fa-discord".to_string(),
+                p { class: "settings-card-copy",
+                    "Share the current song, artist, album and available cover on your Discord profile. The playback provider is never shown."
+                }
+                div { class: "source-toggle-grid",
+                    button {
+                        class: if discord_presence_on { "source-toggle on" } else { "source-toggle" },
+                        "aria-pressed": if discord_presence_on { "true" } else { "false" },
+                        onclick: move |_| {
+                            let next = !discord_presence_on;
+                            let result = {
+                                let mut w = config.write();
+                                w.discord_presence = next;
+                                w.save()
+                            };
+                            discord_status.set(Some(match result {
+                                Ok(()) if next => "Discord activity enabled.".into(),
+                                Ok(()) => "Discord activity disabled and cleared.".into(),
+                                Err(e) => format!("Changed for this session, but saving failed: {e}"),
+                            }));
+                        },
+                        span { class: "source-toggle-icon",
+                            if discord_presence_on {
+                                i { class: "fa-solid fa-check" }
+                            } else {
+                                i { class: "fa-solid fa-plus" }
+                            }
+                        }
+                        span { class: "source-toggle-copy",
+                            strong { if discord_presence_on { "Sharing on" } else { "Sharing off" } }
+                            small { "Click to change it immediately." }
+                        }
+                    }
+                }
+                if let Some(msg) = discord_status.read().as_ref() {
+                    p { class: "settings-status", "{msg}" }
+                }
+            }
 
             ListenTogetherCard {}
 

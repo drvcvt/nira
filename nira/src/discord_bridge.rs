@@ -1,4 +1,6 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use discord_rich_presence::activity::{self, ActivityType, Assets, StatusDisplayType, Timestamps};
@@ -109,16 +111,20 @@ fn update_allowed(updates: &mut VecDeque<Instant>, now: Instant) -> bool {
     updates.len() < MAX_UPDATES_PER_WINDOW
 }
 
-pub fn start(player: Player) {
+fn projected_presence(snapshot: &PlayerSnapshot, enabled: bool) -> Option<Presence> {
+    enabled.then(|| Presence::from_snapshot(snapshot)).flatten()
+}
+
+pub fn start(player: Player, enabled: Arc<AtomicBool>) {
     if let Err(error) = std::thread::Builder::new()
         .name("nira-discord".into())
-        .spawn(move || run(player, APPLICATION_ID))
+        .spawn(move || run(player, enabled, APPLICATION_ID))
     {
         tracing::warn!(%error, "could not start Discord presence thread");
     }
 }
 
-fn run(player: Player, application_id: &'static str) {
+fn run(player: Player, enabled: Arc<AtomicBool>, application_id: &'static str) {
     let mut client = DiscordIpcClient::new(application_id);
     let mut connected = false;
     let mut last_attempt = Instant::now()
@@ -130,7 +136,8 @@ fn run(player: Player, application_id: &'static str) {
 
     loop {
         let now = Instant::now();
-        if !connected && now.duration_since(last_attempt) >= RETRY_INTERVAL {
+        let enabled = enabled.load(Ordering::Relaxed);
+        if enabled && !connected && now.duration_since(last_attempt) >= RETRY_INTERVAL {
             last_attempt = now;
             if client.connect().is_ok() {
                 connected = true;
@@ -141,7 +148,7 @@ fn run(player: Player, application_id: &'static str) {
         }
 
         if connected {
-            let current = Presence::from_snapshot(&player.snapshot());
+            let current = projected_presence(&player.snapshot(), enabled);
             let needs_set = current.as_ref().is_some_and(|presence| {
                 last_sent.as_ref().is_none_or(|(previous, sent_at)| {
                     sent_at.elapsed() >= HEARTBEAT_INTERVAL
@@ -149,7 +156,10 @@ fn run(player: Player, application_id: &'static str) {
                 })
             });
             let needs_clear = current.is_none() && !cleared;
-            let can_update = (needs_set || needs_clear) && update_allowed(&mut updates, now);
+            // Privacy-off clears immediately even if recent track changes used
+            // the normal Discord update budget.
+            let can_update = needs_clear && !enabled
+                || (needs_set || needs_clear) && update_allowed(&mut updates, now);
             let result = match current {
                 Some(presence) if needs_set && can_update => client
                     .set_activity(presence.activity(unix_ms()))
@@ -201,7 +211,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::time::{Duration, Instant};
 
-    use super::{Presence, presence_json, refresh_needed, update_allowed};
+    use super::{Presence, presence_json, projected_presence, refresh_needed, update_allowed};
     use player::{Active, NowPlaying, PlayerSnapshot};
 
     fn snapshot(
@@ -264,6 +274,17 @@ mod tests {
         .expect("playing snapshot");
 
         assert!(value.get("timestamps").is_none());
+    }
+
+    #[test]
+    fn disabled_presence_is_hidden() {
+        assert!(
+            projected_presence(
+                &snapshot("Provider A", "provider-a", "a:track:1", false),
+                false,
+            )
+            .is_none()
+        );
     }
 
     #[test]

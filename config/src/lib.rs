@@ -247,6 +247,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub soundcloud_profile_url: Option<String>,
 
+    /// Share provider-blind now-playing metadata through Discord Rich Presence.
+    #[serde(default = "default_true")]
+    pub discord_presence: bool,
+
     /// User-supplied ListenBrainz token (https://listenbrainz.org/profile/).
     /// Enables outbound scrobbling. Empty = scrobbling disabled.
     #[serde(default)]
@@ -287,6 +291,7 @@ impl Default for AppConfig {
             volume: default_volume(),
             spotify_client_id: None,
             soundcloud_profile_url: None,
+            discord_presence: true,
             listenbrainz_token: None,
             listenbrainz_username: None,
             lastfm_api_key: None,
@@ -673,6 +678,12 @@ mod tests {
         assert!(cfg.discovery_soundcloud);
         assert!(!cfg.discovery_listenbrainz);
         assert!(cfg.discovery_lastfm);
+    }
+
+    #[test]
+    fn discord_presence_defaults_on_for_existing_configs() {
+        let cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(cfg.discord_presence);
     }
 
     #[test]
