@@ -113,7 +113,6 @@ pub(super) fn MusicSettings() -> Element {
                                 max: "6",
                                 step: "0.5",
                                 value: "{gain}",
-                                disabled: !equalizer_enabled,
                                 "aria-label": "{label} equalizer gain",
                                 oninput: {
                                     let player = player.clone();

@@ -123,6 +123,10 @@ fn music_settings_expose_a_three_band_equalizer() {
     for band in ["Low", "Mid", "High"] {
         assert!(connections.contains(&format!("\"{band}\"")));
     }
+    assert!(!connections.contains("disabled: !equalizer_enabled"));
     assert!(css.contains(".equalizer-grid"));
     assert!(css.contains(".equalizer-band"));
+    assert!(css.contains(
+        ".equalizer-toggle {\n  align-self: flex-start;\n  align-items: center;"
+    ));
 }

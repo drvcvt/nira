@@ -348,6 +348,7 @@
 
 .equalizer-toggle {
   align-self: flex-start;
+  align-items: center;
 }
 
 .equalizer-grid {
@@ -386,11 +387,6 @@
 .equalizer-band .vol-slider {
   width: 100%;
   min-width: 72px;
-}
-
-.equalizer-band .vol-slider:disabled {
-  cursor: default;
-  opacity: 0.4;
 }
 
 .equalizer-value {
