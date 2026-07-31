@@ -12,7 +12,7 @@ mod library;
 use dioxus::prelude::*;
 
 use appearance::AppearanceSettings;
-use connections::ConnectionsSettings;
+use connections::{MusicSettings, ProviderSettings};
 use data::DataSettings;
 use discovery::DiscoverySettings;
 use library::LibrarySettings;
@@ -20,6 +20,7 @@ use library::LibrarySettings;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsTab {
     Music,
+    Providers,
     Theme,
     Discovery,
     Data,
@@ -27,6 +28,7 @@ enum SettingsTab {
 
 const TABS: &[(SettingsTab, &str, &str)] = &[
     (SettingsTab::Music, "Music", "fa-solid fa-music"),
+    (SettingsTab::Providers, "Providers", "fa-solid fa-plug"),
     (SettingsTab::Theme, "Theme", "fa-solid fa-palette"),
     (SettingsTab::Discovery, "Discovery", "fa-solid fa-compass"),
     (SettingsTab::Data, "Data", "fa-solid fa-database"),
@@ -58,12 +60,11 @@ pub fn Settings() -> Element {
 
                 div { class: "settings-content",
                     match active {
-                        // Music — streaming sources plus the local folder they
-                        // download into.
                         SettingsTab::Music => rsx! {
-                            ConnectionsSettings {}
+                            MusicSettings {}
                             LibrarySettings {}
                         },
+                        SettingsTab::Providers => rsx! { ProviderSettings {} },
                         SettingsTab::Theme => rsx! { AppearanceSettings {} },
                         SettingsTab::Discovery => rsx! { DiscoverySettings {} },
                         SettingsTab::Data => rsx! { DataSettings {} },

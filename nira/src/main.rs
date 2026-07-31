@@ -227,8 +227,13 @@ fn App() -> Element {
     let player_result = use_hook({
         let app_cfg = app_cfg.clone();
         move || {
-            Player::spawn(AppConfig::play_history_path(), app_cfg.volume)
-                .map_err(|error| error.to_string())
+            Player::spawn(
+                AppConfig::play_history_path(),
+                app_cfg.volume,
+                app_cfg.equalizer_enabled,
+                app_cfg.equalizer_bands,
+            )
+            .map_err(|error| error.to_string())
         }
     });
     let player = match &player_result {

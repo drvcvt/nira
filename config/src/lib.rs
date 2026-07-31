@@ -236,6 +236,12 @@ pub struct AppConfig {
     #[serde(default = "default_volume")]
     pub volume: f32,
 
+    /// Lightweight three-band equalizer: low, mid and high gains in dB.
+    #[serde(default)]
+    pub equalizer_enabled: bool,
+    #[serde(default)]
+    pub equalizer_bands: [f32; 3],
+
     /// User-registered Spotify Developer app Client ID. Required for the
     /// OAuth PKCE handshake. Set via Settings → Spotify. Empty until the user
     /// pastes one in.
@@ -289,6 +295,8 @@ impl Default for AppConfig {
             theme: ThemePref::default(),
             ui_font: None,
             volume: default_volume(),
+            equalizer_enabled: false,
+            equalizer_bands: [0.0; 3],
             spotify_client_id: None,
             soundcloud_profile_url: None,
             discord_presence: true,
@@ -684,6 +692,13 @@ mod tests {
     fn discord_presence_defaults_on_for_existing_configs() {
         let cfg: AppConfig = serde_json::from_str("{}").unwrap();
         assert!(cfg.discord_presence);
+    }
+
+    #[test]
+    fn missing_equalizer_config_defaults_flat_and_off() {
+        let cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!cfg.equalizer_enabled);
+        assert_eq!(cfg.equalizer_bands, [0.0; 3]);
     }
 
     #[test]

@@ -128,6 +128,22 @@ impl UsePlayer {
         }
     }
 
+    pub fn set_equalizer(&self, enabled: bool, bands: [f32; 3]) {
+        let bands = bands.map(|gain| gain.clamp(-6.0, 6.0));
+        self.player.set_equalizer(enabled, bands);
+
+        let mut config = self.config;
+        let to_save = {
+            let mut cfg = config.write();
+            cfg.equalizer_enabled = enabled;
+            cfg.equalizer_bands = bands;
+            cfg.clone()
+        };
+        if let Err(e) = to_save.save_bg() {
+            tracing::warn!(error = %e, "equalizer persist failed");
+        }
+    }
+
     pub fn clear_history(&self) -> std::io::Result<()> {
         self.player.clear_history()
     }

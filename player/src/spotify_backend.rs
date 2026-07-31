@@ -27,6 +27,8 @@ use librespot::playback::config::{AudioFormat, PlayerConfig};
 use librespot::playback::mixer::{self, Mixer, MixerConfig};
 use librespot::playback::player::{Player as LibrespotPlayer, PlayerEvent};
 
+use crate::equalizer::{EqualizedSink, EqualizerControl};
+
 #[derive(Debug, thiserror::Error)]
 pub enum SpotifyBackendError {
     #[error("librespot session connect: {0}")]
@@ -63,7 +65,10 @@ pub struct SpotifyState {
 }
 
 impl SpotifyBackend {
-    pub async fn new(access_token: &str) -> Result<Self, SpotifyBackendError> {
+    pub(crate) async fn new(
+        access_token: &str,
+        equalizer: EqualizerControl,
+    ) -> Result<Self, SpotifyBackendError> {
         let session_config = SessionConfig::default();
         // Emit a position event every 500 ms while playing so our snapshot
         // tick can show a live timer in the bottombar. Normalisation on so
@@ -91,7 +96,10 @@ impl SpotifyBackend {
 
         let player =
             LibrespotPlayer::new(player_config, session.clone(), volume_getter, move || {
-                backend_fn(None, audio_format)
+                Box::new(EqualizedSink::new(
+                    backend_fn(None, audio_format),
+                    equalizer,
+                ))
             });
 
         let state = Arc::new(RwLock::new(SpotifyState::default()));

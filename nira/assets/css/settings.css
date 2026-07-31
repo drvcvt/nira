@@ -45,6 +45,13 @@
   background: var(--raise3);
 }
 
+.listen-together-code {
+  max-width: 100%;
+  font-family: "Geist Mono", monospace;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .settings-mono {
   background: var(--raise2);
   padding: 5px 9px;
@@ -337,6 +344,64 @@
   font-style: normal;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.equalizer-toggle {
+  align-self: flex-start;
+}
+
+.equalizer-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.equalizer-band {
+  display: grid;
+  grid-template-columns: minmax(48px, auto) minmax(72px, 1fr) 54px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--rs);
+  background: var(--raise2);
+}
+
+.equalizer-band-copy {
+  display: grid;
+  line-height: 1.2;
+}
+
+.equalizer-band-copy strong {
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.equalizer-band-copy small {
+  color: var(--faint);
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.equalizer-band .vol-slider {
+  width: 100%;
+  min-width: 72px;
+}
+
+.equalizer-band .vol-slider:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.equalizer-value {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+@media (max-width: 980px) {
+  .equalizer-grid { grid-template-columns: 1fr; }
 }
 
 

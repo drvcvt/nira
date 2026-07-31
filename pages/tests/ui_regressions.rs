@@ -89,3 +89,40 @@ fn audio_startup_failure_is_rendered_instead_of_panicking() {
     assert!(source.contains("Audio output could not start"));
     assert!(source.contains("The output device may be missing or busy."));
 }
+
+#[test]
+fn settings_separate_music_from_providers_and_style_sessions() {
+    let settings = include_str!("../src/settings/mod.rs");
+    let connections = include_str!("../src/settings/connections.rs");
+    let settings_css = include_str!("../../nira/assets/css/settings.css");
+    let base_css = include_str!("../../nira/assets/css/base.css");
+
+    assert!(settings.contains("SettingsTab::Providers"));
+    assert!(settings.contains("MusicSettings {}"));
+    assert!(settings.contains("ProviderSettings {}"));
+    assert!(connections.contains("pub(super) fn MusicSettings()"));
+    assert!(connections.contains("pub(super) fn ProviderSettings()"));
+    assert_eq!(
+        connections
+            .matches("settings-input listen-together-code")
+            .count(),
+        2
+    );
+    assert!(settings_css.contains(".listen-together-code"));
+    assert!(base_css.contains("height: 30px;\n  padding: 0 11px;\n  border-radius: var(--rs);"));
+    assert!(base_css.contains("corner-shape: squircle;"));
+}
+
+#[test]
+fn music_settings_expose_a_three_band_equalizer() {
+    let connections = include_str!("../src/settings/connections.rs");
+    let css = include_str!("../../nira/assets/css/settings.css");
+
+    assert!(connections.contains("title: \"Equalizer\""));
+    assert!(connections.contains("set_equalizer"));
+    for band in ["Low", "Mid", "High"] {
+        assert!(connections.contains(&format!("\"{band}\"")));
+    }
+    assert!(css.contains(".equalizer-grid"));
+    assert!(css.contains(".equalizer-band"));
+}

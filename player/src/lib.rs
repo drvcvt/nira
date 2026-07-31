@@ -13,6 +13,7 @@
 //! shape. UI consumes `PlayerSnapshot` and never knows which backend
 //! produced it.
 
+mod equalizer;
 mod history;
 mod spotify_backend;
 mod viz;
@@ -38,6 +39,8 @@ use stream_download::source::SourceStream;
 use stream_download::storage::temp::TempStorageProvider;
 use stream_download::{Settings as StreamSettings, StreamDownload};
 use tokio::sync::mpsc as tokio_mpsc;
+
+use equalizer::{EqualizedSource, EqualizerControl};
 
 /// Progressive HTTP reader rodio decodes from while the download continues
 /// in the background (temp-file backed, range-request seeks).
@@ -145,6 +148,7 @@ pub struct Player {
     /// track-start where the first ~5 ms of audio leaked through at unity
     /// gain — perceived as full-volume earrape when a track changes.
     user_volume: Arc<RwLock<f32>>,
+    equalizer: EqualizerControl,
     /// Per-track normalisation gain (linear), from ReplayGain tags on local
     /// files; 1.0 for untagged/streamed sources. Multiplies into the rodio
     /// sink volume next to the user's slider gain. librespot does its own
@@ -208,7 +212,12 @@ impl Player {
     /// Boot the audio worker. `history_path`, when present, points at the
     /// JSONL play-log Home consumes — passed in (rather than resolved here)
     /// so `player/` doesn't need to know about `config/`.
-    pub fn spawn(history_path: Option<PathBuf>, initial_volume: f32) -> Result<Self, PlayerError> {
+    pub fn spawn(
+        history_path: Option<PathBuf>,
+        initial_volume: f32,
+        equalizer_enabled: bool,
+        equalizer_bands: [f32; 3],
+    ) -> Result<Self, PlayerError> {
         let (tx, rx) = mpsc::sync_channel::<Result<Arc<RodioPlayer>, PlayerError>>(1);
         let device_dead = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
@@ -264,6 +273,7 @@ impl Player {
 
         let rodio = rx.recv().map_err(|_| PlayerError::WorkerDied)??;
         let initial_volume = initial_volume.clamp(0.0, 1.0);
+        let equalizer = EqualizerControl::new(equalizer_enabled, equalizer_bands);
         // Configured slider position → log-curved gain so the initial level
         // matches what the Spotify side will hand back too.
         rodio.set_volume(Self::slider_to_gain(initial_volume));
@@ -278,6 +288,7 @@ impl Player {
             playback_id: Arc::new(AtomicU64::new(0)),
             history: History::open(history_path),
             user_volume: Arc::new(RwLock::new(initial_volume)),
+            equalizer,
             track_gain: Arc::new(RwLock::new(1.0)),
             pending_next: Arc::new(Mutex::new(None)),
             last_rodio_pos: Arc::new(Mutex::new(Duration::ZERO)),
@@ -366,6 +377,16 @@ impl Player {
             return;
         }
         self.rodio.clear();
+    }
+
+    fn append_rodio<S>(&self, source: S)
+    where
+        S: Source + Send + 'static,
+    {
+        self.rodio.append(viz::Tap::new(
+            EqualizedSource::new(source, self.equalizer.clone()),
+            self.viz.clone(),
+        ));
     }
 
     fn current_volume(&self) -> f32 {
@@ -509,7 +530,7 @@ impl Player {
             .amplify(0.2);
         self.rodio
             .set_volume(Self::slider_to_gain(self.current_volume()));
-        self.rodio.append(viz::Tap::new(tone, self.viz.clone()));
+        self.append_rodio(tone);
         self.rodio.play();
         if let Ok(mut d) = self.duration.write() {
             *d = Some(Duration::from_secs(30));
@@ -543,7 +564,7 @@ impl Player {
         // periodic_access tick runs on the first poll, which happens at
         // append time.
         self.rodio.set_volume(gain);
-        self.rodio.append(viz::Tap::new(decoder, self.viz.clone()));
+        self.append_rodio(decoder);
         self.rodio.play();
         if let Ok(mut d) = self.duration.write() {
             *d = dur;
@@ -586,8 +607,7 @@ impl Player {
         // Re-assert log-curved gain before append — same first-5ms unity-gain
         // leak guard as play_bytes. ReplayGain rides on the source itself.
         self.rodio.set_volume(gain);
-        self.rodio
-            .append(viz::Tap::new(decoder.amplify(rg), self.viz.clone()));
+        self.append_rodio(decoder.amplify(rg));
         self.rodio.play();
         if let Ok(mut d) = self.duration.write() {
             *d = dur;
@@ -631,7 +651,7 @@ impl Player {
         self.clear_sink();
         // Same first-5ms unity-gain leak guard as play_bytes.
         self.rodio.set_volume(gain);
-        self.rodio.append(viz::Tap::new(decoder, self.viz.clone()));
+        self.append_rodio(decoder);
         self.rodio.play();
         if let Ok(mut d) = self.duration.write() {
             *d = duration;
@@ -733,8 +753,7 @@ impl Player {
         }
         // Bake this track's gain into the appended source. The sink volume
         // can't carry it — it's still rendering the *previous* track.
-        self.rodio
-            .append(viz::Tap::new(decoder.amplify(track_gain), self.viz.clone()));
+        self.append_rodio(decoder.amplify(track_gain));
         true
     }
 
@@ -869,7 +888,7 @@ impl Player {
             self.reset_spotify();
         }
         // Slow path: connect outside the mutex.
-        let backend = SpotifyBackend::new(access_token).await?;
+        let backend = SpotifyBackend::new(access_token, self.equalizer.clone()).await?;
         // Apply nira's current volume *before* the user can hear the first
         // packet — librespot defaults to 100% which is earrape if the
         // bottombar was sitting at 5%.
@@ -1145,8 +1164,7 @@ impl Player {
         self.clear_sink();
         // Same first-5ms unity-gain leak guard as play_bytes.
         self.rodio.set_volume(gain);
-        self.rodio
-            .append(viz::Tap::new(decoder.amplify(track_gain), self.viz.clone()));
+        self.append_rodio(decoder.amplify(track_gain));
         if !self.device_is_dead()
             && let Err(e) = self.rodio.try_seek(target)
         {
@@ -1193,6 +1211,10 @@ impl Player {
         {
             b.set_volume(v);
         }
+    }
+
+    pub fn set_equalizer(&self, enabled: bool, bands: [f32; 3]) {
+        self.equalizer.set(enabled, bands);
     }
 
     /// Playback position together with the instant it was sampled.

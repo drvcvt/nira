@@ -1,59 +1,37 @@
-//! Provider credentials & service status: Spotify, SoundCloud, ListenBrainz,
-//! plus the listen-together session.
+//! Music integrations and external provider credentials.
 
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
 use hooks::{
-    use_config, use_soundcloud, use_spotify, use_together, validate_soundcloud_url,
+    use_config, use_player, use_soundcloud, use_spotify, use_together, validate_soundcloud_url,
 };
 use together::Role;
 
 use super::{SettingsCard, StatusPill};
 
 #[component]
-pub(super) fn ConnectionsSettings() -> Element {
+pub(super) fn MusicSettings() -> Element {
     let mut config = use_config();
-    let sp = use_spotify();
-    let sc = use_soundcloud();
-
-    let mut client_id_draft = use_signal({
-        let cfg = config.read();
-        move || cfg.spotify_client_id.clone().unwrap_or_default()
-    });
-    let mut spotify_status = use_signal(|| None::<String>);
-    let mut is_connecting = use_signal(|| false);
-
-    let initial_token = config.read().listenbrainz_token.clone().unwrap_or_default();
-    let initial_user = config
-        .read()
-        .listenbrainz_username
-        .clone()
-        .unwrap_or_default();
-    let mut lb_token_draft = use_signal(move || initial_token);
-    let mut lb_user_draft = use_signal(move || initial_user);
-    let mut lb_status = use_signal(|| None::<String>);
-    // Active state (what config actually holds), not the drafts — the pills
-    // flip when Save lands, not while typing.
-    let lb_token_active = config.read().listenbrainz_token.is_some();
-    let lb_user_active = config.read().listenbrainz_username.is_some();
-
-    let mut sc_status = use_signal(|| None::<String>);
-    let mut sc_refreshing = use_signal(|| false);
+    let player = use_player();
     let mut discord_status = use_signal(|| None::<String>);
     let discord_presence_on = config.read().discord_presence;
-    let mut sc_profile_draft = use_signal({
-        let cfg = config.read();
-        move || cfg.soundcloud_profile_url.clone().unwrap_or_default()
-    });
-
-    let provider_client_id = sp.client_id();
-    let spotify_connected = sp.is_connected();
-
+    let equalizer_enabled = config.read().equalizer_enabled;
+    let equalizer_bands = config
+        .read()
+        .equalizer_bands
+        .map(|gain| gain.clamp(-6.0, 6.0));
+    let equalizer_rows = [
+        (0, "Low", "100 Hz", equalizer_bands[0]),
+        (1, "Mid", "1 kHz", equalizer_bands[1]),
+        (2, "High", "10 kHz", equalizer_bands[2]),
+    ];
 
     rsx! {
         section { class: "settings-group settings-stack",
-            h2 { "Connections" }
-            p { class: "hint", "Provider credentials and service status." }
+            h2 { "Music" }
+            p { class: "hint", "Playback, sharing and listening with friends." }
+
+            ListenTogetherCard {}
 
             SettingsCard {
                 title: "Discord activity".to_string(),
@@ -96,7 +74,107 @@ pub(super) fn ConnectionsSettings() -> Element {
                 }
             }
 
-            ListenTogetherCard {}
+            SettingsCard {
+                title: "Equalizer".to_string(),
+                icon: "fa-solid fa-sliders".to_string(),
+                p { class: "settings-card-copy",
+                    "Lightweight three-band EQ for all playback. Changes apply immediately."
+                }
+                button {
+                    class: if equalizer_enabled { "source-toggle equalizer-toggle on" } else { "source-toggle equalizer-toggle" },
+                    "aria-pressed": if equalizer_enabled { "true" } else { "false" },
+                    onclick: {
+                        let player = player.clone();
+                        move |_| player.set_equalizer(!equalizer_enabled, equalizer_bands)
+                    },
+                    span { class: "source-toggle-icon",
+                        if equalizer_enabled {
+                            i { class: "fa-solid fa-check" }
+                        } else {
+                            i { class: "fa-solid fa-plus" }
+                        }
+                    }
+                    span { class: "source-toggle-copy",
+                        strong { if equalizer_enabled { "Equalizer on" } else { "Equalizer off" } }
+                        small { "Click to toggle without losing the band levels." }
+                    }
+                }
+                div { class: "equalizer-grid",
+                    for (index, label, frequency, gain) in equalizer_rows {
+                        label { class: "equalizer-band", key: "{label}",
+                            span { class: "equalizer-band-copy",
+                                strong { "{label}" }
+                                small { "{frequency}" }
+                            }
+                            input {
+                                r#type: "range",
+                                class: "vol-slider equalizer-range",
+                                min: "-6",
+                                max: "6",
+                                step: "0.5",
+                                value: "{gain}",
+                                disabled: !equalizer_enabled,
+                                "aria-label": "{label} equalizer gain",
+                                oninput: {
+                                    let player = player.clone();
+                                    move |event: FormEvent| {
+                                        let Ok(gain) = event.value().parse::<f32>() else { return; };
+                                        let mut bands = equalizer_bands;
+                                        bands[index] = gain;
+                                        player.set_equalizer(equalizer_enabled, bands);
+                                    }
+                                },
+                            }
+                            output { class: "equalizer-value", "{gain:+.1} dB" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub(super) fn ProviderSettings() -> Element {
+    let mut config = use_config();
+    let sp = use_spotify();
+    let sc = use_soundcloud();
+
+    let mut client_id_draft = use_signal({
+        let cfg = config.read();
+        move || cfg.spotify_client_id.clone().unwrap_or_default()
+    });
+    let mut spotify_status = use_signal(|| None::<String>);
+    let mut is_connecting = use_signal(|| false);
+
+    let initial_token = config.read().listenbrainz_token.clone().unwrap_or_default();
+    let initial_user = config
+        .read()
+        .listenbrainz_username
+        .clone()
+        .unwrap_or_default();
+    let mut lb_token_draft = use_signal(move || initial_token);
+    let mut lb_user_draft = use_signal(move || initial_user);
+    let mut lb_status = use_signal(|| None::<String>);
+    // Active state (what config actually holds), not the drafts — the pills
+    // flip when Save lands, not while typing.
+    let lb_token_active = config.read().listenbrainz_token.is_some();
+    let lb_user_active = config.read().listenbrainz_username.is_some();
+
+    let mut sc_status = use_signal(|| None::<String>);
+    let mut sc_refreshing = use_signal(|| false);
+    let mut sc_profile_draft = use_signal({
+        let cfg = config.read();
+        move || cfg.soundcloud_profile_url.clone().unwrap_or_default()
+    });
+
+    let provider_client_id = sp.client_id();
+    let spotify_connected = sp.is_connected();
+
+    rsx! {
+        section { class: "settings-group settings-stack",
+            h2 { "Providers" }
+            p { class: "hint", "Provider credentials and service status." }
 
             SettingsCard {
                 title: "Spotify".to_string(),
@@ -378,6 +456,7 @@ fn ListenTogetherCard() -> Element {
                     input {
                         id: "lt-code",
                         r#type: "text",
+                        class: "settings-input listen-together-code",
                         readonly: true,
                         value: "{code}",
                         onclick: move |_| {
@@ -394,6 +473,7 @@ fn ListenTogetherCard() -> Element {
                     input {
                         id: "lt-join",
                         r#type: "text",
+                        class: "settings-input listen-together-code",
                         placeholder: "paste a code from a friend",
                         value: "{code_draft}",
                         oninput: move |e| code_draft.set(e.value()),
