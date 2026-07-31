@@ -242,6 +242,7 @@ fn App() -> Element {
         Arc::new(SpotifyProvider::new(client_id, tokens_path).expect("Spotify provider init"))
     });
     AppContext::install(player.clone(), sc.clone(), sp, app_cfg);
+    let enrichment = hooks::use_enrichment();
     let config_sig = hooks::use_config();
     let discord_presence_enabled =
         use_hook(|| Arc::new(AtomicBool::new(config_sig.read().discord_presence)));
@@ -286,7 +287,7 @@ fn App() -> Element {
     // owns its reconnect loop so Discord can start before or after Nira.
     use_hook({
         let enabled = discord_presence_enabled.clone();
-        move || discord_bridge::start(player.clone(), enabled)
+        move || discord_bridge::start(player.clone(), enabled, enrichment.clone())
     });
 
     // Serve locally-extracted album art to the webview: the library scanner

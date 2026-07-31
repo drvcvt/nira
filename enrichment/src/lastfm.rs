@@ -22,6 +22,55 @@ pub struct LastFmSimilar {
 }
 
 impl EnrichmentClient {
+    /// Returns Last.fm's public artwork URL for a track, if available.
+    pub async fn lastfm_track_cover(
+        &self,
+        artist: &str,
+        title: &str,
+    ) -> EnrichmentResult<Option<String>> {
+        let Some(key) = self.lastfm_key() else {
+            return Ok(None);
+        };
+        let cache_key = format!("lastfm:cover:{artist}|{title}");
+        if let Some(cached) = self.cache().get(&cache_key)
+            && let Ok(parsed) = serde_json::from_str::<Option<String>>(&cached)
+        {
+            return Ok(parsed);
+        }
+
+        let resp = self
+            .http()
+            .get(LASTFM_API)
+            .query(&[
+                ("method", "track.getInfo"),
+                ("artist", artist),
+                ("track", title),
+                ("autocorrect", "1"),
+                ("api_key", key.as_str()),
+                ("format", "json"),
+            ])
+            .send()
+            .await
+            .map_err(|e| EnrichmentError::Network(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(EnrichmentError::Network(format!(
+                "Last.fm track.getInfo -> {}",
+                resp.status()
+            )));
+        }
+
+        let raw: LastFmTrackInfoResp = resp
+            .json()
+            .await
+            .map_err(|e| EnrichmentError::Malformed(e.to_string()))?;
+        let cover = parse_track_cover(raw);
+        self.cache().put(
+            cache_key,
+            serde_json::to_string(&cover).unwrap_or_else(|_| "null".into()),
+        );
+        Ok(cover)
+    }
+
     /// Returns similar tracks. Empty when no key is configured or Last.fm
     /// has nothing for this seed; Err only on real network/malformed.
     pub async fn lastfm_similar_tracks(
@@ -69,6 +118,49 @@ impl EnrichmentClient {
         self.cache().put(cache_key, serialised);
         Ok(mapped)
     }
+}
+
+fn parse_track_cover(raw: LastFmTrackInfoResp) -> Option<String> {
+    raw.track?
+        .album?
+        .image
+        .into_iter()
+        .filter(|image| image.url.starts_with("https://") || image.url.starts_with("http://"))
+        .max_by_key(|image| match image.size.as_str() {
+            "mega" => 5,
+            "extralarge" => 4,
+            "large" => 3,
+            "medium" => 2,
+            "small" => 1,
+            _ => 0,
+        })
+        .map(|image| image.url)
+}
+
+#[derive(Deserialize)]
+struct LastFmTrackInfoResp {
+    #[serde(default)]
+    track: Option<RawTrackInfo>,
+}
+
+#[derive(Deserialize)]
+struct RawTrackInfo {
+    #[serde(default)]
+    album: Option<RawTrackAlbum>,
+}
+
+#[derive(Deserialize)]
+struct RawTrackAlbum {
+    #[serde(default)]
+    image: Vec<RawImage>,
+}
+
+#[derive(Deserialize)]
+struct RawImage {
+    #[serde(default, rename = "#text")]
+    url: String,
+    #[serde(default)]
+    size: String,
 }
 
 fn parse_similar_tracks(raw: LastFmResp) -> Vec<LastFmSimilar> {
@@ -180,5 +272,23 @@ mod tests {
         .unwrap();
         let out = parse_similar_tracks(raw);
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn track_cover_prefers_the_largest_nonempty_image() {
+        let raw: LastFmTrackInfoResp = serde_json::from_str(
+            r##"{"track":{"album":{"image":[
+                {"#text":"https://img.test/64.png","size":"medium"},
+                {"#text":"","size":"large"},
+                {"#text":"file:///not-public.png","size":"mega"},
+                {"#text":"https://img.test/300.png","size":"extralarge"}
+            ]}}}"##,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parse_track_cover(raw).as_deref(),
+            Some("https://img.test/300.png")
+        );
     }
 }

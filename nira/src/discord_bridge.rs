@@ -1,10 +1,11 @@
-use std::collections::VecDeque;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use discord_rich_presence::activity::{self, ActivityType, Assets, StatusDisplayType, Timestamps};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
+use enrichment::EnrichmentClient;
 use player::{Player, PlayerSnapshot};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -112,19 +113,44 @@ fn update_allowed(updates: &mut VecDeque<Instant>, now: Instant) -> bool {
 }
 
 fn projected_presence(snapshot: &PlayerSnapshot, enabled: bool) -> Option<Presence> {
-    enabled.then(|| Presence::from_snapshot(snapshot)).flatten()
+    (enabled && !snapshot.is_paused)
+        .then(|| Presence::from_snapshot(snapshot))
+        .flatten()
 }
 
-pub fn start(player: Player, enabled: Arc<AtomicBool>) {
+type CoverKey = (String, String);
+
+fn cover_lookup_key(presence: &Presence) -> Option<CoverKey> {
+    presence
+        .cover_url
+        .is_none()
+        .then(|| (presence.artist.clone(), presence.title.clone()))
+}
+
+pub fn start(player: Player, enabled: Arc<AtomicBool>, enrichment: Arc<EnrichmentClient>) {
     if let Err(error) = std::thread::Builder::new()
         .name("nira-discord".into())
-        .spawn(move || run(player, enabled, APPLICATION_ID))
+        .spawn(move || run(player, enabled, enrichment, APPLICATION_ID))
     {
         tracing::warn!(%error, "could not start Discord presence thread");
     }
 }
 
-fn run(player: Player, enabled: Arc<AtomicBool>, application_id: &'static str) {
+fn run(
+    player: Player,
+    enabled: Arc<AtomicBool>,
+    enrichment: Arc<EnrichmentClient>,
+    application_id: &'static str,
+) {
+    let (cover_requests_tx, cover_requests_rx) = mpsc::channel();
+    let (cover_results_tx, cover_results_rx) = mpsc::channel();
+    if let Err(error) = std::thread::Builder::new()
+        .name("nira-discord-cover".into())
+        .spawn(move || resolve_covers(enrichment, cover_requests_rx, cover_results_tx))
+    {
+        tracing::warn!(%error, "could not start Discord cover resolver");
+    }
+
     let mut client = DiscordIpcClient::new(application_id);
     let mut connected = false;
     let mut last_attempt = Instant::now()
@@ -133,6 +159,8 @@ fn run(player: Player, enabled: Arc<AtomicBool>, application_id: &'static str) {
     let mut last_sent: Option<(Presence, Instant)> = None;
     let mut cleared = false;
     let mut updates = VecDeque::new();
+    let mut cover_cache = HashMap::<CoverKey, Option<String>>::new();
+    let mut pending_covers = HashSet::<CoverKey>::new();
 
     loop {
         let now = Instant::now();
@@ -148,7 +176,26 @@ fn run(player: Player, enabled: Arc<AtomicBool>, application_id: &'static str) {
         }
 
         if connected {
-            let current = projected_presence(&player.snapshot(), enabled);
+            while let Ok((key, cover)) = cover_results_rx.try_recv() {
+                pending_covers.remove(&key);
+                cover_cache.insert(key, cover);
+            }
+
+            let snapshot = player.snapshot();
+            let paused = snapshot.is_paused;
+            let mut current = projected_presence(&snapshot, enabled);
+            if let Some(presence) = current.as_mut()
+                && let Some(key) = cover_lookup_key(presence)
+            {
+                if let Some(cover) = cover_cache.get(&key) {
+                    presence.cover_url.clone_from(cover);
+                } else if pending_covers.insert(key.clone())
+                    && cover_requests_tx.send(key.clone()).is_err()
+                {
+                    pending_covers.remove(&key);
+                    cover_cache.insert(key, None);
+                }
+            }
             let needs_set = current.as_ref().is_some_and(|presence| {
                 last_sent.as_ref().is_none_or(|(previous, sent_at)| {
                     sent_at.elapsed() >= HEARTBEAT_INTERVAL
@@ -158,7 +205,7 @@ fn run(player: Player, enabled: Arc<AtomicBool>, application_id: &'static str) {
             let needs_clear = current.is_none() && !cleared;
             // Privacy-off clears immediately even if recent track changes used
             // the normal Discord update budget.
-            let can_update = needs_clear && !enabled
+            let can_update = needs_clear && (!enabled || paused)
                 || (needs_set || needs_clear) && update_allowed(&mut updates, now);
             let result = match current {
                 Some(presence) if needs_set && can_update => client
@@ -192,6 +239,35 @@ fn run(player: Player, enabled: Arc<AtomicBool>, application_id: &'static str) {
     }
 }
 
+fn resolve_covers(
+    enrichment: Arc<EnrichmentClient>,
+    requests: mpsc::Receiver<CoverKey>,
+    results: mpsc::Sender<(CoverKey, Option<String>)>,
+) {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            tracing::warn!(%error, "could not create Discord cover runtime");
+            return;
+        }
+    };
+
+    while let Ok(key) = requests.recv() {
+        let cover = runtime
+            .block_on(enrichment.lastfm_track_cover(&key.0, &key.1))
+            .unwrap_or_else(|error| {
+                tracing::debug!(%error, "Discord track cover lookup failed");
+                None
+            });
+        if results.send((key, cover)).is_err() {
+            return;
+        }
+    }
+}
+
 fn unix_ms() -> i64 {
     millis(
         SystemTime::now()
@@ -211,7 +287,10 @@ mod tests {
     use std::collections::VecDeque;
     use std::time::{Duration, Instant};
 
-    use super::{Presence, presence_json, projected_presence, refresh_needed, update_allowed};
+    use super::{
+        Presence, cover_lookup_key, presence_json, projected_presence, refresh_needed,
+        update_allowed,
+    };
     use player::{Active, NowPlaying, PlayerSnapshot};
 
     fn snapshot(
@@ -266,14 +345,14 @@ mod tests {
     }
 
     #[test]
-    fn paused_activity_has_no_timestamps() {
-        let value = presence_json(
-            &snapshot("Provider B", "provider-b", "b:track:1", true),
-            1_700_000_100_000,
-        )
-        .expect("playing snapshot");
-
-        assert!(value.get("timestamps").is_none());
+    fn paused_presence_is_hidden() {
+        assert!(
+            projected_presence(
+                &snapshot("Provider B", "provider-b", "b:track:1", true),
+                true,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -285,6 +364,22 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn only_missing_public_art_requests_a_track_cover() {
+        let mut local = snapshot("Local", "local", "file:///song.flac", false);
+        local.now_playing.as_mut().unwrap().cover_url = Some("/covers/local.jpg".into());
+        let local = Presence::from_snapshot(&local).unwrap();
+        assert_eq!(
+            cover_lookup_key(&local),
+            Some(("Artist".into(), "Song".into()))
+        );
+
+        let remote =
+            Presence::from_snapshot(&snapshot("Provider A", "provider-a", "a:track:1", false))
+                .unwrap();
+        assert_eq!(cover_lookup_key(&remote), None);
     }
 
     #[test]
