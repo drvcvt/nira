@@ -78,6 +78,7 @@ pub enum PlayerError {
 pub struct NowPlaying {
     pub title: String,
     pub artist: String,
+    pub album: Option<String>,
     pub cover_url: Option<String>,
     pub source_label: String,
     pub provider: String,
@@ -517,6 +518,7 @@ impl Player {
         self.set_now_playing(Some(NowPlaying {
             title: "Test tone".into(),
             artist: "440 Hz".into(),
+            album: None,
             cover_url: None,
             source_label: "test signal".into(),
             provider: "Local".into(),

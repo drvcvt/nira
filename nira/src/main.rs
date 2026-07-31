@@ -14,6 +14,8 @@ use hooks::{AppContext, DetailView, Player, use_detail};
 use provider_soundcloud::SoundCloudProvider;
 use provider_spotify::SpotifyProvider;
 
+mod discord_bridge;
+
 #[cfg(target_os = "linux")]
 mod mpris_bridge;
 
@@ -270,6 +272,12 @@ fn App() -> Element {
     #[cfg(target_os = "linux")]
     use_hook(|| {
         mpris_bridge::start(player.clone());
+    });
+
+    // Discord Rich Presence is local IPC only and provider-blind. The bridge
+    // owns its reconnect loop so Discord can start before or after Nira.
+    use_hook(|| {
+        discord_bridge::start(player.clone());
     });
 
     // Serve locally-extracted album art to the webview: the library scanner

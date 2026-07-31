@@ -1104,6 +1104,7 @@ fn now_playing_from(track: &Track) -> NowPlaying {
     NowPlaying {
         title: track.title.clone(),
         artist,
+        album: track.album.as_ref().map(|album| album.title.clone()),
         cover_url: track.cover_url.clone(),
         source_label: track.provider.label().to_lowercase(),
         provider: track.provider.label().to_string(),
