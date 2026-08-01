@@ -130,3 +130,15 @@ fn music_settings_expose_a_three_band_equalizer() {
         ".equalizer-toggle {\n  align-self: flex-start;\n  align-items: center;"
     ));
 }
+
+#[test]
+fn search_state_is_installed_once_at_the_root() {
+    let search = include_str!("../../hooks/src/use_search.rs");
+    let hooks = include_str!("../../hooks/src/lib.rs");
+
+    assert!(search.contains("pub(crate) fn install_search()"));
+    assert!(search.contains(
+        "pub fn use_search() -> UseSearch {\n    use_context::<UseSearch>()\n}"
+    ));
+    assert!(hooks.contains("use_search::install_search();"));
+}

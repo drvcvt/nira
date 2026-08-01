@@ -30,7 +30,7 @@ pub struct UseSearch {
     pub results_for: Signal<String>,
 }
 
-pub fn use_search() -> UseSearch {
+pub(crate) fn install_search() {
     let sc = use_context::<Arc<SoundCloudProvider>>();
     let sp = use_context::<Arc<SpotifyProvider>>();
 
@@ -152,14 +152,19 @@ pub fn use_search() -> UseSearch {
         }
     });
 
-    UseSearch {
+    let search = UseSearch {
         query,
         results,
         artists,
         is_searching,
         error,
         results_for,
-    }
+    };
+    use_context_provider(move || search);
+}
+
+pub fn use_search() -> UseSearch {
+    use_context::<UseSearch>()
 }
 
 /// Artist hits: Spotify first (there's a full profile behind the click),

@@ -104,6 +104,8 @@ impl AppContext {
             move || sp
         });
 
+        use_search::install_search();
+
         // Discovery engine — owns its own EnrichmentClient (MB + LB cache),
         // sees the providers as `Vec<Arc<dyn Provider>>` so it doesn't need
         // to know which concrete types are wired in. The Last.fm key, if any,
