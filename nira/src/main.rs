@@ -32,9 +32,9 @@ const FONT_CHARTER: Asset = asset!("../assets/fonts/Charter-Regular.ttf");
 const FONT_CHARTER_BOLD: Asset = asset!("../assets/fonts/Charter-Bold.ttf");
 // FontAwesome icon fonts, vendored — previously CDN-loaded, which meant a
 // visible icon pop-in on every boot and no icons at all offline.
-const FONT_FA_SOLID: Asset = asset!("../assets/fonts/fa-solid-900.woff2");
-const FONT_FA_REGULAR: Asset = asset!("../assets/fonts/fa-regular-400.woff2");
-const FONT_FA_BRANDS: Asset = asset!("../assets/fonts/fa-brands-400.woff2");
+const FONT_FA_SOLID: Asset = asset!("../assets/fonts/fa-solid-900.ttf");
+const FONT_FA_REGULAR: Asset = asset!("../assets/fonts/fa-regular-400.ttf");
+const FONT_FA_BRANDS: Asset = asset!("../assets/fonts/fa-brands-400.ttf");
 
 // All app CSS inlined into the initial document head. Dioxus' runtime head
 // insertion uses a queued effect after the body patch, which lets WebKit
@@ -73,9 +73,9 @@ fn initial_head() -> String {
 @font-face {{ font-family: "Geist Mono"; src: url("{FONT_GEIST_MONO_ITALIC}") format("truetype"); font-weight: 100 900; font-style: italic; font-display: block; }}
 @font-face {{ font-family: "Charter"; src: url("{FONT_CHARTER}") format("truetype"); font-weight: 400; font-style: normal; font-display: block; }}
 @font-face {{ font-family: "Charter"; src: url("{FONT_CHARTER_BOLD}") format("truetype"); font-weight: 700; font-style: normal; font-display: block; }}
-@font-face {{ font-family: "Font Awesome 6 Free"; src: url("{FONT_FA_SOLID}") format("woff2"); font-weight: 900; font-style: normal; font-display: block; }}
-@font-face {{ font-family: "Font Awesome 6 Free"; src: url("{FONT_FA_REGULAR}") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }}
-@font-face {{ font-family: "Font Awesome 6 Brands"; src: url("{FONT_FA_BRANDS}") format("woff2"); font-weight: 400; font-style: normal; font-display: block; }}
+@font-face {{ font-family: "Font Awesome 6 Free"; src: url("{FONT_FA_SOLID}") format("truetype"); font-weight: 900; font-style: normal; font-display: block; }}
+@font-face {{ font-family: "Font Awesome 6 Free"; src: url("{FONT_FA_REGULAR}") format("truetype"); font-weight: 400; font-style: normal; font-display: block; }}
+@font-face {{ font-family: "Font Awesome 6 Brands"; src: url("{FONT_FA_BRANDS}") format("truetype"); font-weight: 400; font-style: normal; font-display: block; }}
 {CSS_ALL}
 {CSS_FONTAWESOME}
 </style>"#
@@ -770,6 +770,15 @@ mod tests {
         // satisfy it — only the real builder call site matches.
         let needle = format!(".with_custom_head({}())", "initial_head");
         assert!(source.contains(&needle));
+    }
+
+    #[test]
+    fn font_awesome_uses_truetype_assets() {
+        let head = initial_head();
+
+        assert!(head.contains("fa-solid-900.ttf\") format(\"truetype\")"));
+        assert!(head.contains("fa-regular-400.ttf\") format(\"truetype\")"));
+        assert!(head.contains("fa-brands-400.ttf\") format(\"truetype\")"));
     }
 }
 
