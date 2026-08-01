@@ -77,6 +77,46 @@ pub fn provider_badge_class(provider: ProviderId) -> &'static str {
     }
 }
 
+#[component]
+pub fn SearchTrackRow(
+    track: Track,
+    tracks: TrackCtx,
+    index: usize,
+    class: String,
+    #[props(default)] on_played: Option<EventHandler<()>>,
+) -> Element {
+    let duration = format_duration(track.duration);
+    let cover = track.cover_url.clone().unwrap_or_default();
+    let badge_class = provider_badge_class(track.provider);
+
+    rsx! {
+        PlayableLi {
+            track: track.clone(),
+            tracks,
+            index,
+            class,
+            on_played,
+            div { class: "track-cover",
+                if !cover.is_empty() {
+                    img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }
+                } else {
+                    div { class: "track-cover-fallback",
+                        i { class: "fa-solid fa-music" }
+                    }
+                }
+            }
+            div { class: "track-meta",
+                div { class: "track-title", "{track.title}" }
+                div { class: "track-artist",
+                    ArtistLinks { artists: track.artists.clone() }
+                }
+            }
+            div { class: "track-duration", "{duration}" }
+            div { class: "{badge_class}", "{track.provider.badge()}" }
+        }
+    }
+}
+
 /// Artist search hits — avatar-pill row shared by the Search page and the
 /// global search overlay. Click opens the artist detail view; `on_open`
 /// lets the overlay close itself after navigating.

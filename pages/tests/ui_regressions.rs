@@ -142,3 +142,29 @@ fn search_state_is_installed_once_at_the_root() {
     ));
     assert!(hooks.contains("use_search::install_search();"));
 }
+
+#[test]
+fn search_results_have_an_internal_page_without_sidebar_navigation() {
+    let components = include_str!("../../components/src/lib.rs");
+    let pages = include_str!("../src/lib.rs");
+    let shell = include_str!("../../nira/src/main.rs");
+    let sidebar = include_str!("../../components/src/sidebar.rs");
+
+    assert!(components.contains("Search,"));
+    assert!(pages.contains("pub mod search;"));
+    assert!(shell.contains("Section::Search"));
+    assert!(!sidebar.contains("label: \"Search\""));
+}
+
+#[test]
+fn overlay_submit_opens_search_page_instead_of_starting_playback() {
+    let overlay = include_str!("../src/search_overlay.rs");
+    let shell = include_str!("../../nira/src/main.rs");
+
+    assert!(overlay.contains("on_search: EventHandler<()>"));
+    assert!(overlay.contains("on_search.call(())"));
+    assert!(!overlay.contains("queue.play_list(list, 0)"));
+    assert!(overlay.contains("Enter opens the full page."));
+    assert!(!overlay.contains("Enter plays"));
+    assert!(shell.contains("section.set(Section::Search)"));
+}

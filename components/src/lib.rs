@@ -57,6 +57,7 @@ pub fn overlay_focus(open: bool, first_selector: &str) {
 pub enum Section {
     Home,
     Discover,
+    Search,
     Library,
     Settings,
 }

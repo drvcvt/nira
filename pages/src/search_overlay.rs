@@ -6,16 +6,14 @@
 
 use components::SearchBar;
 use dioxus::prelude::*;
-use hooks::{Track, use_queue, use_search};
+use hooks::{use_detail, use_search};
 
-use crate::parts::{
-    ArtistLinks, ArtistResults, PlayableLi, TrackCtx, format_duration, provider_badge_class,
-};
+use crate::parts::{ArtistResults, SearchTrackRow, TrackCtx};
 
 #[component]
-pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
+pub fn SearchOverlay(mut open: Signal<bool>, on_search: EventHandler<()>) -> Element {
     let mut search = use_search();
-    let queue = use_queue();
+    let detail = use_detail();
     let is_open = *open.read();
     let query = search.query.read().clone();
     let results = search.results.read().clone();
@@ -63,23 +61,11 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
                         placeholder: "Search songs, artists, labels…".to_string(),
                         autofocus: is_open,
                         on_input: move |v: String| search.query.set(v),
-                        on_submit: {
-                            let queue = queue.clone();
-                            let search = search.clone();
-                            move |_| {
-                                // Only act on results that belong to what's
-                                // typed right now — during the debounce/fetch
-                                // window the visible list is still the
-                                // previous query's, and Enter must not play
-                                // a track the user didn't search for.
-                                if *search.results_for.peek() != *search.query.peek() {
-                                    return;
-                                }
-                                let list = search.results.peek().clone();
-                                if !list.is_empty() {
-                                    queue.play_list(list, 0);
-                                    open.set(false);
-                                }
+                        on_submit: move |_| {
+                            if !search.query.peek().trim().is_empty() {
+                                detail.close();
+                                open.set(false);
+                                on_search.call(());
                             }
                         },
                         span { class: "overlay-search-hint",
@@ -100,7 +86,7 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
                     } else if !has_query {
                         div { class: "search-overlay-empty",
                             div { class: "search-overlay-empty-title", "Start typing" }
-                            div { class: "search-overlay-empty-copy", "Spotify and SoundCloud results interleaved. Enter plays the first result." }
+                            div { class: "search-overlay-empty-copy", "Results from your connected music providers. Enter opens the full page." }
                         }
                     } else if results.is_empty() && artist_hits.is_empty() && !is_searching {
                         div { class: "search-overlay-empty",
@@ -114,11 +100,12 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
                         }
                         ul { class: "search-overlay-list",
                             for (idx, track) in results.iter().enumerate() {
-                                OverlayTrackRow {
+                                SearchTrackRow {
                                     key: "{track.uri.0}",
                                     track: track.clone(),
                                     tracks: row_ctx.clone(),
                                     index: idx,
+                                    class: "search-overlay-row".to_string(),
                                     on_played: move |_| open.set(false),
                                 }
                             }
@@ -126,45 +113,6 @@ pub fn SearchOverlay(mut open: Signal<bool>) -> Element {
                     }
                 }
             }
-        }
-    }
-}
-
-#[component]
-fn OverlayTrackRow(
-    track: Track,
-    tracks: TrackCtx,
-    index: usize,
-    on_played: EventHandler<()>,
-) -> Element {
-    let duration = format_duration(track.duration);
-    let cover = track.cover_url.clone().unwrap_or_default();
-    let badge_class = provider_badge_class(track.provider);
-
-    rsx! {
-        PlayableLi {
-            track: track.clone(),
-            tracks,
-            index,
-            class: "search-overlay-row".to_string(),
-            on_played,
-            div { class: "track-cover",
-                if !cover.is_empty() {
-                    img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }
-                } else {
-                    div { class: "track-cover-fallback",
-                        i { class: "fa-solid fa-music" }
-                    }
-                }
-            }
-            div { class: "track-meta",
-                div { class: "track-title", "{track.title}" }
-                div { class: "track-artist",
-                    ArtistLinks { artists: track.artists.clone() }
-                }
-            }
-            div { class: "track-duration", "{duration}" }
-            div { class: "{badge_class}", "{track.provider.badge()}" }
         }
     }
 }

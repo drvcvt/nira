@@ -582,7 +582,13 @@ fn App() -> Element {
                 MainContent { section }
             }
             components::bottombar::Bottombar {}
-            pages::search_overlay::SearchOverlay { open: search_open }
+            pages::search_overlay::SearchOverlay {
+                open: search_open,
+                on_search: {
+                    let mut section = section;
+                    move |_| section.set(Section::Search)
+                },
+            }
             // Global right-click menu — singleton, reads its own state from
             // the `use_ctx_menu` signal. Rows on any page open it.
             components::ctx_menu::ContextMenu {}
@@ -801,6 +807,7 @@ fn MainContent(section: Signal<Section>) -> Element {
             {match *section.read() {
                 Section::Home     => rsx! { pages::home::Home {} },
                 Section::Discover => rsx! { pages::discover::Discover {} },
+                Section::Search   => rsx! { pages::search::Search {} },
                 Section::Library  => rsx! { pages::library::Library {} },
                 Section::Settings => rsx! { pages::settings::Settings {} },
             }}

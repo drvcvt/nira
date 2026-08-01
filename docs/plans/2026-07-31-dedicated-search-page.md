@@ -44,23 +44,22 @@
 - Create: `pages/src/search.rs`
 - Modify: `pages/src/lib.rs`
 - Modify: `pages/src/search_overlay.rs`
+- Modify: `pages/src/parts.rs`
 - Modify: `components/src/lib.rs`
 - Modify: `nira/src/main.rs`
-- Modify: `nira/assets/css/search.css`
-- Modify: `nira/assets/css/responsive.css`
 - Test: `pages/tests/ui_regressions.rs`
 
 **Interfaces:**
 
 - Produces: internal `Section::Search`, `pages::search::Search`, shared `SearchTrackRow`, and `SearchOverlay(open, on_search)`.
 
-- [ ] Add regressions requiring the internal route, no Search sidebar item, provider-neutral page copy, and an overlay `on_search` callback instead of Enter-to-play.
-- [ ] Run `anvil tests` and confirm the new regressions fail for the missing route/page/handoff.
-- [ ] Add the internal route and full-page view using the shared root state, existing `SearchBar`, `ArtistResults`, `PlayableLi`, `ArtistLinks`, and `AlbumLink`.
-- [ ] Move the existing overlay row markup into the shared row component while retaining its current overlay class and behavior.
-- [ ] On non-empty submit, close detail/overlay state and select `Section::Search`; leave row clicks as playback.
-- [ ] Add only the page-specific mt-ui and narrow-layout CSS; do not restyle the overlay or shared SearchBar.
-- [ ] Run `anvil tests`, `anvil check`, and `anvil release` on public.
+- [x] Add regressions requiring the internal route, no Search sidebar item, and an overlay `on_search` callback instead of Enter-to-play.
+- [x] Run `anvil tests` and confirm the new regressions fail for the missing route/page/handoff.
+- [x] Add the internal route and full-page view using the shared root state, existing `SearchBar`, `ArtistResults`, `PlayableLi`, and `ArtistLinks`.
+- [x] Move the existing overlay row markup into the shared row component while retaining its current overlay class and behavior.
+- [x] On non-empty submit, close detail/overlay state and select `Section::Search`; leave row clicks as playback.
+- [x] Reuse the existing responsive page and track-list styles; do not restyle the overlay or shared SearchBar.
+- [x] Run `anvil tests`, `anvil check`, and `anvil release` on public.
 - [ ] Inspect real dark/light rendered Search pages without mouse or keyboard automation.
 - [ ] Commit the page, handoff, CSS, and regressions.
 
