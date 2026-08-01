@@ -168,3 +168,16 @@ fn overlay_submit_opens_search_page_instead_of_starting_playback() {
     assert!(!overlay.contains("Enter plays"));
     assert!(shell.contains("section.set(Section::Search)"));
 }
+
+#[test]
+fn corner_search_opens_an_empty_full_page() {
+    let search = include_str!("../src/search.rs");
+    let shell = include_str!("../../nira/src/main.rs");
+
+    assert!(shell.contains("fn SearchPageButton"));
+    assert!(shell.contains("search.query.set(String::new())"));
+    assert!(shell.contains("section.set(Section::Search)"));
+    assert!(shell.contains("search_open.set(true)"));
+    assert!(search.contains("if has_query {\n                if let Some(message)"));
+    assert!(search.contains("ArtistResults { artists: artist_hits }"));
+}

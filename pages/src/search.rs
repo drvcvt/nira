@@ -26,7 +26,7 @@ pub fn Search() -> Element {
                 placeholder: "Search songs, artists, labels…".to_string(),
                 on_input: move |value: String| search.query.set(value),
                 autofocus: true,
-                if is_searching {
+                if is_searching && has_query {
                     span { class: "search-hint searching",
                         i { class: "fa-solid fa-circle-notch fa-spin" }
                         " searching"
@@ -34,22 +34,24 @@ pub fn Search() -> Element {
                 }
             }
 
-            if let Some(message) = error.as_ref() {
-                div { class: "search-error", "{message}" }
-            } else if results.is_empty() && artist_hits.is_empty() && !is_searching && has_query {
-                div { class: "search-empty", "No results." }
-            }
+            if has_query {
+                if let Some(message) = error.as_ref() {
+                    div { class: "search-error", "{message}" }
+                } else if results.is_empty() && artist_hits.is_empty() && !is_searching {
+                    div { class: "search-empty", "No results." }
+                }
 
-            ArtistResults { artists: artist_hits }
+                ArtistResults { artists: artist_hits }
 
-            ul { class: "track-list",
-                for (index, track) in results.iter().enumerate() {
-                    SearchTrackRow {
-                        key: "{track.uri.0}",
-                        track: track.clone(),
-                        tracks: row_ctx.clone(),
-                        index,
-                        class: "track-row".to_string(),
+                ul { class: "track-list",
+                    for (index, track) in results.iter().enumerate() {
+                        SearchTrackRow {
+                            key: "{track.uri.0}",
+                            track: track.clone(),
+                            tracks: row_ctx.clone(),
+                            index,
+                            class: "track-row".to_string(),
+                        }
                     }
                 }
             }

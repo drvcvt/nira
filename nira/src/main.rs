@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use components::Section;
 use config::AppConfig;
 use dioxus::prelude::*;
-use hooks::{AppContext, DetailView, Player, use_detail};
+use hooks::{AppContext, DetailView, Player, use_detail, use_search};
 use provider_soundcloud::SoundCloudProvider;
 use provider_spotify::SpotifyProvider;
 
@@ -560,23 +560,7 @@ fn App() -> Element {
                     move |_| search_open.set(false)
                 },
             }
-            // Visible search trigger for mouse users; Ctrl+F / Alt+Space
-            // keep working via the hotkey bridges above.
-            button {
-                class: "corner-search",
-                title: "Search (Ctrl+F)",
-                "aria-label": "Search",
-                onclick: {
-                    let mut search_open = search_open;
-                    move |_| {
-                        search_open.set(true);
-                        document::eval(
-                            "window.__nira_focus_search && window.__nira_focus_search();",
-                        );
-                    }
-                },
-                i { class: "fa-solid fa-magnifying-glass" }
-            }
+            SearchPageButton { section }
             components::sidebar::Sidebar { section }
             main { class: "content",
                 MainContent { section }
@@ -785,6 +769,26 @@ mod tests {
         assert!(head.contains("fa-solid-900.ttf\") format(\"truetype\")"));
         assert!(head.contains("fa-regular-400.ttf\") format(\"truetype\")"));
         assert!(head.contains("fa-brands-400.ttf\") format(\"truetype\")"));
+    }
+}
+
+#[component]
+fn SearchPageButton(mut section: Signal<Section>) -> Element {
+    let mut search = use_search();
+    let detail = use_detail();
+
+    rsx! {
+        button {
+            class: "corner-search",
+            title: "Search (Ctrl+F)",
+            "aria-label": "Search",
+            onclick: move |_| {
+                search.query.set(String::new());
+                detail.close();
+                section.set(Section::Search);
+            },
+            i { class: "fa-solid fa-magnifying-glass" }
+        }
     }
 }
 
