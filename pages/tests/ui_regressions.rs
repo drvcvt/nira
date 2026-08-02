@@ -181,3 +181,20 @@ fn corner_search_opens_an_empty_full_page() {
     assert!(search.contains("if has_query {\n                if let Some(message)"));
     assert!(search.contains("ArtistResults { artists: artist_hits }"));
 }
+
+#[test]
+fn community_playlists_have_a_stale_safe_internal_detail_page() {
+    let hook = include_str!("../../hooks/src/use_playlist.rs");
+    let hooks = include_str!("../../hooks/src/lib.rs");
+    let detail = include_str!("../../hooks/src/use_detail.rs");
+    let pages = include_str!("../src/lib.rs");
+    let shell = include_str!("../../nira/src/main.rs");
+
+    assert!(hook.contains("generation_at_start"));
+    assert!(hook.contains("*generation.peek() != generation_at_start"));
+    assert!(hooks.contains("pub mod use_playlist;"));
+    assert!(detail.contains("Playlist(PlaylistBrief)"));
+    assert!(pages.contains("pub mod playlist;"));
+    assert!(shell.contains("pages::playlist::PlaylistPage"));
+    assert!(shell.contains("DetailView::Playlist"));
+}

@@ -1,6 +1,6 @@
 /* ── Artist & Album detail pages ─────────────────────────────────────── */
 
-.artist-page, .album-page { padding: 0; }
+.artist-page, .album-page, .playlist-page { padding: 0; }
 
 .artist-nav {
   padding: 12px 24px 0;
@@ -21,7 +21,7 @@
   background: var(--raise2);
 }
 
-.artist-banner, .album-banner {
+.artist-banner, .album-banner, .playlist-banner {
   display: grid;
   grid-template-columns: 220px 1fr;
   gap: 24px;
@@ -204,6 +204,10 @@
 }
 
 .album-page .track-list {
+  padding: 8px 24px 32px;
+}
+
+.playlist-page .track-list {
   padding: 8px 24px 32px;
 }
 
@@ -452,5 +456,4 @@
 
 .skeleton-line.wide { width: 60%; height: 28px; }
 .skeleton-line.short { width: 30%; }
-
 

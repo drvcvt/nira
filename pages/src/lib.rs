@@ -11,6 +11,7 @@ pub mod home;
 pub mod library;
 mod library_import;
 pub mod parts;
+pub mod playlist;
 pub mod search;
 pub mod search_overlay;
 pub mod settings;

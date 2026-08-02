@@ -307,6 +307,27 @@ impl SoundCloudProvider {
         Ok(SoundCloudPlaylistCatalog { playlists })
     }
 
+    async fn playlist_tracks_by_id(
+        &self,
+        playlist_id: u64,
+        client_id: &str,
+    ) -> ProviderResult<Vec<Track>> {
+        let mut next = Some(format!(
+            "{SC_API}/playlists/{playlist_id}/tracks?access=playable&linked_partitioning=true&limit=200&client_id={client_id}"
+        ));
+        let mut tracks = Vec::new();
+        while let Some(url) = next {
+            let page: ScPage<ScTrack> = self.fetch_json(&url).await?;
+            tracks.extend(page.collection.into_iter().map(sc_to_track));
+            next = page
+                .next_href
+                .as_deref()
+                .map(|href| soundcloud_api_url(href, client_id))
+                .transpose()?;
+        }
+        Ok(tracks)
+    }
+
     pub async fn playlists_for_import(
         &self,
         selected: &[SoundCloudPlaylistSummary],
@@ -319,22 +340,7 @@ impl SoundCloudProvider {
                 let mut skipped_items = 0;
 
                 for summary in selected {
-                    let mut next = Some(format!(
-                        "{SC_API}/playlists/{}/tracks?access=playable&linked_partitioning=true&limit=200&client_id={client_id}",
-                        summary.id
-                    ));
-                    let mut tracks = Vec::new();
-
-                    while let Some(url) = next {
-                        let page: ScPage<ScTrack> = self.fetch_json(&url).await?;
-                        tracks.extend(page.collection.into_iter().map(sc_to_track));
-                        next = page
-                            .next_href
-                            .as_deref()
-                            .map(|href| soundcloud_api_url(href, &client_id))
-                            .transpose()?;
-                    }
-
+                    let tracks = self.playlist_tracks_by_id(summary.id, &client_id).await?;
                     skipped_items += summary.track_count.saturating_sub(tracks.len());
                     playlists.push(SoundCloudPlaylist {
                         id: summary.id,
@@ -445,6 +451,14 @@ fn user_id_from_uri(uri: &ArtistUri) -> ProviderResult<u64> {
         .map_err(|e| ProviderError::Malformed(format!("user id parse: {e}")))
 }
 
+fn playlist_id_from_uri(uri: &PlaylistUri) -> ProviderResult<u64> {
+    let Some(id) = uri.0.strip_prefix("soundcloud:playlist:") else {
+        return Err(ProviderError::NotAvailable);
+    };
+    id.parse::<u64>()
+        .map_err(|e| ProviderError::Malformed(format!("playlist id parse: {e}")))
+}
+
 #[derive(Deserialize)]
 struct ScUserFull {
     id: u64,
@@ -544,6 +558,14 @@ impl Provider for SoundCloudProvider {
                 let raw: ScUserFull = self.fetch_json(&url).await?;
                 Ok(sc_user_to_artist(raw))
             }
+        })
+        .await
+    }
+
+    async fn playlist_tracks(&self, uri: &PlaylistUri) -> ProviderResult<Vec<Track>> {
+        let id = playlist_id_from_uri(uri)?;
+        self.with_client_id(|client_id| async move {
+            self.playlist_tracks_by_id(id, &client_id).await
         })
         .await
     }
@@ -1030,6 +1052,22 @@ mod tests {
         assert_eq!(playlists[0].owner_name.as_deref(), Some("Mira"));
         assert_eq!(playlists[1].kind, provider_api::PlaylistKind::Editorial);
         assert_eq!(playlists[1].open, provider_api::PlaylistOpen::InApp);
+    }
+
+    #[test]
+    fn playlist_uri_parser_rejects_foreign_and_malformed_ids() {
+        assert_eq!(
+            playlist_id_from_uri(&PlaylistUri("soundcloud:playlist:42".into())).unwrap(),
+            42
+        );
+        assert!(matches!(
+            playlist_id_from_uri(&PlaylistUri("spotify:playlist:42".into())),
+            Err(ProviderError::NotAvailable)
+        ));
+        assert!(matches!(
+            playlist_id_from_uri(&PlaylistUri("soundcloud:playlist:nope".into())),
+            Err(ProviderError::Malformed(_))
+        ));
     }
 
     #[test]

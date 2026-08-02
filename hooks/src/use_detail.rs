@@ -10,7 +10,7 @@
 //! detail surfaces.
 
 use dioxus::prelude::*;
-use provider_api::{AlbumUri, ArtistUri};
+use provider_api::{AlbumUri, ArtistUri, PlaylistBrief};
 
 /// How many detail levels stay mounted. Every level is a live page holding
 /// its loaded data and still subscribed to the shared library signal, so an
@@ -21,6 +21,7 @@ const DETAIL_STACK_CAP: usize = 12;
 pub enum DetailView {
     Artist(ArtistUri),
     Album(AlbumUri),
+    Playlist(PlaylistBrief),
 }
 
 #[derive(Clone, Copy)]
@@ -49,6 +50,10 @@ impl UseDetail {
 
     pub fn open_album(&self, uri: AlbumUri) {
         self.push(DetailView::Album(uri));
+    }
+
+    pub fn open_playlist(&self, playlist: PlaylistBrief) {
+        self.push(DetailView::Playlist(playlist));
     }
 
     fn push(&self, view: DetailView) {

@@ -827,6 +827,7 @@ fn MainContent(section: Signal<Section>) -> Element {
                 {match d.clone() {
                     DetailView::Artist(uri) => rsx! { pages::artist::ArtistPage { uri } },
                     DetailView::Album(uri)  => rsx! { pages::album::AlbumPage { uri } },
+                    DetailView::Playlist(brief) => rsx! { pages::playlist::PlaylistPage { brief } },
                 }}
             }
         }
@@ -837,5 +838,6 @@ fn detail_view_key(d: &DetailView) -> &str {
     match d {
         DetailView::Artist(uri) => &uri.0,
         DetailView::Album(uri) => &uri.0,
+        DetailView::Playlist(brief) => &brief.uri.0,
     }
 }

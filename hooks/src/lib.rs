@@ -34,6 +34,7 @@ pub mod use_library;
 pub mod use_likes;
 pub mod use_local_library;
 pub mod use_playlists;
+pub mod use_playlist;
 pub mod use_listenbrainz_feed;
 pub mod use_player;
 pub mod use_recommendations;
@@ -55,6 +56,7 @@ pub use use_likes::{LikedTrack, UseLikes, use_likes};
 pub use use_playlists::{
     Playlist, PlaylistAlbum, PlaylistImport, UsePlaylists, use_playlists,
 };
+pub use use_playlist::{UsePlaylist, use_playlist};
 pub use use_local_library::{UseLocalLibrary, use_local_library};
 pub use use_listenbrainz_feed::{UseListenBrainzFeed, use_listenbrainz_feed};
 pub use use_player::{PlayerContext, UsePlayer, use_player};
