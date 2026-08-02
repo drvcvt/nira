@@ -475,6 +475,7 @@ impl Provider for SpotifyProvider {
                 .artists
                 .map(|p| p.items.into_iter().map(sp_to_artist).collect())
                 .unwrap_or_default(),
+            playlists: Vec::new(),
         })
     }
 

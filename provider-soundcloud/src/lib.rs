@@ -507,7 +507,11 @@ impl Provider for SoundCloudProvider {
                 let artists = users_res
                     .map(|r| r.collection.into_iter().map(sc_user_to_artist).collect())
                     .unwrap_or_default();
-                Ok(SearchResults { tracks, artists })
+                Ok(SearchResults {
+                    tracks,
+                    artists,
+                    playlists: Vec::new(),
+                })
             }
         })
         .await

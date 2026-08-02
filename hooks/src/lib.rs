@@ -76,7 +76,8 @@ pub use enrichment::Listen;
 pub use player::{Active, HistoryEntry, NowPlaying, Player, PlayerError, PlayerSnapshot, VizFrame};
 pub use provider_api::{
     AlbumBrief, AlbumDetail, AlbumRef, AlbumType, AlbumUri, Artist, ArtistRef, ArtistUri, Provider,
-    ProviderError, ProviderId, Query, RelatedArtist, Track, TrackUri,
+    PlaylistBrief, PlaylistKind, PlaylistOpen, PlaylistUri, ProviderError, ProviderId, Query,
+    RelatedArtist, Track, TrackUri,
 };
 
 /// One-shot context installer for the root `App` component. Provisions the

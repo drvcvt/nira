@@ -92,6 +92,42 @@ pub struct ArtistUri(pub String);
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AlbumUri(pub String);
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaylistUri(pub String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlaylistKind {
+    User,
+    Editorial,
+}
+
+impl PlaylistKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::User => "User playlist",
+            Self::Editorial => "Editorial playlist",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlaylistOpen {
+    InApp,
+    External(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaylistBrief {
+    pub uri: PlaylistUri,
+    pub provider: ProviderId,
+    pub title: String,
+    pub owner_name: Option<String>,
+    pub cover_url: Option<String>,
+    pub track_count: Option<usize>,
+    pub kind: PlaylistKind,
+    pub open: PlaylistOpen,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Track {
     pub uri: TrackUri,
@@ -202,6 +238,7 @@ pub struct Query {
 pub struct SearchResults {
     pub tracks: Vec<Track>,
     pub artists: Vec<Artist>,
+    pub playlists: Vec<PlaylistBrief>,
 }
 
 /// Opaque audio source the player crate knows how to consume. Concrete shapes
@@ -261,6 +298,10 @@ pub trait Provider: Send + Sync {
         Err(ProviderError::NotAvailable)
     }
 
+    async fn playlist_tracks(&self, _uri: &PlaylistUri) -> ProviderResult<Vec<Track>> {
+        Err(ProviderError::NotAvailable)
+    }
+
     /// Provider-native "related artists" feed, if any. Discovery's
     /// cross-provider merge layer is the right place to combine these
     /// across providers — this method only returns the calling provider's
@@ -271,5 +312,16 @@ pub trait Provider: Send + Sync {
         _limit: u32,
     ) -> ProviderResult<Vec<RelatedArtist>> {
         Err(ProviderError::NotAvailable)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playlist_kind_labels_are_unambiguous() {
+        assert_eq!(PlaylistKind::User.label(), "User playlist");
+        assert_eq!(PlaylistKind::Editorial.label(), "Editorial playlist");
     }
 }
