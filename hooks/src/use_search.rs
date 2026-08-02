@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dioxus::prelude::*;
-use provider_api::{Artist, Provider, Query, SearchResults, Track};
+use provider_api::{Artist, PlaylistBrief, Provider, Query, SearchResults, Track};
 use provider_soundcloud::SoundCloudProvider;
 use provider_spotify::SpotifyProvider;
 
@@ -22,6 +22,7 @@ pub struct UseSearch {
     /// entries win the dedupe — their profiles carry albums + related,
     /// which a SoundCloud user page can't offer.
     pub artists: Signal<Vec<Artist>>,
+    pub playlists: Signal<Vec<PlaylistBrief>>,
     pub is_searching: Signal<bool>,
     pub error: Signal<Option<String>>,
     /// The query string the current `results` belong to. Lets Enter-to-play
@@ -37,6 +38,7 @@ pub(crate) fn install_search() {
     let query = use_signal(String::new);
     let results = use_signal(Vec::<Track>::new);
     let artists = use_signal(Vec::<Artist>::new);
+    let playlists = use_signal(Vec::<PlaylistBrief>::new);
     let is_searching = use_signal(|| false);
     let error = use_signal(|| None::<String>);
     let results_for = use_signal(String::new);
@@ -51,6 +53,7 @@ pub(crate) fn install_search() {
                 let q_sig = query;
             let mut results_sig = results;
             let mut artists_sig = artists;
+            let mut playlists_sig = playlists;
             let mut is_searching_sig = is_searching;
             let mut error_sig = error;
             let mut results_for_sig = results_for;
@@ -64,6 +67,7 @@ pub(crate) fn install_search() {
                 if trimmed.is_empty() {
                     results_sig.set(Vec::new());
                     artists_sig.set(Vec::new());
+                    playlists_sig.set(Vec::new());
                     results_for_sig.set(snapshot.clone());
                     is_searching_sig.set(false);
                     error_sig.set(None);
@@ -114,13 +118,13 @@ pub(crate) fn install_search() {
 
                 // Streaming providers interleaved. Any provider that errors
                 // just drops out — one failure never blanks the results.
-                let (sc_tracks, sc_artists, sc_err) = match sc_res {
-                    Ok(r) => (r.tracks, r.artists, None),
-                    Err(e) => (Vec::new(), Vec::new(), Some(e)),
+                let (sc_tracks, sc_artists, sc_playlists, sc_err) = match sc_res {
+                    Ok(r) => (r.tracks, r.artists, r.playlists, None),
+                    Err(e) => (Vec::new(), Vec::new(), Vec::new(), Some(e)),
                 };
-                let (sp_tracks, sp_artists, sp_err) = match sp_res {
-                    Ok(r) => (r.tracks, r.artists, None),
-                    Err(e) => (Vec::new(), Vec::new(), Some(e)),
+                let (sp_tracks, sp_artists, sp_playlists, sp_err) = match sp_res {
+                    Ok(r) => (r.tracks, r.artists, r.playlists, None),
+                    Err(e) => (Vec::new(), Vec::new(), Vec::new(), Some(e)),
                 };
 
                 artists_sig.set(merge_artist_hits(sp_artists, sc_artists));
@@ -128,14 +132,17 @@ pub(crate) fn install_search() {
                 match (sc_err, sp_err) {
                     (None, None) => {
                         results_sig.set(interleave(sp_tracks, sc_tracks));
+                        playlists_sig.set(merge_playlist_hits(sp_playlists, sc_playlists));
                     }
                     (None, Some(e)) => {
                         tracing::warn!(error=%e, "Spotify search failed; falling back to SC only");
                         results_sig.set(sc_tracks);
+                        playlists_sig.set(merge_playlist_hits(Vec::new(), sc_playlists));
                     }
                     (Some(e), None) => {
                         tracing::warn!(error=%e, "SoundCloud search failed; falling back to Spotify only");
                         results_sig.set(sp_tracks);
+                        playlists_sig.set(merge_playlist_hits(sp_playlists, Vec::new()));
                     }
                     (Some(sc_e), Some(sp_e)) => {
                         error_sig.set(Some(format!(
@@ -144,6 +151,7 @@ pub(crate) fn install_search() {
                         // Don't leave the previous query's results behind
                         // an error banner where Enter could still play them.
                         results_sig.set(Vec::new());
+                        playlists_sig.set(Vec::new());
                     }
                 }
                 results_for_sig.set(snapshot.clone());
@@ -156,6 +164,7 @@ pub(crate) fn install_search() {
         query,
         results,
         artists,
+        playlists,
         is_searching,
         error,
         results_for,
@@ -181,7 +190,7 @@ fn merge_artist_hits(spotify: Vec<Artist>, soundcloud: Vec<Artist>) -> Vec<Artis
     merged
 }
 
-fn interleave(a: Vec<Track>, b: Vec<Track>) -> Vec<Track> {
+fn interleave<T>(a: Vec<T>, b: Vec<T>) -> Vec<T> {
     let mut out = Vec::with_capacity(a.len() + b.len());
     let mut a = a.into_iter();
     let mut b = b.into_iter();
@@ -200,10 +209,21 @@ fn interleave(a: Vec<Track>, b: Vec<Track>) -> Vec<Track> {
     out
 }
 
+fn merge_playlist_hits(
+    spotify: Vec<PlaylistBrief>,
+    soundcloud: Vec<PlaylistBrief>,
+) -> Vec<PlaylistBrief> {
+    let mut merged = interleave(spotify, soundcloud);
+    merged.truncate(8);
+    merged
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use provider_api::{ArtistUri, ProviderId};
+    use provider_api::{
+        ArtistUri, PlaylistBrief, PlaylistKind, PlaylistOpen, PlaylistUri, ProviderId,
+    };
 
     fn artist(provider: ProviderId, name: &str) -> Artist {
         Artist {
@@ -227,5 +247,38 @@ mod tests {
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].provider, ProviderId::Spotify);
         assert_eq!(merged[1].name, "sc only");
+    }
+
+    fn playlist(provider: ProviderId, id: usize) -> PlaylistBrief {
+        PlaylistBrief {
+            uri: PlaylistUri(format!("{}:playlist:{id}", provider.label().to_lowercase())),
+            provider,
+            title: "Same title".into(),
+            owner_name: None,
+            cover_url: None,
+            track_count: None,
+            kind: PlaylistKind::User,
+            open: PlaylistOpen::InApp,
+        }
+    }
+
+    #[test]
+    fn playlist_hits_alternate_preserve_titles_and_cap_at_eight() {
+        let spotify = (0..5).map(|id| playlist(ProviderId::Spotify, id)).collect();
+        let soundcloud = (0..5)
+            .map(|id| playlist(ProviderId::SoundCloud, id))
+            .collect();
+        let merged = merge_playlist_hits(spotify, soundcloud);
+
+        assert_eq!(merged.len(), 8);
+        assert!(merged.iter().all(|playlist| playlist.title == "Same title"));
+        for (index, playlist) in merged.iter().enumerate() {
+            let expected = if index % 2 == 0 {
+                ProviderId::Spotify
+            } else {
+                ProviderId::SoundCloud
+            };
+            assert_eq!(playlist.provider, expected);
+        }
     }
 }

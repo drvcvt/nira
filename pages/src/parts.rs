@@ -6,8 +6,8 @@
 
 use dioxus::prelude::*;
 use hooks::{
-    AlbumRef, Artist, ArtistRef, ProviderId, Track, UseCtxMenu, uri_has_detail_page, use_ctx_menu,
-    use_detail, use_queue,
+    AlbumRef, Artist, ArtistRef, PlaylistBrief, PlaylistOpen, ProviderId, Track, UseCtxMenu,
+    uri_has_detail_page, use_ctx_menu, use_detail, use_queue,
 };
 
 pub fn format_duration(d: std::time::Duration) -> String {
@@ -156,6 +156,112 @@ pub fn ArtistResults(
                     span { class: "artist-result-name", "{a.name}" }
                     span { class: "artist-result-badge", "{a.provider.badge()}" }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn PlaylistResults(
+    playlists: Vec<PlaylistBrief>,
+    #[props(default)] on_open: Option<EventHandler<()>>,
+) -> Element {
+    if playlists.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        section { class: "playlist-results",
+            h2 { class: "playlist-results-title", "Playlists" }
+            div { class: "playlist-results-grid",
+                for playlist in playlists {
+                    PlaylistResultCard {
+                        key: "{playlist.uri.0}",
+                        playlist,
+                        on_open,
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn PlaylistResultCard(
+    playlist: PlaylistBrief,
+    #[props(default)] on_open: Option<EventHandler<()>>,
+) -> Element {
+    let detail = use_detail();
+    match playlist.open.clone() {
+        PlaylistOpen::InApp => {
+            let target = playlist.clone();
+            rsx! {
+                button {
+                    class: "playlist-result-card",
+                    r#type: "button",
+                    title: "{playlist.title}",
+                    onclick: move |_| {
+                        detail.open_playlist(target.clone());
+                        if let Some(callback) = on_open.as_ref() {
+                            callback.call(());
+                        }
+                    },
+                    PlaylistCardBody { playlist: playlist.clone() }
+                }
+            }
+        }
+        PlaylistOpen::External(url) => {
+            let provider = playlist.provider.label();
+            rsx! {
+                a {
+                    class: "playlist-result-card",
+                    href: "{url}",
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                    title: "Open in {provider}",
+                    onclick: move |_| {
+                        if let Some(callback) = on_open.as_ref() {
+                            callback.call(());
+                        }
+                    },
+                    PlaylistCardBody { playlist }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn PlaylistCardBody(playlist: PlaylistBrief) -> Element {
+    let cover = playlist.cover_url.clone().unwrap_or_default();
+    let mut secondary = Vec::new();
+    if let Some(owner) = playlist.owner_name.as_deref() {
+        secondary.push(format!("by {owner}"));
+    }
+    if let Some(count) = playlist.track_count {
+        secondary.push(format!(
+            "{count} {}",
+            if count == 1 { "track" } else { "tracks" }
+        ));
+    }
+    let secondary = secondary.join(" · ");
+
+    rsx! {
+        span { class: "playlist-result-cover",
+            if !cover.is_empty() {
+                img { src: "{cover}", alt: "", loading: "lazy", decoding: "async" }
+            } else {
+                i { class: "fa-solid fa-list-music" }
+            }
+        }
+        span { class: "playlist-result-copy",
+            span { class: "playlist-result-title", "{playlist.title}" }
+            if !secondary.is_empty() {
+                span { class: "playlist-result-secondary", "{secondary}" }
+            }
+            span { class: "playlist-result-attribution",
+                span { class: "playlist-result-kind", "{playlist.kind.label()}" }
+                span { "·" }
+                span { class: "playlist-result-provider", "{playlist.provider.label()}" }
             }
         }
     }

@@ -8,7 +8,7 @@ use components::SearchBar;
 use dioxus::prelude::*;
 use hooks::{use_detail, use_search};
 
-use crate::parts::{ArtistResults, SearchTrackRow, TrackCtx};
+use crate::parts::{ArtistResults, PlaylistResults, SearchTrackRow, TrackCtx};
 
 #[component]
 pub fn SearchOverlay(mut open: Signal<bool>, on_search: EventHandler<()>) -> Element {
@@ -18,6 +18,7 @@ pub fn SearchOverlay(mut open: Signal<bool>, on_search: EventHandler<()>) -> Ele
     let query = search.query.read().clone();
     let results = search.results.read().clone();
     let artist_hits = search.artists.read().clone();
+    let playlists = search.playlists.read().clone();
     let is_searching = *search.is_searching.read();
     let error = search.error.read().clone();
     let has_query = !query.trim().is_empty();
@@ -58,7 +59,7 @@ pub fn SearchOverlay(mut open: Signal<bool>, on_search: EventHandler<()>) -> Ele
                         key: "search-overlay-input-{is_open}",
                         icon: Some("fa-solid fa-magnifying-glass".to_string()),
                         value: query.clone(),
-                        placeholder: "Search songs, artists, labels…".to_string(),
+                        placeholder: "Search songs, artists, playlists, labels…".to_string(),
                         autofocus: is_open,
                         on_input: move |v: String| search.query.set(v),
                         on_submit: move |_| {
@@ -88,7 +89,11 @@ pub fn SearchOverlay(mut open: Signal<bool>, on_search: EventHandler<()>) -> Ele
                             div { class: "search-overlay-empty-title", "Start typing" }
                             div { class: "search-overlay-empty-copy", "Results from your connected music providers. Enter opens the full page." }
                         }
-                    } else if results.is_empty() && artist_hits.is_empty() && !is_searching {
+                    } else if results.is_empty()
+                        && artist_hits.is_empty()
+                        && playlists.is_empty()
+                        && !is_searching
+                    {
                         div { class: "search-overlay-empty",
                             div { class: "search-overlay-empty-title", "No results" }
                             div { class: "search-overlay-empty-copy", "Try artist + title or a shorter query." }
@@ -96,6 +101,10 @@ pub fn SearchOverlay(mut open: Signal<bool>, on_search: EventHandler<()>) -> Ele
                     } else {
                         ArtistResults {
                             artists: artist_hits,
+                            on_open: move |_| open.set(false),
+                        }
+                        PlaylistResults {
+                            playlists,
                             on_open: move |_| open.set(false),
                         }
                         ul { class: "search-overlay-list",

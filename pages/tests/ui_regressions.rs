@@ -198,3 +198,25 @@ fn community_playlists_have_a_stale_safe_internal_detail_page() {
     assert!(shell.contains("pages::playlist::PlaylistPage"));
     assert!(shell.contains("DetailView::Playlist"));
 }
+
+#[test]
+fn both_search_surfaces_render_labelled_playlist_open_modes() {
+    let page = include_str!("../src/search.rs");
+    let overlay = include_str!("../src/search_overlay.rs");
+    let parts = include_str!("../src/parts.rs");
+    let contract = include_str!("../../provider-api/src/lib.rs");
+    let css = include_str!("../../nira/assets/css/search.css");
+
+    assert!(page.contains("PlaylistResults"));
+    assert!(overlay.contains("PlaylistResults"));
+    assert!(page.contains("playlists.is_empty()"));
+    assert!(overlay.contains("playlists.is_empty()"));
+    assert!(parts.contains("PlaylistOpen::InApp"));
+    assert!(parts.contains("PlaylistOpen::External"));
+    assert!(parts.contains("target: \"_blank\""));
+    assert!(parts.contains("rel: \"noopener noreferrer\""));
+    assert!(contract.contains("\"User playlist\""));
+    assert!(contract.contains("\"Editorial playlist\""));
+    assert!(css.contains(".search-overlay-results"));
+    assert!(css.contains("overflow-y: auto"));
+}
