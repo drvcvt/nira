@@ -19,8 +19,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use provider_api::{
-    Artist, ArtistRef, ArtistUri, Provider, ProviderCaps, ProviderError, ProviderId,
-    ProviderResult, Query, SearchResults, StreamHandle, Track, TrackUri,
+    Artist, ArtistRef, ArtistUri, PlaylistBrief, PlaylistKind, PlaylistOpen, PlaylistUri, Provider,
+    ProviderCaps, ProviderError, ProviderId, ProviderResult, Query, SearchResults, StreamHandle,
+    Track, TrackUri,
 };
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -495,22 +496,28 @@ impl Provider for SoundCloudProvider {
             let tracks_url =
                 format!("{SC_API}/search/tracks?q={encoded}&limit={limit}&client_id={cid}");
             let users_url = format!("{SC_API}/search/users?q={encoded}&limit=6&client_id={cid}");
+            let playlists_url =
+                format!("{SC_API}/search/playlists?q={encoded}&limit=8&client_id={cid}");
             async move {
-                // Users search is best-effort — a failure there must never
-                // blank the track results.
-                let (tracks_res, users_res) = tokio::join!(
+                // Supplementary searches are best-effort — neither may
+                // blank valid track results.
+                let (tracks_res, users_res, playlists_res) = tokio::join!(
                     self.fetch_json::<ScSearchResp>(&tracks_url),
                     self.fetch_json::<ScUserSearchResp>(&users_url),
+                    self.fetch_json::<ScPlaylistSearchResp>(&playlists_url),
                 );
                 let raw = tracks_res?;
                 let tracks = raw.collection.into_iter().map(sc_to_track).collect();
                 let artists = users_res
                     .map(|r| r.collection.into_iter().map(sc_user_to_artist).collect())
                     .unwrap_or_default();
+                let playlists = playlists_res
+                    .map(|r| r.collection.into_iter().map(sc_search_playlist).collect())
+                    .unwrap_or_default();
                 Ok(SearchResults {
                     tracks,
                     artists,
-                    playlists: Vec::new(),
+                    playlists,
                 })
             }
         })
@@ -821,6 +828,12 @@ struct ScPlaylistBrief {
     artwork_url: Option<String>,
     #[serde(default)]
     track_count: usize,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    user: Option<ScUser>,
+    #[serde(default, rename = "permalink_url")]
+    _permalink_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -837,6 +850,28 @@ fn soundcloud_summary(raw: ScPlaylistBrief) -> SoundCloudPlaylistSummary {
         cover_url: raw.artwork_url.map(upgrade_artwork),
         track_count: raw.track_count,
     }
+}
+
+fn sc_search_playlist(raw: ScPlaylistBrief) -> PlaylistBrief {
+    PlaylistBrief {
+        uri: PlaylistUri(format!("soundcloud:playlist:{}", raw.id)),
+        provider: ProviderId::SoundCloud,
+        title: raw.title,
+        owner_name: raw.user.map(|user| user.username),
+        cover_url: raw.artwork_url.map(upgrade_artwork),
+        track_count: Some(raw.track_count),
+        kind: if raw.kind == "system-playlist" {
+            PlaylistKind::Editorial
+        } else {
+            PlaylistKind::User
+        },
+        open: PlaylistOpen::InApp,
+    }
+}
+
+#[derive(Deserialize)]
+struct ScPlaylistSearchResp {
+    collection: Vec<ScPlaylistBrief>,
 }
 
 #[derive(Deserialize)]
@@ -963,6 +998,38 @@ mod tests {
         assert_eq!(summary.title, "Night drive");
         assert_eq!(summary.track_count, 3);
         assert!(summary.cover_url.unwrap().contains("-t500x500."));
+    }
+
+    #[test]
+    fn search_playlists_keep_kind_owner_and_internal_opening() {
+        let json = r#"{
+            "collection": [
+                {
+                    "id": 42,
+                    "title": "Night drive",
+                    "kind": "playlist",
+                    "user": { "id": 7, "username": "Mira" },
+                    "track_count": 3
+                },
+                {
+                    "id": 99,
+                    "title": "Fresh Pressed",
+                    "kind": "system-playlist",
+                    "track_count": 20
+                }
+            ]
+        }"#;
+        let raw: ScPlaylistSearchResp = serde_json::from_str(json).unwrap();
+        let playlists = raw
+            .collection
+            .into_iter()
+            .map(sc_search_playlist)
+            .collect::<Vec<_>>();
+
+        assert_eq!(playlists[0].kind, provider_api::PlaylistKind::User);
+        assert_eq!(playlists[0].owner_name.as_deref(), Some("Mira"));
+        assert_eq!(playlists[1].kind, provider_api::PlaylistKind::Editorial);
+        assert_eq!(playlists[1].open, provider_api::PlaylistOpen::InApp);
     }
 
     #[test]

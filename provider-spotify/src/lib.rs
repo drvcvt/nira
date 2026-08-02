@@ -26,9 +26,9 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use provider_api::{
-    AlbumBrief, AlbumDetail, AlbumRef, AlbumType, AlbumUri, Artist, ArtistRef, ArtistUri, Provider,
-    ProviderCaps, ProviderError, ProviderId, ProviderResult, Query, RelatedArtist, SearchResults,
-    StreamHandle, Track, TrackUri,
+    AlbumBrief, AlbumDetail, AlbumRef, AlbumType, AlbumUri, Artist, ArtistRef, ArtistUri,
+    PlaylistBrief, PlaylistKind, PlaylistOpen, PlaylistUri, Provider, ProviderCaps, ProviderError,
+    ProviderId, ProviderResult, Query, RelatedArtist, SearchResults, StreamHandle, Track, TrackUri,
 };
 use reqwest::{Client, Response, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -475,7 +475,10 @@ impl Provider for SpotifyProvider {
                 .artists
                 .map(|p| p.items.into_iter().map(sp_to_artist).collect())
                 .unwrap_or_default(),
-            playlists: Vec::new(),
+            playlists: raw
+                .playlists
+                .map(|page| spotify_search_playlists(page.items))
+                .unwrap_or_default(),
         })
     }
 
@@ -794,7 +797,7 @@ fn spotify_search_url(text: &str, limit: Option<u32>) -> String {
     let mut query = url::form_urlencoded::Serializer::new(String::new());
     query
         .append_pair("q", text)
-        .append_pair("type", "track,artist")
+        .append_pair("type", "track,artist,playlist")
         .append_pair(
             "limit",
             &limit.unwrap_or(SEARCH_MAX).clamp(1, SEARCH_MAX).to_string(),
@@ -918,6 +921,14 @@ struct SpSearchResp {
     tracks: SpTrackPage,
     #[serde(default)]
     artists: Option<SpArtistPage>,
+    #[serde(default)]
+    playlists: Option<SpPlaylistSearchPage>,
+}
+
+#[derive(Deserialize)]
+struct SpPlaylistSearchPage {
+    #[serde(default)]
+    items: Vec<Option<SpPlaylistBrief>>,
 }
 
 #[derive(Deserialize)]
@@ -952,6 +963,8 @@ struct SpPlaylistBrief {
     owner: SpPlaylistOwner,
     images: Option<Vec<SpImage>>,
     #[serde(default)]
+    external_urls: SpExternalUrls,
+    #[serde(default)]
     items: Option<SpPlaylistItemsRef>,
     #[serde(default)]
     tracks: Option<SpPlaylistItemsRef>,
@@ -960,12 +973,39 @@ struct SpPlaylistBrief {
 #[derive(Deserialize)]
 struct SpPlaylistOwner {
     id: String,
+    #[serde(default)]
+    display_name: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct SpPlaylistItemsRef {
     #[serde(default)]
     total: usize,
+}
+
+fn spotify_search_playlists(items: Vec<Option<SpPlaylistBrief>>) -> Vec<PlaylistBrief> {
+    items
+        .into_iter()
+        .flatten()
+        .filter_map(|playlist| {
+            let external_url = playlist.external_urls.spotify?;
+            let kind = if playlist.owner.id == "spotify" {
+                PlaylistKind::Editorial
+            } else {
+                PlaylistKind::User
+            };
+            Some(PlaylistBrief {
+                uri: PlaylistUri(format!("spotify:playlist:{}", playlist.id)),
+                provider: ProviderId::Spotify,
+                title: playlist.name,
+                owner_name: playlist.owner.display_name.or(Some(playlist.owner.id)),
+                cover_url: sp_mid_image(playlist.images.unwrap_or_default()),
+                track_count: playlist.items.or(playlist.tracks).map(|items| items.total),
+                kind,
+                open: PlaylistOpen::External(external_url),
+            })
+        })
+        .collect()
 }
 
 fn playlist_summaries(
@@ -1436,7 +1476,44 @@ mod tests {
 
         assert_eq!(
             url,
-            "https://api.spotify.com/v1/search?q=massive+attack&type=track%2Cartist&limit=10"
+            "https://api.spotify.com/v1/search?q=massive+attack&type=track%2Cartist%2Cplaylist&limit=10"
+        );
+    }
+
+    #[test]
+    fn search_playlists_keep_kind_owner_count_and_external_url() {
+        let json = r#"{
+            "items": [
+                {
+                    "id": "editorial",
+                    "name": "Fresh Finds",
+                    "owner": { "id": "spotify", "display_name": "Spotify" },
+                    "external_urls": { "spotify": "https://open.spotify.com/playlist/editorial" },
+                    "images": [],
+                    "items": { "total": 25 }
+                },
+                {
+                    "id": "community",
+                    "name": "Night drive",
+                    "owner": { "id": "listener", "display_name": "Mira" },
+                    "external_urls": { "spotify": "https://open.spotify.com/playlist/community" },
+                    "images": [],
+                    "tracks": { "total": 12 }
+                }
+            ]
+        }"#;
+        let page: SpPlaylistSearchPage = serde_json::from_str(json).unwrap();
+        let playlists = spotify_search_playlists(page.items);
+
+        assert_eq!(playlists[0].kind, provider_api::PlaylistKind::Editorial);
+        assert_eq!(playlists[1].kind, provider_api::PlaylistKind::User);
+        assert_eq!(playlists[1].owner_name.as_deref(), Some("Mira"));
+        assert_eq!(playlists[1].track_count, Some(12));
+        assert_eq!(
+            playlists[1].open,
+            provider_api::PlaylistOpen::External(
+                "https://open.spotify.com/playlist/community".into()
+            )
         );
     }
 }
