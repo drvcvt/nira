@@ -15,6 +15,18 @@ pub fn SearchOverlay(mut open: Signal<bool>, on_search: EventHandler<()>) -> Ele
     let mut search = use_search();
     let detail = use_detail();
     let is_open = *open.read();
+
+    // Hand focus back on close. Closing reverts the overlay to
+    // `visibility: hidden`, which blurs the focused input to <body> — and a
+    // focused body means the shell's Rust onkeydown stops receiving anything.
+    use_effect(move || {
+        components::overlay_focus(*open.read(), ".search-overlay.open .searchbar-input");
+    });
+
+    if !is_open {
+        return rsx! { div { class: "search-overlay" } };
+    }
+
     let query = search.query.read().clone();
     let results = search.results.read().clone();
     let artist_hits = search.artists.read().clone();
@@ -24,22 +36,9 @@ pub fn SearchOverlay(mut open: Signal<bool>, on_search: EventHandler<()>) -> Ele
     let has_query = !query.trim().is_empty();
     let row_ctx = TrackCtx::new(results.clone());
 
-    let overlay_class = if is_open {
-        "search-overlay open"
-    } else {
-        "search-overlay"
-    };
-
-    // Hand focus back on close. Closing reverts the overlay to
-    // `visibility: hidden`, which blurs the focused input to <body> — and a
-    // focused body means the shell's Rust onkeydown stops receiving anything.
-    use_effect(move || {
-        components::overlay_focus(*open.read(), ".search-overlay.open .searchbar-input");
-    });
-
     rsx! {
         div {
-            class: "{overlay_class}",
+            class: "search-overlay open",
             onkeydown: move |e: Event<KeyboardData>| {
                 if e.key() == Key::Escape {
                     e.prevent_default();

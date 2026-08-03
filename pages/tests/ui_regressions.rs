@@ -220,3 +220,11 @@ fn both_search_surfaces_render_labelled_playlist_open_modes() {
     assert!(css.contains(".search-overlay-results"));
     assert!(css.contains("overflow-y: auto"));
 }
+
+#[test]
+fn closed_search_overlay_does_not_render_duplicate_results() {
+    let overlay = include_str!("../src/search_overlay.rs");
+
+    assert!(overlay.contains("if !is_open {"));
+    assert!(overlay.contains("return rsx! { div { class: \"search-overlay\" } };"));
+}
