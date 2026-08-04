@@ -1,4 +1,4 @@
-//! Global download status rendered by the app-shell toast.
+//! Global background-operation status rendered by the app-shell toast.
 
 use dioxus::prelude::*;
 

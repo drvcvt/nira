@@ -33,6 +33,25 @@ enum PersistJob {
     Flush(std::sync::mpsc::SyncSender<()>),
 }
 
+/// Completion handle for a write already ordered in the persistence queue.
+#[must_use = "wait for the receipt to learn whether the write reached disk"]
+pub struct PersistReceipt(std::sync::mpsc::Receiver<Result<(), String>>);
+
+impl PersistReceipt {
+    pub fn wait(self, timeout: std::time::Duration) -> anyhow::Result<()> {
+        match self.0.recv_timeout(timeout) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(anyhow::anyhow!(error)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                Err(anyhow::anyhow!("save confirmation timed out"))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(anyhow::anyhow!("persistence writer thread gone"))
+            }
+        }
+    }
+}
+
 fn persist_tx() -> &'static std::sync::mpsc::Sender<PersistJob> {
     PERSIST_TX.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<PersistJob>();
@@ -52,10 +71,16 @@ fn persist_tx() -> &'static std::sync::mpsc::Sender<PersistJob> {
                             let _ = done.send(result);
                         }
                         PersistJob::Remove(path) => {
-                            if let Err(error) = std::fs::remove_file(&path)
-                                && error.kind() != std::io::ErrorKind::NotFound
-                            {
-                                tracing::warn!(%error, path = %path.display(), "background remove failed");
+                            match std::fs::remove_file(&path) {
+                                Ok(()) => {
+                                    if let Err(error) = sync_parent(&path) {
+                                        tracing::warn!(%error, path = %path.display(), "background remove sync failed");
+                                    }
+                                }
+                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                                Err(error) => {
+                                    tracing::warn!(%error, path = %path.display(), "background remove failed");
+                                }
                             }
                         }
                         PersistJob::Flush(done) => {
@@ -189,20 +214,19 @@ fn persist_confirmed(
     mode: Option<u32>,
     timeout: std::time::Duration,
 ) -> anyhow::Result<()> {
+    persist_confirmed_bg(path, bytes, mode)?.wait(timeout)
+}
+
+fn persist_confirmed_bg(
+    path: PathBuf,
+    bytes: Vec<u8>,
+    mode: Option<u32>,
+) -> anyhow::Result<PersistReceipt> {
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
     persist_tx()
         .send(PersistJob::WriteConfirmed(path, bytes, mode, done_tx))
         .map_err(|_| anyhow::anyhow!("persistence writer thread gone"))?;
-    match done_rx.recv_timeout(timeout) {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => Err(anyhow::anyhow!(error)),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            Err(anyhow::anyhow!("save confirmation timed out"))
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            Err(anyhow::anyhow!("persistence writer thread gone"))
-        }
-    }
+    Ok(PersistReceipt(done_rx))
 }
 
 /// UI theme preference. `System` defers to the OS/portal colour scheme via
@@ -489,6 +513,14 @@ impl AppConfig {
         Self::atomic_write_bg(path, serde_json::to_vec(value)?)
     }
 
+    /// Enqueue JSON without blocking the caller and return its disk result.
+    pub fn atomic_write_json_confirmed_bg<T: serde::Serialize>(
+        path: std::path::PathBuf,
+        value: &T,
+    ) -> anyhow::Result<PersistReceipt> {
+        persist_confirmed_bg(path, serde_json::to_vec(value)?, None)
+    }
+
     /// Background variant of [`Self::save`] for hot paths (volume drags).
     /// Secret-tier: config.json carries the ListenBrainz/Last.fm
     /// tokens, so it gets the same 0600 treatment as the auth caches.
@@ -530,7 +562,9 @@ impl AppConfig {
             std::process::id(),
             TEMP_ID.fetch_add(1, Ordering::Relaxed)
         ));
-        let result = write_synced(&tmp, bytes, mode).and_then(|()| std::fs::rename(&tmp, path));
+        let result = write_synced(&tmp, bytes, mode)
+            .and_then(|()| std::fs::rename(&tmp, path))
+            .and_then(|()| sync_parent(path));
         if result.is_err() {
             let _ = std::fs::remove_file(&tmp);
         }
@@ -593,6 +627,22 @@ fn write_synced(tmp: &std::path::Path, bytes: &[u8], mode: Option<u32>) -> std::
     let _ = mode;
     f.write_all(bytes)?;
     f.sync_all()
+}
+
+fn sync_parent(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::File::open(parent)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 /// Remove crash-orphaned atomic-write temp files (`.<name>.tmp-<pid>-<n>`)
@@ -832,20 +882,21 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_write_returns_the_disk_error() {
+    fn confirmed_background_write_returns_the_disk_error() {
         let dir = temp_dir("confirmed-error");
         std::fs::create_dir_all(&dir).unwrap();
         let parent_is_file = dir.join("not-a-directory");
         std::fs::write(&parent_is_file, b"keep").unwrap();
         let target = parent_is_file.join("config.json");
 
-        let error = persist_confirmed(
+        let receipt = AppConfig::atomic_write_json_confirmed_bg(
             target,
-            b"{}".to_vec(),
-            Some(0o600),
-            std::time::Duration::from_secs(10),
+            &serde_json::json!({ "version": 1 }),
         )
-        .unwrap_err();
+        .unwrap();
+        let error = receipt
+            .wait(std::time::Duration::from_secs(10))
+            .unwrap_err();
         assert!(!error.to_string().is_empty());
         assert_eq!(std::fs::read(&parent_is_file).unwrap(), b"keep");
 

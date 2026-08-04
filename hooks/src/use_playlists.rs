@@ -83,6 +83,7 @@ impl Playlist {
 pub struct UsePlaylists {
     pub items: Signal<Vec<Playlist>>,
     path: Signal<Option<PathBuf>>,
+    notices: crate::UseDownloads,
 }
 
 impl UsePlaylists {
@@ -253,9 +254,11 @@ impl UsePlaylists {
         let Some(path) = self.path.peek().clone() else {
             return;
         };
-        if let Err(e) = AppConfig::atomic_write_json_bg(path, &current) {
-            tracing::warn!("playlists persist failed: {e}");
-        }
+        crate::report_persist(
+            AppConfig::atomic_write_json_confirmed_bg(path, &current),
+            self.notices,
+            "Playlists",
+        );
     }
 }
 
@@ -316,9 +319,11 @@ pub fn install_playlists() {
     let (initial, path) = load_playlists(AppConfig::playlists_path());
     let items = use_signal(|| initial);
     let path_sig = use_signal(|| path);
+    let notices = crate::use_downloads();
     use_context_provider(move || UsePlaylists {
         items,
         path: path_sig,
+        notices,
     });
 }
 

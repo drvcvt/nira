@@ -26,6 +26,7 @@ pub struct LikedTrack {
 pub struct UseLikes {
     pub items: Signal<Vec<LikedTrack>>,
     pub path: Signal<Option<PathBuf>>,
+    notices: crate::UseDownloads,
 }
 
 impl UseLikes {
@@ -65,9 +66,11 @@ impl UseLikes {
         let Some(path) = self.path.peek().clone() else {
             return;
         };
-        if let Err(e) = AppConfig::atomic_write_json_bg(path, &items) {
-            tracing::warn!("likes persist failed: {e}");
-        }
+        crate::report_persist(
+            AppConfig::atomic_write_json_confirmed_bg(path, &items),
+            self.notices,
+            "Likes",
+        );
     }
 }
 
@@ -88,9 +91,11 @@ pub fn install_likes() {
     let (initial, path) = load_likes(AppConfig::likes_path());
     let items = use_signal(|| initial);
     let path_sig = use_signal(|| path);
+    let notices = crate::use_downloads();
     use_context_provider(move || UseLikes {
         items,
         path: path_sig,
+        notices,
     });
 }
 

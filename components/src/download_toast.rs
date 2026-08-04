@@ -31,7 +31,7 @@ pub fn DownloadToast() -> Element {
                 button {
                     class: "download-toast-close",
                     title: "Dismiss",
-                    "aria-label": "Dismiss download status",
+                    "aria-label": "Dismiss status",
                     onclick: move |_| downloads.dismiss(),
                     i { class: "fa-solid fa-xmark" }
                 }

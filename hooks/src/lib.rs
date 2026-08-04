@@ -158,15 +158,15 @@ impl AppContext {
         // Artist or Album page instead of the active Section's content.
         use_detail::install_detail();
 
+        // Provider-neutral background-operation status.
+        use_downloads::install_downloads();
+
         // Local liked-songs store. Cross-provider (anything in a Track),
         // persisted as JSON in the config dir so cache wipes don't lose it.
         use_likes::install_likes();
 
         // Local playlists — same persistence tier as likes.
         use_playlists::install_playlists();
-
-        // Provider-neutral background download status.
-        use_downloads::install_downloads();
 
         // Play-history singleton (Recently played + recommendation seed
         // pool). Installed here so `remove` can refresh every subscriber.
@@ -218,6 +218,34 @@ pub fn use_discovery_engine() -> Arc<DiscoveryEngine> {
 
 pub fn use_config() -> Signal<AppConfig> {
     use_context::<Signal<AppConfig>>()
+}
+
+fn report_persist(
+    receipt: anyhow::Result<config::PersistReceipt>,
+    notices: UseDownloads,
+    label: &'static str,
+) {
+    let receipt = match receipt {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            tracing::warn!(%error, "{label} persist failed");
+            notices.fail(format!("{label} changed but could not be saved: {error}"));
+            return;
+        }
+    };
+    spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            receipt.wait(std::time::Duration::from_secs(10))
+        })
+        .await;
+        let error = match result {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) => error.to_string(),
+            Err(error) => format!("save confirmation failed: {error}"),
+        };
+        tracing::warn!(%error, "{label} persist failed");
+        notices.fail(format!("{label} changed but could not be saved: {error}"));
+    });
 }
 
 /// `m:ss`, or `h:mm:ss` once a track runs past an hour.
