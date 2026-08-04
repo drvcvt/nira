@@ -128,3 +128,42 @@ fn a_malformed_code_is_rejected_without_panicking() {
     });
     assert_eq!(status.role, Role::Off, "a bad code must not leave us joined");
 }
+
+#[test]
+fn leave_revokes_the_old_ticket_before_a_new_session_starts() {
+    let host = Together::new();
+    host.host("old host".into());
+    let old_code = wait_for("the old session code", Duration::from_secs(20), || {
+        host.snapshot().ticket
+    });
+
+    host.leave();
+    host.host("new host".into());
+    let new_code = wait_for("the new session code", Duration::from_secs(20), || {
+        host.snapshot().ticket
+    });
+    assert_ne!(old_code, new_code, "replacement session reused the old ticket");
+
+    let guest = Together::new();
+    guest.join(old_code, "late guest".into());
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let current = host.snapshot();
+        assert_eq!(current.role, Role::Host, "a stale task stopped the new host");
+        assert_eq!(
+            current.ticket.as_deref(),
+            Some(new_code.as_str()),
+            "a stale task replaced the new host ticket"
+        );
+        assert!(
+            current.peers.is_empty(),
+            "a left session still accepted a guest: {:?}",
+            current.peers
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    guest.leave();
+    host.leave();
+}

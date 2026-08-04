@@ -98,6 +98,7 @@ pub struct TogetherSnapshot {
 
 struct Inner {
     epoch: Instant,
+    session: Mutex<Option<Arc<SessionToken>>>,
     role: RwLock<Role>,
     status: RwLock<String>,
     peers: RwLock<HashMap<u64, String>>,
@@ -108,6 +109,10 @@ struct Inner {
     target: RwLock<Option<RemoteNow>>,
     stopped: RwLock<bool>,
     sync: Mutex<clock::ClockSync>,
+}
+
+struct SessionToken {
+    shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 /// Handle to the listen-together session. Cheap to clone.
@@ -121,6 +126,7 @@ impl Together {
         Self {
             inner: Arc::new(Inner {
                 epoch: Instant::now(),
+                session: Mutex::new(None),
                 role: RwLock::new(Role::Off),
                 status: RwLock::new(String::new()),
                 peers: RwLock::new(HashMap::new()),
@@ -143,6 +149,7 @@ impl Together {
     /// queue watcher on every state change and on its regular tick; cheap
     /// enough to call at the watcher's cadence.
     pub fn publish(&self, mut now: Option<RemoteNow>) {
+        let _session = self.inner.session.lock().unwrap_or_else(|p| p.into_inner());
         if *self.inner.role.read().unwrap_or_else(|p| p.into_inner()) != Role::Host {
             return;
         }
@@ -175,10 +182,6 @@ impl Together {
             target: i.target.read().unwrap_or_else(|p| p.into_inner()).clone(),
             stopped: *i.stopped.read().unwrap_or_else(|p| p.into_inner()),
         }
-    }
-
-    fn set_status(&self, s: impl Into<String>) {
-        *self.inner.status.write().unwrap_or_else(|p| p.into_inner()) = s.into();
     }
 }
 
