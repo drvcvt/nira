@@ -71,16 +71,8 @@ fn persist_tx() -> &'static std::sync::mpsc::Sender<PersistJob> {
                             let _ = done.send(result);
                         }
                         PersistJob::Remove(path) => {
-                            match std::fs::remove_file(&path) {
-                                Ok(()) => {
-                                    if let Err(error) = sync_parent(&path) {
-                                        tracing::warn!(%error, path = %path.display(), "background remove sync failed");
-                                    }
-                                }
-                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                                Err(error) => {
-                                    tracing::warn!(%error, path = %path.display(), "background remove failed");
-                                }
+                            if let Err(error) = AppConfig::remove(&path) {
+                                tracing::warn!(%error, path = %path.display(), "background remove failed");
                             }
                         }
                         PersistJob::Flush(done) => {
@@ -493,6 +485,15 @@ impl AppConfig {
         persist_tx()
             .send(PersistJob::Remove(path))
             .map_err(|_| anyhow::anyhow!("persistence writer thread gone"))
+    }
+
+    /// Delete a file and durably commit the directory entry change.
+    pub fn remove(path: &std::path::Path) -> anyhow::Result<()> {
+        match std::fs::remove_file(path) {
+            Ok(()) => sync_parent(path).map_err(Into::into),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Block until every job enqueued so far has been executed (bounded —

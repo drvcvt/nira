@@ -124,22 +124,15 @@ impl SpotifyProvider {
     /// refresh tokens are bound to the app/client they were issued for.
     pub async fn set_client_id(&self, client_id: String) -> ProviderResult<bool> {
         let next = client_id.trim().to_string();
-        let changed = {
-            let mut guard = self
-                .client_id
-                .write()
-                .map_err(|_| ProviderError::Other("Spotify client_id lock poisoned".into()))?;
-            if *guard == next {
-                false
-            } else {
-                *guard = next;
-                true
-            }
-        };
-        if changed {
-            self.disconnect().await?;
+        if self.client_id() == next {
+            return Ok(false);
         }
-        Ok(changed)
+        self.disconnect().await?;
+        *self
+            .client_id
+            .write()
+            .map_err(|_| ProviderError::Other("Spotify client_id lock poisoned".into()))? = next;
+        Ok(true)
     }
 
     /// Has a token in memory (regardless of expiry — refresh handles that).
@@ -254,7 +247,8 @@ impl SpotifyProvider {
 
     pub async fn disconnect(&self) -> ProviderResult<()> {
         if let Some(p) = self.tokens_path.as_ref() {
-            let _ = std::fs::remove_file(p);
+            config::AppConfig::remove(p)
+                .map_err(|e| ProviderError::Other(format!("token removal: {e}")))?;
         }
         *self.token.write().await = None;
         Ok(())
@@ -328,7 +322,7 @@ impl SpotifyProvider {
             // A transient 5xx/429/network blip must NOT delete the token file
             // and force the user back through the OAuth browser flow.
             if status == StatusCode::BAD_REQUEST || status == StatusCode::UNAUTHORIZED {
-                self.disconnect().await.ok();
+                self.disconnect().await?;
                 return Err(ProviderError::AuthRequired);
             }
             return Err(ProviderError::Network(format!(
@@ -344,9 +338,15 @@ impl SpotifyProvider {
             refresh_token: tr.refresh_token.or(Some(refresh)),
             expires_at_unix: now_unix() + tr.expires_in.unwrap_or(3600),
         };
-        let _ = self.persist_token(&new_token);
+        self.commit_refreshed_token(new_token).await
+    }
+
+    async fn commit_refreshed_token(&self, new_token: TokenSet) -> ProviderResult<String> {
+        let access_token = new_token.access_token.clone();
+        let persisted = self.persist_token(&new_token);
         *self.token.write().await = Some(new_token);
-        Ok(tr.access_token)
+        persisted?;
+        Ok(access_token)
     }
 
     /// A 401 on an API call despite an unexpired access token means Spotify
@@ -1328,19 +1328,70 @@ struct SpRelatedArtists {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
-    #[test]
-    fn token_persist_replaces_symlink_with_private_file() {
-        use std::os::unix::fs::{symlink, PermissionsExt};
-
-        let dir = std::env::temp_dir().join(format!(
-            "nira-spotify-token-{}-{}",
+    fn token_test_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "nira-spotify-{name}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        ));
+        ))
+    }
+
+    #[tokio::test]
+    async fn disconnect_keeps_memory_when_token_file_cannot_be_removed() {
+        let dir = token_test_dir("disconnect-error");
+        let token_path = dir.join("spotify-tokens.json");
+        std::fs::create_dir_all(&token_path).unwrap();
+        let provider = SpotifyProvider::new("client".into(), Some(token_path)).unwrap();
+        *provider.token.write().await = Some(TokenSet {
+            access_token: "access".into(),
+            refresh_token: Some("refresh".into()),
+            expires_at_unix: 123,
+        });
+
+        let error = provider.disconnect().await.unwrap_err();
+
+        assert!(!error.to_string().is_empty());
+        assert!(provider.is_connected());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn refreshed_token_updates_memory_but_returns_the_disk_error() {
+        let dir = token_test_dir("refresh-write-error");
+        std::fs::create_dir_all(&dir).unwrap();
+        let parent_is_file = dir.join("not-a-directory");
+        std::fs::write(&parent_is_file, b"keep").unwrap();
+        let provider = SpotifyProvider::new(
+            "client".into(),
+            Some(parent_is_file.join("spotify-tokens.json")),
+        )
+        .unwrap();
+
+        let error = provider
+            .commit_refreshed_token(TokenSet {
+                access_token: "new-access".into(),
+                refresh_token: Some("new-refresh".into()),
+                expires_at_unix: 456,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(!error.to_string().is_empty());
+        let memory = provider.token.read().await.clone().unwrap();
+        assert_eq!(memory.access_token, "new-access");
+        assert_eq!(memory.refresh_token.as_deref(), Some("new-refresh"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn token_persist_replaces_symlink_with_private_file() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let dir = token_test_dir("symlink");
         std::fs::create_dir_all(&dir).unwrap();
         let victim_path = dir.join("victim");
         let token_path = dir.join("spotify-tokens.json");
