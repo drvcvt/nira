@@ -1,9 +1,12 @@
 //! Music integrations and external provider credentials.
 
+use std::time::Duration;
+
 use components::{Button, ButtonSize, ButtonVariant};
 use dioxus::prelude::*;
 use hooks::{
-    use_config, use_player, use_soundcloud, use_spotify, use_together, validate_soundcloud_url,
+    DiscordConnection, use_config, use_discord_presence, use_player, use_soundcloud, use_spotify,
+    use_together, validate_soundcloud_url,
 };
 use together::Role;
 
@@ -13,8 +16,22 @@ use super::{SettingsCard, StatusPill};
 pub(super) fn MusicSettings() -> Element {
     let mut config = use_config();
     let player = use_player();
-    let mut discord_status = use_signal(|| None::<String>);
-    let discord_presence_on = config.read().discord_presence;
+    let discord = use_discord_presence();
+    let mut discord_runtime = use_signal(|| discord.runtime());
+    let mut discord_message = use_signal(|| None::<String>);
+    use_future({
+        let discord = discord.clone();
+        move || {
+            let discord = discord.clone();
+            async move {
+                loop {
+                    discord_runtime.set(discord.runtime());
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+    });
+    let discord_state = *discord_runtime.read();
     let equalizer_enabled = config.read().equalizer_enabled;
     let equalizer_bands = config
         .read()
@@ -39,37 +56,69 @@ pub(super) fn MusicSettings() -> Element {
                 p { class: "settings-card-copy",
                     "Share the current song, artist, album and available cover on your Discord profile. The playback provider is never shown."
                 }
-                div { class: "source-toggle-grid",
-                    button {
-                        class: if discord_presence_on { "source-toggle on" } else { "source-toggle" },
-                        "aria-pressed": if discord_presence_on { "true" } else { "false" },
-                        onclick: move |_| {
-                            let next = !discord_presence_on;
-                            let result = {
-                                let mut w = config.write();
-                                w.discord_presence = next;
-                                w.save()
-                            };
-                            discord_status.set(Some(match result {
-                                Ok(()) if next => "Discord activity enabled.".into(),
-                                Ok(()) => "Discord activity disabled and cleared.".into(),
-                                Err(e) => format!("Changed for this session, but saving failed: {e}"),
-                            }));
-                        },
-                        span { class: "source-toggle-icon",
-                            if discord_presence_on {
-                                i { class: "fa-solid fa-check" }
-                            } else {
-                                i { class: "fa-solid fa-plus" }
-                            }
+                div { class: "settings-meta-grid",
+                    StatusPill {
+                        label: match discord_state.connection {
+                            DiscordConnection::Off => "Off",
+                            DiscordConnection::Connecting => "Connecting",
+                            DiscordConnection::Connected => "Connected",
+                            DiscordConnection::Waiting => "Waiting for Discord",
+                        }.to_string(),
+                        ok: discord_state.connection == DiscordConnection::Connected,
+                    }
+                }
+                div { class: "settings-actions",
+                    if discord_state.connection != DiscordConnection::Connected {
+                        Button {
+                            label: if discord_state.enabled { "Reconnect".to_string() } else { "Connect".to_string() },
+                            variant: ButtonVariant::Primary,
+                            size: ButtonSize::Sm,
+                            on_click: {
+                                let discord = discord.clone();
+                                move |_| {
+                                    discord.connect();
+                                    let result = {
+                                        let mut w = config.write();
+                                        w.discord_presence = true;
+                                        w.save()
+                                    };
+                                    discord_message.set(Some(match result {
+                                        Ok(()) => "Connecting to Discord…".into(),
+                                        Err(e) => format!("Connecting for this session, but saving failed: {e}"),
+                                    }));
+                                }
+                            },
                         }
-                        span { class: "source-toggle-copy",
-                            strong { if discord_presence_on { "Sharing on" } else { "Sharing off" } }
-                            small { "Click to change it immediately." }
+                    }
+                    if discord_state.enabled {
+                        Button {
+                            label: "Disconnect".to_string(),
+                            variant: ButtonVariant::Ghost,
+                            size: ButtonSize::Sm,
+                            on_click: {
+                                let discord = discord.clone();
+                                move |_| {
+                                    discord.disconnect();
+                                    let result = {
+                                        let mut w = config.write();
+                                        w.discord_presence = false;
+                                        w.save()
+                                    };
+                                    discord_message.set(Some(match result {
+                                        Ok(()) => "Disconnected and activity cleared.".into(),
+                                        Err(e) => format!("Disconnected for this session, but saving failed: {e}"),
+                                    }));
+                                }
+                            },
                         }
                     }
                 }
-                if let Some(msg) = discord_status.read().as_ref() {
+                if discord_state.connection == DiscordConnection::Waiting {
+                    p { class: "settings-card-copy",
+                        "Discord desktop is not running yet. Nira retries automatically."
+                    }
+                }
+                if let Some(msg) = discord_message.read().as_ref() {
                     p { class: "settings-status", "{msg}" }
                 }
             }

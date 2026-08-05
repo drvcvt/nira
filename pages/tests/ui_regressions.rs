@@ -132,6 +132,23 @@ fn music_settings_expose_a_three_band_equalizer() {
 }
 
 #[test]
+fn discord_settings_manage_the_real_connection() {
+    let settings = include_str!("../src/settings/connections.rs");
+    let bridge = include_str!("../../nira/src/discord_bridge.rs");
+    let shell = include_str!("../../nira/src/main.rs");
+
+    assert!(settings.contains("use_discord_presence"));
+    assert!(settings.contains("DiscordConnection::Connected"));
+    assert!(settings.contains("Waiting for Discord"));
+    assert!(settings.contains("\"Reconnect\""));
+    assert!(settings.contains("\"Disconnect\""));
+    assert!(settings.contains("discord.connect();"));
+    assert!(settings.contains("discord.disconnect();"));
+    assert!(bridge.contains("disconnect_client(&mut client, &mut connected);"));
+    assert!(!shell.contains("AtomicBool"));
+}
+
+#[test]
 fn search_state_is_installed_once_at_the_root() {
     let search = include_str!("../../hooks/src/use_search.rs");
     let hooks = include_str!("../../hooks/src/lib.rs");

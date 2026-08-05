@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use discord_rich_presence::activity::{self, ActivityType, Assets, StatusDisplayType, Timestamps};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 use enrichment::EnrichmentClient;
+use hooks::{DiscordConnection, UseDiscordPresence};
 use player::{Player, PlayerSnapshot};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -127,10 +127,20 @@ fn cover_lookup_key(presence: &Presence) -> Option<CoverKey> {
         .then(|| (presence.artist.clone(), presence.title.clone()))
 }
 
-pub fn start(player: Player, enabled: Arc<AtomicBool>, enrichment: Arc<EnrichmentClient>) {
+fn disconnect_client(client: &mut impl DiscordIpc, connected: &mut bool) {
+    if *connected {
+        let _ = client
+            .clear_activity()
+            .and_then(|_| client.recv().map(|_| ()));
+    }
+    let _ = client.close();
+    *connected = false;
+}
+
+pub fn start(player: Player, discord: UseDiscordPresence, enrichment: Arc<EnrichmentClient>) {
     if let Err(error) = std::thread::Builder::new()
         .name("nira-discord".into())
-        .spawn(move || run(player, enabled, enrichment, APPLICATION_ID))
+        .spawn(move || run(player, discord, enrichment, APPLICATION_ID))
     {
         tracing::warn!(%error, "could not start Discord presence thread");
     }
@@ -138,7 +148,7 @@ pub fn start(player: Player, enabled: Arc<AtomicBool>, enrichment: Arc<Enrichmen
 
 fn run(
     player: Player,
-    enabled: Arc<AtomicBool>,
+    discord: UseDiscordPresence,
     enrichment: Arc<EnrichmentClient>,
     application_id: &'static str,
 ) {
@@ -161,18 +171,34 @@ fn run(
     let mut updates = VecDeque::new();
     let mut cover_cache = HashMap::<CoverKey, Option<String>>::new();
     let mut pending_covers = HashSet::<CoverKey>::new();
+    let mut revision = discord.runtime().revision;
 
     loop {
         let now = Instant::now();
-        let enabled = enabled.load(Ordering::Relaxed);
-        if enabled && !connected && now.duration_since(last_attempt) >= RETRY_INTERVAL {
+        let runtime = discord.runtime();
+        if runtime.revision != revision {
+            disconnect_client(&mut client, &mut connected);
+            client = DiscordIpcClient::new(application_id);
+            revision = runtime.revision;
+            last_attempt = now.checked_sub(RETRY_INTERVAL).unwrap_or(now);
+            last_sent = None;
+            cleared = false;
+            updates.clear();
+        }
+        if runtime.enabled && !connected && now.duration_since(last_attempt) >= RETRY_INTERVAL {
             last_attempt = now;
             if client.connect().is_ok() {
                 connected = true;
                 last_sent = None;
                 cleared = false;
+                discord.set_connection(revision, DiscordConnection::Connected);
                 tracing::debug!("connected Discord presence");
+            } else {
+                discord.set_connection(revision, DiscordConnection::Waiting);
             }
+        }
+        if discord.runtime().revision != revision {
+            continue;
         }
 
         if connected {
@@ -183,7 +209,7 @@ fn run(
 
             let snapshot = player.snapshot();
             let paused = snapshot.is_paused;
-            let mut current = projected_presence(&snapshot, enabled);
+            let mut current = projected_presence(&snapshot, runtime.enabled);
             if let Some(presence) = current.as_mut()
                 && let Some(key) = cover_lookup_key(presence)
             {
@@ -205,7 +231,7 @@ fn run(
             let needs_clear = current.is_none() && !cleared;
             // Privacy-off clears immediately even if recent track changes used
             // the normal Discord update budget.
-            let can_update = needs_clear && (!enabled || paused)
+            let can_update = needs_clear && (!runtime.enabled || paused)
                 || (needs_set || needs_clear) && update_allowed(&mut updates, now);
             let result = match current {
                 Some(presence) if needs_set && can_update => client
@@ -229,9 +255,10 @@ fn run(
 
             if let Err(error) = result {
                 tracing::debug!(%error, "lost Discord presence connection");
-                connected = false;
+                disconnect_client(&mut client, &mut connected);
                 last_sent = None;
                 client = DiscordIpcClient::new(application_id);
+                discord.set_connection(revision, DiscordConnection::Waiting);
             }
         }
 
@@ -287,11 +314,65 @@ mod tests {
     use std::collections::VecDeque;
     use std::time::{Duration, Instant};
 
+    use discord_rich_presence::DiscordIpc;
+    use discord_rich_presence::error::Error;
+    use serde_json::Value;
+
     use super::{
-        Presence, cover_lookup_key, presence_json, projected_presence, refresh_needed,
-        update_allowed,
+        Presence, cover_lookup_key, disconnect_client, presence_json, projected_presence,
+        refresh_needed, update_allowed,
     };
     use player::{Active, NowPlaying, PlayerSnapshot};
+
+    #[derive(Default)]
+    struct FakeDiscord {
+        cleared: bool,
+        closed: bool,
+    }
+
+    impl DiscordIpc for FakeDiscord {
+        fn clear_activity(&mut self) -> Result<(), Error> {
+            self.cleared = true;
+            Ok(())
+        }
+
+        fn recv(&mut self) -> Result<(u32, Value), Error> {
+            Ok((0, Value::Null))
+        }
+
+        fn close(&mut self) -> Result<(), Error> {
+            self.closed = true;
+            Ok(())
+        }
+
+        fn get_client_id(&self) -> &str {
+            "test"
+        }
+
+        fn connect_ipc(&mut self) -> Result<(), Error> {
+            Ok(())
+        }
+
+        fn write(&mut self, _data: &[u8]) -> Result<(), Error> {
+            Ok(())
+        }
+
+        fn read(&mut self, _buffer: &mut [u8]) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn disconnect_clears_activity_and_closes_client() {
+        let mut client = FakeDiscord::default();
+        let mut connected = true;
+
+        disconnect_client(&mut client, &mut connected);
+
+        assert!(client.cleared);
+        assert!(client.closed);
+        assert!(!connected);
+    }
 
     fn snapshot(
         provider: &str,

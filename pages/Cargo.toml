@@ -11,3 +11,4 @@ together = { workspace = true }
 components = { workspace = true }
 chrono = { workspace = true }
 futures-util = { workspace = true }
+tokio = { workspace = true }

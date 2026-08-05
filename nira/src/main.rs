@@ -6,7 +6,6 @@
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use components::Section;
 use config::AppConfig;
@@ -249,12 +248,7 @@ fn App() -> Element {
     AppContext::install(player.clone(), sc.clone(), sp, app_cfg);
     let enrichment = hooks::use_enrichment();
     let config_sig = hooks::use_config();
-    let discord_presence_enabled =
-        use_hook(|| Arc::new(AtomicBool::new(config_sig.read().discord_presence)));
-    use_effect({
-        let enabled = discord_presence_enabled.clone();
-        move || enabled.store(config_sig.read().discord_presence, Ordering::Relaxed)
-    });
+    let discord = hooks::use_discord_presence();
 
     // Visualizer open-state — shared by the bottombar button, the V-key
     // bridge and the overlay itself.
@@ -291,8 +285,8 @@ fn App() -> Element {
     // Discord Rich Presence is local IPC only and provider-blind. The bridge
     // owns its reconnect loop so Discord can start before or after Nira.
     use_hook({
-        let enabled = discord_presence_enabled.clone();
-        move || discord_bridge::start(player.clone(), enabled, enrichment.clone())
+        let discord = discord.clone();
+        move || discord_bridge::start(player.clone(), discord, enrichment.clone())
     });
 
     // Serve locally-extracted album art to the webview: the library scanner

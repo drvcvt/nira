@@ -27,6 +27,7 @@ pub mod use_album;
 pub mod use_artist;
 pub mod use_ctx_menu;
 pub mod use_detail;
+pub mod use_discord;
 pub mod use_discovery;
 pub mod use_downloads;
 pub mod use_history;
@@ -48,6 +49,9 @@ pub use use_album::{UseAlbum, fetch_album_detail, use_album};
 pub use use_artist::{ArtistView, UseArtist, is_long_play, use_artist};
 pub use use_ctx_menu::{AlbumCtx, CtxMenuState, CtxTarget, UseCtxMenu, use_ctx_menu};
 pub use use_detail::{DetailView, UseDetail, uri_has_detail_page, use_detail};
+pub use use_discord::{
+    DiscordConnection, DiscordRuntime, UseDiscordPresence, use_discord_presence,
+};
 pub use use_discovery::{DiscoveryMode, UseDiscovery, use_discovery};
 pub use use_downloads::{UseDownloads, use_downloads};
 pub use use_history::{UseHistory, install_history, use_history};
@@ -143,8 +147,10 @@ impl AppContext {
         });
 
         // Live config signal.
+        let discord_presence = config.discord_presence;
         let config_sig = use_signal(|| config);
         use_context_provider(move || config_sig);
+        use_discord::install_discord_presence(discord_presence);
 
         // Queue + auto-advance watcher. Pages route track-clicks through
         // this; the watcher detects natural track-end and walks the index.
