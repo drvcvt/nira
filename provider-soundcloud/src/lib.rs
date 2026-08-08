@@ -15,7 +15,7 @@
 //! returns hundreds of fields per track, but every additional field is one
 //! more chance to break when their backend tweaks something.
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use async_trait::async_trait;
 use provider_api::{
@@ -312,20 +312,26 @@ impl SoundCloudProvider {
         playlist_id: u64,
         client_id: &str,
     ) -> ProviderResult<Vec<Track>> {
-        let mut next = Some(format!(
-            "{SC_API}/playlists/{playlist_id}/tracks?access=playable&linked_partitioning=true&limit=200&client_id={client_id}"
-        ));
-        let mut tracks = Vec::new();
-        while let Some(url) = next {
-            let page: ScPage<ScTrack> = self.fetch_json(&url).await?;
-            tracks.extend(page.collection.into_iter().map(sc_to_track));
-            next = page
-                .next_href
-                .as_deref()
-                .map(|href| soundcloud_api_url(href, client_id))
-                .transpose()?;
+        let playlist: ScPlaylistTracks = self
+            .fetch_json(&format!(
+                "{SC_API}/playlists/{playlist_id}?representation=full&client_id={client_id}"
+            ))
+            .await?;
+        let mut hydrated = Vec::with_capacity(playlist.tracks.len());
+        for chunk in playlist.tracks.chunks(50) {
+            let ids = chunk
+                .iter()
+                .map(|track| track.id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let batch: Vec<ScTrack> = self
+                .fetch_json(&format!(
+                    "{SC_API}/tracks?ids={ids}&access=playable&client_id={client_id}"
+                ))
+                .await?;
+            hydrated.extend(batch);
         }
-        Ok(tracks)
+        Ok(order_playlist_tracks(playlist.tracks, hydrated))
     }
 
     pub async fn playlists_for_import(
@@ -859,6 +865,16 @@ struct ScPlaylistBrief {
 }
 
 #[derive(Deserialize)]
+struct ScPlaylistTracks {
+    tracks: Vec<ScPlaylistTrackRef>,
+}
+
+#[derive(Deserialize)]
+struct ScPlaylistTrackRef {
+    id: u64,
+}
+
+#[derive(Deserialize)]
 struct ScPage<T> {
     collection: Vec<T>,
     #[serde(default)]
@@ -889,6 +905,16 @@ fn sc_search_playlist(raw: ScPlaylistBrief) -> PlaylistBrief {
         },
         open: PlaylistOpen::InApp,
     }
+}
+
+fn order_playlist_tracks(refs: Vec<ScPlaylistTrackRef>, hydrated: Vec<ScTrack>) -> Vec<Track> {
+    let hydrated = hydrated
+        .into_iter()
+        .map(|track| (track.id, sc_to_track(track)))
+        .collect::<HashMap<_, _>>();
+    refs.into_iter()
+        .filter_map(|track| hydrated.get(&track.id).cloned())
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -1052,6 +1078,54 @@ mod tests {
         assert_eq!(playlists[0].owner_name.as_deref(), Some("Mira"));
         assert_eq!(playlists[1].kind, provider_api::PlaylistKind::Editorial);
         assert_eq!(playlists[1].open, provider_api::PlaylistOpen::InApp);
+    }
+
+    #[test]
+    fn playlist_track_refs_restore_order_after_bulk_lookup() {
+        let playlist: ScPlaylistTracks = serde_json::from_str(
+            r#"{
+                "tracks": [
+                    { "id": 2, "title": "Full fields are ignored" },
+                    { "id": 1 },
+                    { "id": 2 },
+                    { "id": 3 }
+                ]
+            }"#,
+        )
+        .unwrap();
+        let hydrated: Vec<ScTrack> = serde_json::from_str(
+            r#"[
+                {
+                    "id": 1,
+                    "title": "One",
+                    "user": { "id": 10, "username": "Artist" },
+                    "duration": 1000,
+                    "media": { "transcodings": [] }
+                },
+                {
+                    "id": 2,
+                    "title": "Two",
+                    "user": { "id": 10, "username": "Artist" },
+                    "duration": 1000,
+                    "media": { "transcodings": [] }
+                }
+            ]"#,
+        )
+        .unwrap();
+
+        let tracks = order_playlist_tracks(playlist.tracks, hydrated);
+
+        assert_eq!(
+            tracks
+                .iter()
+                .map(|track| track.uri.0.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "soundcloud:track:2",
+                "soundcloud:track:1",
+                "soundcloud:track:2",
+            ]
+        );
     }
 
     #[test]
